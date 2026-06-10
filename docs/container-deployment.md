@@ -86,7 +86,8 @@ membership.
 
 ## ECS Task Configuration
 
-Use the same image for the long-running API service and one-off migration task.
+Use the same image for the long-running API service, one-off migration task, and
+ACP manifest reseed task.
 
 API command:
 
@@ -99,6 +100,21 @@ Migration command:
 ```bash
 python scripts/run_migration_tracks.py upgrade head
 ```
+
+ACP manifest reseed command:
+
+```bash
+python -m mugen.core.plugin.acp.migration.reseed_manifest
+```
+
+Run the reseed after migrations and before updating the long-running service.
+It re-applies idempotent ACP seed data for currently enabled framework
+extensions, including permission objects, permission types, default global
+grants, tenant-role templates, and system flags. This matters when an existing
+database enables a plugin after its historical Alembic reseed revision has
+already been applied; for example, `core.fw.knowledge_pack` needs the stable
+`com.vorsocomputing.mugen.knowledge_pack:configurator` permission to appear in
+fresh login sessions so the UI can show the Knowledge Packs route.
 
 Recommended non-secret ECS environment variables:
 

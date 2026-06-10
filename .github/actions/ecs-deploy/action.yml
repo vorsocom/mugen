@@ -57,6 +57,10 @@ inputs:
     description: JSON array command for the migration one-off task.
     required: false
     default: '["python","scripts/run_migration_tracks.py","upgrade","head"]'
+  reseed-command-json:
+    description: JSON array command for the ACP manifest reseed one-off task.
+    required: false
+    default: '["python","-m","mugen.core.plugin.acp.migration.reseed_manifest"]'
   placeholder-env-prefix:
     description: Environment variable prefix for task-definition placeholders.
     required: false
@@ -76,6 +80,9 @@ outputs:
   migration-task-arn:
     description: Migration one-off task ARN.
     value: ${{ steps.migrate.outputs.migration-task-arn }}
+  reseed-task-arn:
+    description: ACP manifest reseed one-off task ARN.
+    value: ${{ steps.reseed.outputs.reseed-task-arn }}
 
 runs:
   using: composite
@@ -217,6 +224,77 @@ runs:
           aws ecs describe-tasks \
             --cluster "${{ inputs.ecs-cluster }}" \
             --tasks "$migration_task_arn" \
+            --output json
+        )"
+
+        printf '%s' "$describe_task_output" \
+          | python "$GITHUB_ACTION_PATH/ecs_task_helpers.py" \
+              assert-container-exit-zero \
+              --container-name "${{ inputs.ecs-container-name }}"
+
+    - name: Run ACP Manifest Reseed Task
+      id: reseed
+      shell: bash
+      env:
+        RESEED_COMMAND_JSON: ${{ inputs.reseed-command-json }}
+      run: |
+        set -euo pipefail
+
+        subnets="$(printf '%s' "${{ inputs.task-subnets }}" | tr -d '[:space:]')"
+        security_groups="$(printf '%s' "${{ inputs.task-security-groups }}" | tr -d '[:space:]')"
+        assign_public_ip="$(printf '%s' "${{ inputs.assign-public-ip }}" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')"
+        if [[ -z "$subnets" ]]; then
+          echo "ERROR: task-subnets must not be empty." >&2
+          exit 1
+        fi
+        if [[ -z "$security_groups" ]]; then
+          echo "ERROR: task-security-groups must not be empty." >&2
+          exit 1
+        fi
+        if [[ -z "$assign_public_ip" ]]; then
+          assign_public_ip="DISABLED"
+        fi
+        case "$assign_public_ip" in
+          ENABLED|DISABLED) ;;
+          *)
+            echo "ERROR: assign-public-ip must be ENABLED or DISABLED." >&2
+            exit 1
+            ;;
+        esac
+
+        network_configuration="awsvpcConfiguration={subnets=[$subnets],securityGroups=[$security_groups],assignPublicIp=$assign_public_ip}"
+        overrides="$(
+          python "$GITHUB_ACTION_PATH/ecs_task_helpers.py" \
+            overrides \
+            --container-name "${{ inputs.ecs-container-name }}" \
+            --command-json "$RESEED_COMMAND_JSON"
+        )"
+
+        run_task_output="$(
+          aws ecs run-task \
+            --cluster "${{ inputs.ecs-cluster }}" \
+            --launch-type FARGATE \
+            --task-definition "${{ steps.register.outputs.task-definition-arn }}" \
+            --network-configuration "$network_configuration" \
+            --overrides "$overrides" \
+            --output json
+        )"
+
+        reseed_task_arn="$(
+          printf '%s' "$run_task_output" \
+            | python "$GITHUB_ACTION_PATH/ecs_task_helpers.py" task-arn
+        )"
+
+        echo "reseed-task-arn=$reseed_task_arn" >> "$GITHUB_OUTPUT"
+
+        aws ecs wait tasks-stopped \
+          --cluster "${{ inputs.ecs-cluster }}" \
+          --tasks "$reseed_task_arn"
+
+        describe_task_output="$(
+          aws ecs describe-tasks \
+            --cluster "${{ inputs.ecs-cluster }}" \
+            --tasks "$reseed_task_arn" \
             --output json
         )"
 

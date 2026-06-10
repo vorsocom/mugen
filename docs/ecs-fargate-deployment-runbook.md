@@ -135,9 +135,19 @@ The workflow:
 6. Registers a new ECS task definition revision.
 7. Runs `python scripts/run_migration_tracks.py upgrade head` as a one-off
    Fargate task.
-8. Updates the ECS service only after the migration container exits `0`.
-9. Waits for ECS service stability.
-10. Smoke tests `ECS_HEALTHCHECK_URL`, which should point at `/health`.
+8. Runs `python -m mugen.core.plugin.acp.migration.reseed_manifest` as a
+   one-off Fargate task.
+9. Updates the ECS service only after migration and reseed containers exit `0`.
+10. Waits for ECS service stability.
+11. Smoke tests `ECS_HEALTHCHECK_URL`, which should point at `/health`.
+
+The reseed command uses the same resolved deployment config as migrations:
+`MUGEN_CONFIG_FILE`, generic config overlays, extension overlays,
+`MUGEN_ENABLED_EXTENSIONS`, and Secrets Manager-injected env vars are all
+honored. It re-applies idempotent ACP manifest data for currently enabled
+extensions. That keeps route-visibility and resource permission seed data in
+sync when an existing database enables a plugin after the plugin's historical
+Alembic reseed migration has already run.
 
 The upstream workflow deploys only the upstream/core muGen API service.
 Downstream applications must configure their own AWS role, ECR repository, ECS
@@ -394,9 +404,9 @@ example, `TASKDEF_DATABASE_URL_SECRET_ARN` fills
 
 The reusable deployment mechanics live in `.github/actions/ecs-deploy/`. The
 action assumes AWS credentials are already configured and accepts the ECR, ECS,
-network, task template, migration command, and health-check settings as inputs.
-It can be called locally by the upstream workflow or reused by downstream repos
-pinned to a muGen release tag:
+network, task template, migration command, ACP reseed command, and health-check
+settings as inputs. It can be called locally by the upstream workflow or reused
+by downstream repos pinned to a muGen release tag:
 
 ```yaml
 - uses: aws-actions/configure-aws-credentials@v4
@@ -422,6 +432,7 @@ pinned to a muGen release tag:
     task-role-arn: ${{ vars.ECS_TASK_ROLE_ARN }}
     task-subnets: ${{ vars.ECS_TASK_SUBNETS }}
     task-security-groups: ${{ vars.ECS_TASK_SECURITY_GROUPS }}
+    reseed-command-json: '["python","-m","mugen.core.plugin.acp.migration.reseed_manifest"]'
     health-url: ${{ vars.ECS_HEALTHCHECK_URL }}
 ```
 
@@ -1128,8 +1139,9 @@ Task starts Hypercorn and then stops during bootstrap
 ## 16. Release Update Flow
 
 For normal upstream releases, merge the release to `main`. The
-`deploy-ecs.yml` workflow builds the immutable image, runs migrations, updates
-the ECS service, waits for service stability, and smoke tests `/health`.
+`deploy-ecs.yml` workflow builds the immutable image, runs migrations, re-applies
+the ACP seed manifest, updates the ECS service, waits for service stability, and
+smoke tests `/health`.
 
 Use the manual flow when bootstrapping the first deployment, recovering from a
 partially configured GitHub Environment, or intentionally bypassing automation:
@@ -1140,9 +1152,21 @@ partially configured GitHub Environment, or intentionally bypassing automation:
 3. Build and push a new immutable ECR image tag.
 4. Register a new task definition revision with the new image tag.
 5. Run the migration one-off task using that revision.
-6. If migrations exit `0`, update the ECS service to the new revision.
-7. Wait for service stability.
-8. Smoke test `/health` and at least one authenticated API/UI workflow.
+6. If migrations exit `0`, run the ACP manifest reseed one-off task using that
+   same revision:
+
+   ```bash
+   python -m mugen.core.plugin.acp.migration.reseed_manifest
+   ```
+
+7. If the reseed exits `0`, update the ECS service to the new revision.
+8. Wait for service stability.
+9. Smoke test `/health` and at least one authenticated API/UI workflow.
+
+After enabling an ACP-backed extension, log out and log back in before checking
+UI route visibility. Session roles are minted at login/refresh time; for
+example, Knowledge Packs appears only when the session includes
+`com.vorsocomputing.mugen.knowledge_pack:configurator`.
 
 Rollback is an ECS service update to a known-good task definition revision:
 
