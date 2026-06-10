@@ -133,6 +133,13 @@ delivered by a secure mount. ECS tasks should normally use
 TLS should terminate at the ALB in ECS. `TLS_CERT_FILE` and `TLS_KEY_FILE` are
 for local HTTPS testing only.
 
+The upstream repository includes `.github/workflows/deploy-ecs.yml`,
+`.github/actions/ecs-deploy/`, and `.aws/ecs-task-definition.template.json`.
+The workflow deploys upstream muGen from `main`. Downstream applications should
+reuse the composite action pinned to a muGen release tag or copy it, then supply
+their own Dockerfile, task template, ECS service, extension overlays, migration
+tracks, and app-specific secret references.
+
 ## Production Validation
 
 Production validation always checks core runtime requirements:

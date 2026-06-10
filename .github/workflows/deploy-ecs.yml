@@ -1,0 +1,87 @@
+name: Deploy ECS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-ecs-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy Production ECS
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate Production Source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch origin main:refs/remotes/origin/main --tags
+
+          if [[ "${GITHUB_REF_TYPE}" == "branch" ]]; then
+            if [[ "${GITHUB_REF_NAME}" != "main" ]]; then
+              echo "ERROR: production ECS deployment must run from main." >&2
+              exit 1
+            fi
+            exit 0
+          fi
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+            exit 0
+          fi
+
+          echo "ERROR: unsupported deployment ref ${GITHUB_REF_TYPE}:${GITHUB_REF_NAME}." >&2
+          exit 1
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Build, Migrate, And Deploy
+        uses: ./.github/actions/ecs-deploy
+        env:
+          TASKDEF_CORS_ALLOWED_ORIGINS: ${{ vars.CORS_ALLOWED_ORIGINS }}
+          TASKDEF_ECS_LOG_GROUP: ${{ vars.ECS_LOG_GROUP }}
+          TASKDEF_DATABASE_URL_SECRET_ARN: ${{ vars.DATABASE_URL_SECRET_ARN }}
+          TASKDEF_SECRET_KEY_SECRET_ARN: ${{ vars.SECRET_KEY_SECRET_ARN }}
+          TASKDEF_ACP_ADMIN_USERNAME_SECRET_ARN: ${{ vars.ACP_ADMIN_USERNAME_SECRET_ARN }}
+          TASKDEF_ACP_ADMIN_LOGIN_EMAIL_SECRET_ARN: ${{ vars.ACP_ADMIN_LOGIN_EMAIL_SECRET_ARN }}
+          TASKDEF_ACP_ADMIN_PASSWORD_SECRET_ARN: ${{ vars.ACP_ADMIN_PASSWORD_SECRET_ARN }}
+          TASKDEF_ACP_ADMIN_PASSWORD_HASH_SECRET_ARN: ${{ vars.ACP_ADMIN_PASSWORD_HASH_SECRET_ARN }}
+          TASKDEF_ACP_SECRET_KEY_SECRET_ARN: ${{ vars.ACP_SECRET_KEY_SECRET_ARN }}
+          TASKDEF_ACP_MANAGED_SECRET_ENCRYPTION_KEY_SECRET_ARN: ${{ vars.ACP_MANAGED_SECRET_ENCRYPTION_KEY_SECRET_ARN }}
+          TASKDEF_ACP_REFRESH_TOKEN_PEPPER_SECRET_ARN: ${{ vars.ACP_REFRESH_TOKEN_PEPPER_SECRET_ARN }}
+          TASKDEF_ACP_JWT_CONFIG_JSON_SECRET_ARN: ${{ vars.ACP_JWT_CONFIG_JSON_SECRET_ARN }}
+          TASKDEF_MUGEN_CONFIG_OVERLAY_JSON_SECRET_ARN: ${{ vars.MUGEN_CONFIG_OVERLAY_JSON_SECRET_ARN }}
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+          ecr-repository: ${{ vars.ECR_REPOSITORY }}
+          image-tag: ${{ github.sha }}
+          ecs-cluster: ${{ vars.ECS_CLUSTER }}
+          ecs-service: ${{ vars.ECS_SERVICE }}
+          ecs-container-name: ${{ vars.ECS_CONTAINER_NAME }}
+          task-template: .aws/ecs-task-definition.template.json
+          task-execution-role-arn: ${{ vars.ECS_TASK_EXECUTION_ROLE_ARN }}
+          task-role-arn: ${{ vars.ECS_TASK_ROLE_ARN }}
+          task-subnets: ${{ vars.ECS_TASK_SUBNETS }}
+          task-security-groups: ${{ vars.ECS_TASK_SECURITY_GROUPS }}
+          assign-public-ip: ${{ vars.ECS_ASSIGN_PUBLIC_IP }}
+          health-url: ${{ vars.ECS_HEALTHCHECK_URL }}
