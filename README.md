@@ -334,7 +334,7 @@ The application and migration runner both apply the same environment overlay:
 | `MUGEN_PLATFORMS` | `mugen.platforms` |
 | `MUGEN_PHASE_B_CRITICAL_PLATFORMS` | `mugen.runtime.phase_b.critical_platforms` |
 | `MUGEN_EXTENSIONS_JSON` | downstream `mugen.modules.extensions` entries |
-| `MUGEN_ENABLED_EXTENSIONS` | predeclared or known built-in `mugen.modules.extensions` entries |
+| `MUGEN_ENABLED_EXTENSIONS` | predeclared or built-in core extension tokens from `conf/mugen.toml.sample` |
 | `MUGEN_MIGRATION_TRACKS_JSON` | downstream `rdbms.migration_tracks.plugins` entries |
 | `DATABASE_URL` | `rdbms.alembic.url`, `rdbms.sqlalchemy.url` |
 | `SECRET_KEY` | `quart.secret_key` |

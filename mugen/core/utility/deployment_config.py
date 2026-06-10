@@ -53,28 +53,200 @@ _JWT_STRING_OVERRIDES: tuple[tuple[str, str], ...] = (
 )
 _CONFIG_OVERLAY_FILE_ENV = "MUGEN_CONFIG_OVERLAY_FILE"
 _CONFIG_OVERLAY_JSON_ENV = "MUGEN_CONFIG_OVERLAY_JSON"
-_BUILTIN_EXTENSION_PRESETS: dict[str, dict[str, Any]] = {
+_BUILTIN_EXTENSION_TYPES: dict[str, str] = {
+    "core.cp.clear_history": "cp",
+    "core.fw.acp": "fw",
+    "core.fw.agent_runtime": "fw",
+    "core.fw.audit": "fw",
+    "core.fw.billing": "fw",
+    "core.fw.channel_orchestration": "fw",
+    "core.fw.context_engine": "fw",
+    "core.fw.knowledge_pack": "fw",
+    "core.fw.line_messagingapi": "fw",
+    "core.fw.ops_case": "fw",
+    "core.fw.ops_connector": "fw",
+    "core.fw.ops_governance": "fw",
+    "core.fw.ops_metering": "fw",
+    "core.fw.ops_reporting": "fw",
+    "core.fw.ops_sla": "fw",
+    "core.fw.ops_vpn": "fw",
+    "core.fw.ops_workflow": "fw",
+    "core.fw.telegram_botapi": "fw",
+    "core.fw.web": "fw",
+    "core.fw.wechat": "fw",
+    "core.fw.whatsapp_wacapi": "fw",
+    "core.ipc.line_messagingapi": "ipc",
+    "core.ipc.matrix_device_management": "ipc",
+    "core.ipc.matrix_ingress": "ipc",
+    "core.ipc.matrix_room_management": "ipc",
+    "core.ipc.signal_restapi": "ipc",
+    "core.ipc.telegram_botapi": "ipc",
+    "core.ipc.wechat": "ipc",
+    "core.ipc.whatsapp_wacapi": "ipc",
+}
+# Keep this metadata in sync with core FW extension entries documented in
+# conf/mugen.toml.sample. The regression tests in test_mugen_deployment_config
+# compare this table to the sample config so MUGEN_ENABLED_EXTENSIONS remains
+# usable without requiring duplicate MUGEN_EXTENSIONS_JSON metadata.
+_BUILTIN_FRAMEWORK_EXTENSION_METADATA: dict[str, dict[str, Any]] = {
+    "core.fw.acp": {
+        "name": "com.vorsocomputing.mugen.acp",
+        "namespace": "com.vorsocomputing.mugen.acp",
+        "models": "mugen.core.plugin.acp.model",
+        "migration_track": "core",
+        "contrib": "mugen.core.plugin.acp.contrib",
+    },
+    "core.fw.web": {
+        "name": "com.vorsocomputing.mugen.web",
+        "namespace": "com.vorsocomputing.mugen.web",
+        "models": "mugen.core.plugin.web.model",
+        "migration_track": "core",
+        "contrib": "mugen.core.plugin.web.contrib",
+    },
+    "core.fw.context_engine": {
+        "name": "com.vorsocomputing.mugen.context_engine",
+        "namespace": "com.vorsocomputing.mugen.context_engine",
+        "contrib": "mugen.core.plugin.context_engine.contrib",
+    },
+    "core.fw.agent_runtime": {
+        "name": "com.vorsocomputing.mugen.agent_runtime",
+        "namespace": "com.vorsocomputing.mugen.agent_runtime",
+        "models": "mugen.core.plugin.agent_runtime.model",
+        "migration_track": "agent_runtime",
+        "contrib": "mugen.core.plugin.agent_runtime.contrib",
+    },
     "core.fw.audit": {
-        "type": "fw",
-        "token": "core.fw.audit",
-        "enabled": True,
         "name": "com.vorsocomputing.mugen.audit",
         "namespace": "com.vorsocomputing.mugen.audit",
         "models": "mugen.core.plugin.audit.model",
         "migration_track": "core",
         "contrib": "mugen.core.plugin.audit.contrib",
     },
+    "core.fw.billing": {
+        "name": "com.vorsocomputing.mugen.billing",
+        "namespace": "com.vorsocomputing.mugen.billing",
+        "models": "mugen.core.plugin.billing.model",
+        "migration_track": "core",
+        "contrib": "mugen.core.plugin.billing.contrib",
+    },
     "core.fw.channel_orchestration": {
-        "type": "fw",
-        "token": "core.fw.channel_orchestration",
-        "enabled": True,
         "name": "com.vorsocomputing.mugen.channel_orchestration",
         "namespace": "com.vorsocomputing.mugen.channel_orchestration",
         "models": "mugen.core.plugin.channel_orchestration.model",
         "migration_track": "core",
         "contrib": "mugen.core.plugin.channel_orchestration.contrib",
     },
+    "core.fw.knowledge_pack": {
+        "name": "com.vorsocomputing.mugen.knowledge_pack",
+        "namespace": "com.vorsocomputing.mugen.knowledge_pack",
+        "models": "mugen.core.plugin.knowledge_pack.model",
+        "migration_track": "core",
+        "contrib": "mugen.core.plugin.knowledge_pack.contrib",
+    },
+    "core.fw.ops_case": {
+        "name": "com.vorsocomputing.mugen.ops_case",
+        "namespace": "com.vorsocomputing.mugen.ops_case",
+        "models": "mugen.core.plugin.ops_case.model",
+        "migration_track": "core",
+        "contrib": "mugen.core.plugin.ops_case.contrib",
+    },
+    "core.fw.ops_connector": {
+        "name": "com.vorsocomputing.mugen.ops_connector",
+        "namespace": "com.vorsocomputing.mugen.ops_connector",
+        "models": "mugen.core.plugin.ops_connector.model",
+        "migration_track": "core",
+        "contrib": "mugen.core.plugin.ops_connector.contrib",
+    },
+    "core.fw.ops_governance": {
+        "name": "com.vorsocomputing.mugen.ops_governance",
+        "namespace": "com.vorsocomputing.mugen.ops_governance",
+        "models": "mugen.core.plugin.ops_governance.model",
+        "migration_track": "core",
+        "contrib": "mugen.core.plugin.ops_governance.contrib",
+    },
+    "core.fw.ops_metering": {
+        "name": "com.vorsocomputing.mugen.ops_metering",
+        "namespace": "com.vorsocomputing.mugen.ops_metering",
+        "models": "mugen.core.plugin.ops_metering.model",
+        "migration_track": "core",
+        "contrib": "mugen.core.plugin.ops_metering.contrib",
+    },
+    "core.fw.ops_reporting": {
+        "name": "com.vorsocomputing.mugen.ops_reporting",
+        "namespace": "com.vorsocomputing.mugen.ops_reporting",
+        "models": "mugen.core.plugin.ops_reporting.model",
+        "migration_track": "core",
+        "contrib": "mugen.core.plugin.ops_reporting.contrib",
+    },
+    "core.fw.ops_sla": {
+        "name": "com.vorsocomputing.mugen.ops_sla",
+        "namespace": "com.vorsocomputing.mugen.ops_sla",
+        "models": "mugen.core.plugin.ops_sla.model",
+        "migration_track": "core",
+        "contrib": "mugen.core.plugin.ops_sla.contrib",
+    },
+    "core.fw.ops_vpn": {
+        "name": "com.vorsocomputing.mugen.ops_vpn",
+        "namespace": "com.vorsocomputing.mugen.ops_vpn",
+        "models": "mugen.core.plugin.ops_vpn.model",
+        "migration_track": "core",
+        "contrib": "mugen.core.plugin.ops_vpn.contrib",
+    },
+    "core.fw.ops_workflow": {
+        "name": "com.vorsocomputing.mugen.ops_workflow",
+        "namespace": "com.vorsocomputing.mugen.ops_workflow",
+        "models": "mugen.core.plugin.ops_workflow.model",
+        "migration_track": "core",
+        "contrib": "mugen.core.plugin.ops_workflow.contrib",
+    },
+    "core.fw.line_messagingapi": {
+        "name": "com.vorsocomputing.mugen.line",
+        "namespace": "com.vorsocomputing.mugen.line",
+        "models": "mugen.core.plugin.line.messagingapi.model",
+        "migration_track": "core",
+        "contrib": "mugen.core.plugin.line.messagingapi.contrib",
+    },
+    "core.fw.telegram_botapi": {
+        "name": "com.vorsocomputing.mugen.telegram",
+        "namespace": "com.vorsocomputing.mugen.telegram",
+        "models": "mugen.core.plugin.telegram.botapi.model",
+        "migration_track": "core",
+        "contrib": "mugen.core.plugin.telegram.botapi.contrib",
+    },
+    "core.fw.wechat": {
+        "name": "com.vorsocomputing.mugen.wechat",
+        "namespace": "com.vorsocomputing.mugen.wechat",
+        "models": "mugen.core.plugin.wechat.model",
+        "migration_track": "core",
+        "contrib": "mugen.core.plugin.wechat.contrib",
+    },
+    "core.fw.whatsapp_wacapi": {
+        "name": "com.vorsocomputing.mugen.whatsapp",
+        "namespace": "com.vorsocomputing.mugen.whatsapp",
+        "models": "mugen.core.plugin.whatsapp.wacapi.model",
+        "migration_track": "core",
+        "contrib": "mugen.core.plugin.whatsapp.wacapi.contrib",
+    },
 }
+
+
+def _build_builtin_extension_presets() -> dict[str, dict[str, Any]]:
+    presets: dict[str, dict[str, Any]] = {}
+    for token, extension_type in _BUILTIN_EXTENSION_TYPES.items():
+        preset = {
+            "type": extension_type,
+            "token": token,
+            "enabled": True,
+        }
+        if extension_type == "fw":
+            preset.update(_BUILTIN_FRAMEWORK_EXTENSION_METADATA.get(token, {}))
+        presets[token] = preset
+    return presets
+
+
+_BUILTIN_EXTENSION_PRESETS: dict[str, dict[str, Any]] = (
+    _build_builtin_extension_presets()
+)
 
 _PLACEHOLDER_MARKERS = (
     "<set-",
