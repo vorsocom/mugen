@@ -191,6 +191,21 @@ Run migrations as a one-off command with the same image and environment overlay:
 docker compose --env-file conf/.env.example run --rm migrate
 ```
 
+Re-apply the ACP seed manifest after changing enabled extensions or ACP
+contributions. This uses the same deployment overlay path as migrations, so
+`MUGEN_ENABLED_EXTENSIONS`, `MUGEN_EXTENSIONS_JSON`,
+`MUGEN_CONFIG_OVERLAY_JSON`, and `DATABASE_URL` are honored:
+
+```bash
+docker compose --env-file conf/.env.example run --rm api \
+  python -m mugen.core.plugin.acp.migration.reseed_manifest
+```
+
+For example, enabling `core.fw.knowledge_pack` adds backend ACP resources, but
+the UI route is visible only after the reseed has applied the
+`com.vorsocomputing.mugen.knowledge_pack:configurator` permission/grant data and
+the user logs in again.
+
 The Compose services use `conf/mugen.toml.sample` and inject database, Quart,
 CORS, and local-only ACP/JWT values through environment variables. They do not
 mount or copy local `mugen.toml`. The bundled PostgreSQL service is not published

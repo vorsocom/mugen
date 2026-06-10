@@ -11,6 +11,7 @@ import unittest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _ACTION_DIR = _REPO_ROOT / ".github" / "actions" / "ecs-deploy"
+_ACTION_PATH = _ACTION_DIR / "action.yml"
 _RENDERER_PATH = _ACTION_DIR / "render_task_definition.py"
 _HELPER_PATH = _ACTION_DIR / "ecs_task_helpers.py"
 
@@ -223,6 +224,24 @@ class TestEcsTaskDefinitionRenderer(unittest.TestCase):
 class TestEcsTaskHelpers(unittest.TestCase):
     """Covers non-AWS helper behavior used by the composite action."""
 
+    def test_composite_action_reseeds_acp_manifest_before_service_update(self) -> None:
+        action_text = _ACTION_PATH.read_text(encoding="utf-8")
+        default_reseed_command = (
+            'default: \'["python","-m",'
+            '"mugen.core.plugin.acp.migration.reseed_manifest"]\''
+        )
+
+        self.assertIn(default_reseed_command, action_text)
+        self.assertLess(
+            action_text.index("name: Run Migration Task"),
+            action_text.index("name: Run ACP Manifest Reseed Task"),
+        )
+        self.assertLess(
+            action_text.index("name: Run ACP Manifest Reseed Task"),
+            action_text.index("name: Update ECS Service"),
+        )
+        self.assertIn("reseed-task-arn", action_text)
+
     def test_builds_migration_overrides(self) -> None:
         result = subprocess.run(
             [
@@ -307,4 +326,3 @@ class TestEcsTaskHelpers(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0)
-
