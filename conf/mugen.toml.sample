@@ -130,6 +130,12 @@ token = "core.cp.clear_history"
 # models = "mugen.core.plugin.plugin_name.model"
 # migration_track = "core"
 #
+# Maintenance note:
+# When adding a new core extension entry here, also update the built-in
+# deployment overlay presets in mugen/core/utility/deployment_config.py so
+# MUGEN_ENABLED_EXTENSIONS can enable the extension in container/ECS runtime
+# config without requiring operators to duplicate metadata in MUGEN_EXTENSIONS_JSON.
+#
 # Web platform FW contract (required when `web` is active).
 [[mugen.modules.extensions]]
 type = "fw"

@@ -13,12 +13,14 @@ from werkzeug.security import check_password_hash
 
 from mugen.core import di
 from mugen.core.contract.migration_config import load_mugen_config
+from mugen.core.utility import deployment_config as deployment_config_module
 from mugen.core.utility.deployment_config import (
     apply_environment_overrides,
     parse_log_level,
     validate_production_deployment_config,
 )
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 _LOCAL_ADMIN_PASSWORD = "LocalAdmin1!"
 _LOCAL_ADMIN_PASSWORD_HASH = (
     "scrypt:32768:8:1$Hwq89E662mEFoypg$"
@@ -34,6 +36,67 @@ _NEW_TEST_PRIVATE_PEM = (
     "new-not-a-real-test-key\n"
     "-----END PRIVATE KEY-----\n"
 )
+
+
+def _sample_core_extension_entries() -> list[dict]:
+    entries: list[dict] = []
+    current: dict | None = None
+    sample_path = _REPO_ROOT / "conf" / "mugen.toml.sample"
+
+    for raw_line in sample_path.read_text(encoding="utf-8").splitlines():
+        stripped = raw_line.strip()
+        normalized = stripped[1:].strip() if stripped.startswith("#") else stripped
+
+        if normalized == "[[mugen.modules.extensions]]":
+            if current:
+                entries.append(current)
+            current = {}
+            continue
+
+        if current is None:
+            continue
+
+        if normalized == "" or normalized.startswith("["):
+            if current:
+                entries.append(current)
+            current = None
+            continue
+
+        if "=" not in normalized:
+            continue
+
+        key, raw_value = normalized.split("=", 1)
+        key = key.strip()
+        if key not in {
+            "type",
+            "token",
+            "enabled",
+            "name",
+            "namespace",
+            "models",
+            "migration_track",
+            "contrib",
+        }:
+            continue
+
+        value: object = raw_value.strip()
+        if isinstance(value, str) and value.startswith('"') and value.endswith('"'):
+            value = value[1:-1]
+        elif isinstance(value, str) and value.lower() == "true":
+            value = True
+        elif isinstance(value, str) and value.lower() == "false":
+            value = False
+
+        current[key] = value
+
+    if current:
+        entries.append(current)
+
+    return [
+        entry
+        for entry in entries
+        if str(entry.get("token", "")).startswith("core.")
+    ]
 
 
 def _real_ed25519_private_pem() -> str:
@@ -607,6 +670,53 @@ class TestMugenDeploymentConfig(unittest.TestCase):
             extensions[0]["contrib"],
             "mugen.core.plugin.channel_orchestration.contrib",
         )
+
+    def test_builtin_extension_presets_cover_sample_core_extensions(self) -> None:
+        sample_entries = {
+            entry["token"]: entry
+            for entry in _sample_core_extension_entries()
+        }
+        presets = deployment_config_module._BUILTIN_EXTENSION_PRESETS
+
+        self.assertFalse(set(sample_entries) - set(presets))
+        for token, sample_entry in sample_entries.items():
+            with self.subTest(token=token):
+                preset = presets[token]
+                self.assertEqual(preset["token"], token)
+                self.assertEqual(preset["type"], sample_entry["type"])
+                self.assertIs(preset["enabled"], True)
+                for key in (
+                    "name",
+                    "namespace",
+                    "models",
+                    "migration_track",
+                    "contrib",
+                ):
+                    if key in sample_entry:
+                        self.assertEqual(preset.get(key), sample_entry[key])
+
+    def test_environment_overlay_enables_all_sample_core_extensions(self) -> None:
+        config = _base_config()
+        tokens = [
+            str(entry["token"])
+            for entry in _sample_core_extension_entries()
+        ]
+
+        apply_environment_overrides(
+            config,
+            environ={
+                "MUGEN_ENABLED_EXTENSIONS": ",".join(tokens),
+            },
+        )
+
+        extensions = config["mugen"]["modules"]["extensions"]
+        by_token = {entry["token"]: entry for entry in extensions}
+        self.assertEqual(set(by_token), set(tokens))
+        self.assertEqual(
+            by_token["core.fw.knowledge_pack"]["contrib"],
+            "mugen.core.plugin.knowledge_pack.contrib",
+        )
+        self.assertEqual(by_token["core.ipc.matrix_ingress"]["type"], "ipc")
 
     def test_environment_overlay_enables_multiple_known_builtin_extensions(
         self,
