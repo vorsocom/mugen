@@ -46,7 +46,7 @@ environment.
 export AWS_PROFILE=mugen-deployer
 export AWS_REGION=us-east-1
 export AWS_ACCOUNT_ID=<aws-account-id>
-export IMAGE_TAG=<git-sha-or-release-tag>
+export IMAGE_TAG=<main-git-sha-or-release-tag>
 export IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/mugen-api:${IMAGE_TAG}"
 ```
 
@@ -75,6 +75,43 @@ aws configure list
 The account, profile, and region must match the deployment target. If you do not
 export `AWS_PROFILE` and `AWS_REGION`, pass `--profile` and `--region` to every
 AWS CLI command.
+
+## Production Release Source
+
+Production ECS images must be built from `main` or from an immutable release tag
+that points at a commit already on `main`. Treat `develop` as the integration
+branch; do not build production ECS images from `develop`, feature branches, or
+a dirty local worktree.
+
+To deploy the current `main` commit:
+
+```bash
+git fetch origin --tags
+git checkout main
+git pull --ff-only origin main
+test -z "$(git status --short)" || { git status --short; exit 1; }
+
+export IMAGE_TAG="$(git rev-parse --short HEAD)"
+export IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/mugen-api:${IMAGE_TAG}"
+```
+
+To deploy a release tag:
+
+```bash
+export RELEASE_TAG=v0.51.0
+
+git fetch origin --tags
+git checkout "$RELEASE_TAG"
+git merge-base --is-ancestor HEAD origin/main
+test -z "$(git status --short)" || { git status --short; exit 1; }
+
+export IMAGE_TAG="$RELEASE_TAG"
+export IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/mugen-api:${IMAGE_TAG}"
+```
+
+Use a unique image tag for every release. Do not use `latest` in the production
+task definition, because ECS rollbacks and audits need an immutable image
+reference.
 
 ## 1. Create Networking
 
@@ -367,6 +404,10 @@ Initial `MUGEN_CONFIG_OVERLAY_JSON` for a deterministic demo:
 ```
 
 ## 8. Build And Push Image
+
+Before building, complete [Production Release Source](#production-release-source)
+so `IMAGE_TAG` and `IMAGE_URI` point at the exact `main` commit or release tag
+being deployed.
 
 Create the ECR repository:
 
@@ -731,9 +772,12 @@ Task starts Hypercorn and then stops during bootstrap
 
 For later releases:
 
-1. Build and push a new ECR image tag.
-2. Register a new task definition revision with the new image tag.
-3. Run the migration one-off task using that revision.
-4. If migrations exit `0`, update the ECS service to the new revision.
-5. Wait for service stability.
-6. Smoke test `/health` and at least one authenticated API/UI workflow.
+1. Merge or promote the release to `main`, or create a release tag from `main`.
+2. Complete [Production Release Source](#production-release-source) and confirm
+   the worktree is clean.
+3. Build and push a new immutable ECR image tag.
+4. Register a new task definition revision with the new image tag.
+5. Run the migration one-off task using that revision.
+6. If migrations exit `0`, update the ECS service to the new revision.
+7. Wait for service stability.
+8. Smoke test `/health` and at least one authenticated API/UI workflow.
