@@ -54,7 +54,7 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Build, Migrate, And Deploy
+      - name: Build, Migrate, Reseed, And Deploy
         uses: ./.github/actions/ecs-deploy
         env:
           TASKDEF_CORS_ALLOWED_ORIGINS: ${{ vars.CORS_ALLOWED_ORIGINS }}

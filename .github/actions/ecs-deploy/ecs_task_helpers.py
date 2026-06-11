@@ -37,13 +37,13 @@ def build_container_overrides(container_name: str, command_json: str) -> str:
     try:
         command = json.loads(command_json)
     except json.JSONDecodeError as exc:
-        raise DeployHelperError("migration command must be valid JSON") from exc
+        raise DeployHelperError("task command must be valid JSON") from exc
     if not isinstance(command, list) or not all(
         isinstance(item, str)
         for item in command
     ):
         raise DeployHelperError(
-            "migration command must be a JSON array of strings",
+            "task command must be a JSON array of strings",
         )
     return json.dumps(
         {
@@ -90,7 +90,7 @@ def assert_container_exit_zero(
     tasks = payload.get("tasks") or []
     if not tasks:
         raise DeployHelperError(
-            "migration task disappeared before inspection:\n"
+            "one-off task disappeared before inspection:\n"
             + _json_diagnostic(payload),
         )
     task = tasks[0]
@@ -103,11 +103,11 @@ def assert_container_exit_zero(
         reason = container.get("reason") or task.get("stoppedReason")
         detail = f" reason={reason!r}" if reason else ""
         raise DeployHelperError(
-            f"migration container exited with {exit_code!r}{detail}:\n"
+            f"one-off container exited with {exit_code!r}{detail}:\n"
             + _json_diagnostic(task),
         )
     raise DeployHelperError(
-        f"container {container_name!r} not found in migration task:\n"
+        f"container {container_name!r} not found in one-off task:\n"
         + _json_diagnostic(task),
     )
 
