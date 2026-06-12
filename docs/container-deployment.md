@@ -48,7 +48,8 @@ migration overlays keep their merge behavior:
 
 - `MUGEN_EXTENSIONS_JSON` merges by normalized extension `token`.
 - `MUGEN_MIGRATION_TRACKS_JSON` merges by migration track `name`.
-- `MUGEN_ENABLED_EXTENSIONS` enables a declared or built-in extension by token.
+- `MUGEN_ENABLED_EXTENSIONS` enables additional declared or built-in extensions
+  by token.
   Built-in tokens mirror the core extension entries shown in
   `conf/mugen.toml.sample`; downstream tokens still need to be declared through
   `MUGEN_EXTENSIONS_JSON` or a generic config overlay before enabling.
@@ -127,7 +128,7 @@ Recommended non-secret ECS environment variables:
 | `LOG_LEVEL` | `INFO` |
 | `MUGEN_PLATFORMS` | `web` |
 | `MUGEN_PHASE_B_CRITICAL_PLATFORMS` | `web` |
-| `MUGEN_ENABLED_EXTENSIONS` | `core.fw.channel_orchestration,core.fw.audit` |
+| `MUGEN_ENABLED_EXTENSIONS` | blank; use only for additional opt-in extensions |
 
 Recommended ECS secrets:
 

@@ -165,6 +165,37 @@ name = "com.vorsocomputing.mugen.context_engine"
 namespace = "com.vorsocomputing.mugen.context_engine"
 contrib = "mugen.core.plugin.context_engine.contrib"
 
+# Baseline web/admin FW plugins.
+[[mugen.modules.extensions]]
+type = "fw"
+token = "core.fw.audit"
+enabled = true
+name = "com.vorsocomputing.mugen.audit"
+namespace = "com.vorsocomputing.mugen.audit"
+models = "mugen.core.plugin.audit.model"
+migration_track = "core"
+contrib = "mugen.core.plugin.audit.contrib"
+
+[[mugen.modules.extensions]]
+type = "fw"
+token = "core.fw.channel_orchestration"
+enabled = true
+name = "com.vorsocomputing.mugen.channel_orchestration"
+namespace = "com.vorsocomputing.mugen.channel_orchestration"
+models = "mugen.core.plugin.channel_orchestration.model"
+migration_track = "core"
+contrib = "mugen.core.plugin.channel_orchestration.contrib"
+
+[[mugen.modules.extensions]]
+type = "fw"
+token = "core.fw.knowledge_pack"
+enabled = true
+name = "com.vorsocomputing.mugen.knowledge_pack"
+namespace = "com.vorsocomputing.mugen.knowledge_pack"
+models = "mugen.core.plugin.knowledge_pack.model"
+migration_track = "core"
+contrib = "mugen.core.plugin.knowledge_pack.contrib"
+
 # Additional shipped core FW plugins (enable as needed).
 # [[mugen.modules.extensions]]
 # type = "fw"
@@ -204,16 +235,6 @@ contrib = "mugen.core.plugin.context_engine.contrib"
 #
 # [[mugen.modules.extensions]]
 # type = "fw"
-# token = "core.fw.audit"
-# enabled = true
-# name = "com.vorsocomputing.mugen.audit"
-# namespace = "com.vorsocomputing.mugen.audit"
-# models = "mugen.core.plugin.audit.model"
-# migration_track = "core"
-# contrib = "mugen.core.plugin.audit.contrib"
-#
-# [[mugen.modules.extensions]]
-# type = "fw"
 # token = "core.fw.billing"
 # enabled = true
 # name = "com.vorsocomputing.mugen.billing"
@@ -221,26 +242,6 @@ contrib = "mugen.core.plugin.context_engine.contrib"
 # models = "mugen.core.plugin.billing.model"
 # migration_track = "core"
 # contrib = "mugen.core.plugin.billing.contrib"
-#
-# [[mugen.modules.extensions]]
-# type = "fw"
-# token = "core.fw.channel_orchestration"
-# enabled = true
-# name = "com.vorsocomputing.mugen.channel_orchestration"
-# namespace = "com.vorsocomputing.mugen.channel_orchestration"
-# models = "mugen.core.plugin.channel_orchestration.model"
-# migration_track = "core"
-# contrib = "mugen.core.plugin.channel_orchestration.contrib"
-#
-# [[mugen.modules.extensions]]
-# type = "fw"
-# token = "core.fw.knowledge_pack"
-# enabled = true
-# name = "com.vorsocomputing.mugen.knowledge_pack"
-# namespace = "com.vorsocomputing.mugen.knowledge_pack"
-# models = "mugen.core.plugin.knowledge_pack.model"
-# migration_track = "core"
-# contrib = "mugen.core.plugin.knowledge_pack.contrib"
 #
 # [[mugen.modules.extensions]]
 # type = "fw"
