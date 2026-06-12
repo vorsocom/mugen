@@ -458,7 +458,7 @@ Downstream task templates typically extend the upstream template with:
   "environment": [
     {
       "name": "MUGEN_ENABLED_EXTENSIONS",
-      "value": "core.fw.channel_orchestration,core.fw.audit,acme.billing"
+      "value": "acme.billing"
     }
   ],
   "secrets": [
@@ -684,9 +684,14 @@ CORS_ALLOWED_ORIGINS=https://app.example.com
 MUGEN_CONFIG_FILE=conf/mugen.toml.sample
 MUGEN_PLATFORMS=web
 MUGEN_PHASE_B_CRITICAL_PLATFORMS=web
-MUGEN_ENABLED_EXTENSIONS=core.fw.channel_orchestration,core.fw.audit
 ACP_SEED_ACP=true
 ```
+
+`conf/mugen.toml.sample` already enables the upstream web/admin baseline:
+ACP, Web, Context Engine, Audit, Channel Orchestration, and Knowledge Pack. Set
+`MUGEN_ENABLED_EXTENSIONS` only when enabling additional opt-in extensions, such
+as downstream plugin tokens or `core.fw.agent_runtime` after configuring
+`[mugen.agent_runtime]`.
 
 The task definition examples below assume each secret resolves to the exact
 environment variable value. For example, the `SECRET_KEY` secret value should be
@@ -877,7 +882,6 @@ Use a tagged image, not an untagged repository name.
         { "name": "CORS_ALLOWED_ORIGINS", "value": "https://app.example.com" },
         { "name": "MUGEN_PLATFORMS", "value": "web" },
         { "name": "MUGEN_PHASE_B_CRITICAL_PLATFORMS", "value": "web" },
-        { "name": "MUGEN_ENABLED_EXTENSIONS", "value": "core.fw.channel_orchestration,core.fw.audit" },
         { "name": "ACP_SEED_ACP", "value": "true" }
       ],
       "secrets": [
