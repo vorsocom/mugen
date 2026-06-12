@@ -56,6 +56,27 @@ class TestConfSamples(unittest.TestCase):
         )
         self.assertEqual(by_token["core.fw.web"]["migration_track"], "core")
 
+    def test_mugen_sample_enables_baseline_web_admin_extensions(self) -> None:
+        doc = _load_toml("conf/mugen.toml.sample")
+        extensions = doc["mugen"]["modules"]["extensions"]
+        by_token = {entry["token"]: entry for entry in extensions}
+
+        baseline_tokens = {
+            "core.fw.acp",
+            "core.fw.web",
+            "core.fw.context_engine",
+            "core.fw.audit",
+            "core.fw.channel_orchestration",
+            "core.fw.knowledge_pack",
+        }
+        for token in baseline_tokens:
+            with self.subTest(token=token):
+                self.assertIn(token, by_token)
+                self.assertIs(by_token[token]["enabled"], True)
+
+        self.assertNotIn("core.fw.agent_runtime", by_token)
+        self.assertNotIn("agent_runtime", doc["mugen"])
+
     def test_mugen_sample_mentions_all_shipped_core_extension_tokens(self) -> None:
         sample_text = Path("conf/mugen.toml.sample").read_text(encoding="utf-8")
         sample_tokens = set(

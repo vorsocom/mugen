@@ -201,8 +201,9 @@ docker compose --env-file conf/.env.example run --rm api \
   python -m mugen.core.plugin.acp.migration.reseed_manifest
 ```
 
-For example, enabling `core.fw.knowledge_pack` adds backend ACP resources, but
-the UI route is visible only after the reseed has applied the
+For example, Knowledge Pack is part of the baseline web/admin config, but an
+existing database upgraded from an older config shows its UI route only after the
+reseed has applied the
 `com.vorsocomputing.mugen.knowledge_pack:configurator` permission/grant data and
 the user logs in again.
 
@@ -240,12 +241,15 @@ ECR, IAM roles, ECS clusters, migration tasks, load balancing, DNS, and
 troubleshooting, see
 [ECS Fargate deployment runbook](docs/ecs-fargate-deployment-runbook.md).
 
-Compose also sets `MUGEN_ENABLED_EXTENSIONS=core.fw.channel_orchestration` so the
-Channel Orchestration UI resources are registered without editing
-`mugen.toml`. The value accepts a comma-separated list of extension tokens. Any
-extension already declared in the base config can be enabled by token; common
-built-ins can also be enabled from presets, such as
-`core.fw.channel_orchestration,core.fw.audit`.
+`conf/mugen.toml.sample` enables the baseline web/admin framework extensions:
+ACP, Web, Context Engine, Audit, Channel Orchestration, and Knowledge Pack.
+Compose leaves `MUGEN_ENABLED_EXTENSIONS` blank by default and relies on that
+base config. Set `MUGEN_ENABLED_EXTENSIONS` only for additional opt-in
+extensions; the value accepts a comma-separated list of extension tokens. Any
+extension already declared in the base config can be enabled by token, and
+common built-ins can also be enabled from presets. For example,
+`core.fw.agent_runtime` can be enabled after its `[mugen.agent_runtime]` policy
+section is configured.
 
 Compose sets `MUGEN_PLATFORMS=web` and
 `MUGEN_PHASE_B_CRITICAL_PLATFORMS=web` by default. Both values are
@@ -349,7 +353,7 @@ The application and migration runner both apply the same environment overlay:
 | `MUGEN_PLATFORMS` | `mugen.platforms` |
 | `MUGEN_PHASE_B_CRITICAL_PLATFORMS` | `mugen.runtime.phase_b.critical_platforms` |
 | `MUGEN_EXTENSIONS_JSON` | downstream `mugen.modules.extensions` entries |
-| `MUGEN_ENABLED_EXTENSIONS` | predeclared or built-in core extension tokens from `conf/mugen.toml.sample` |
+| `MUGEN_ENABLED_EXTENSIONS` | additional predeclared or built-in extension tokens to enable |
 | `MUGEN_MIGRATION_TRACKS_JSON` | downstream `rdbms.migration_tracks.plugins` entries |
 | `DATABASE_URL` | `rdbms.alembic.url`, `rdbms.sqlalchemy.url` |
 | `SECRET_KEY` | `quart.secret_key` |
