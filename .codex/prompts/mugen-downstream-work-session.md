@@ -7,6 +7,8 @@ given.
 ```text
 Treat this message as standing policy/context only, not as a task to execute now.
 
+Suggested chat title: muGen Downstream Work Session - <GH_REPO>
+
 Startup behavior:
 - Do not run commands, checks, git/gh actions, or file edits from this message
   alone.
@@ -14,6 +16,15 @@ Startup behavior:
   follow these rules.
 - After confirming, wait for a later explicit task.
 - Apply the workflow below only when a later concrete task is given.
+
+Placeholder replacement check:
+- Before using this prompt for an actual downstream repo, replace all required
+  placeholders: `<DOWNSTREAM_REPO_PATH>`, `<ORIGIN_URL>`, `<GH_REPO>`,
+  `<PYTHON_INTERPRETER>`, `<DOWNSTREAM_EDIT_SCOPE>`, and `<COMMIT_POLICY>`.
+- `<COMMIT_POLICY>` must be either `auto-after-gates` or
+  `ask-before-commit`.
+- If any required placeholder remains when a concrete task starts, stop and ask
+  for the missing value instead of guessing.
 
 Workspace:
 - Repository: <DOWNSTREAM_REPO_PATH>
@@ -29,6 +40,7 @@ Workspace:
 - Do not modify files outside the downstream-owned edit scope unless the task
   explicitly requires a downstream-owned config, docs, migration, deployment, or
   provenance change.
+- Commit policy: <COMMIT_POLICY>
 - Treat `mugen/core`, upstream release scripts, upstream workflows,
   `pyproject.toml`, `poetry.lock`, `quartman.py`, and upstream README
   version/badge behavior as upstream-owned unless the user explicitly chooses to
@@ -38,6 +50,10 @@ Task startup checks:
 - Verify current directory is `<DOWNSTREAM_REPO_PATH>`.
 - Verify `origin/develop` exists. If it does not, stop and report that the
   downstream base branch is missing; do not substitute another base branch.
+- Verify the configured `origin` URL matches `<ORIGIN_URL>`.
+- Verify `<GH_REPO>` is the GitHub owner/repository behind `<ORIGIN_URL>` before
+  running any `gh -R <GH_REPO>` or `gh api repos/<GH_REPO>/...` command.
+  If they disagree, stop and report the mismatch.
 - Verify `upstream`, if present, has push URL `PUSH_DISABLED` or otherwise is
   not writable.
 - Verify `gh --version` and `gh auth status`.
@@ -59,6 +75,8 @@ Task startup checks:
   user explicitly instructs that exact action.
 - Before editing `mugen.toml`, create `_dev/bak` if needed and write a
   timestamped backup such as `_dev/bak/mugen.toml.pre-edit-<timestamp>.bak`.
+- Treat `_dev/bak` backups as local safety artifacts. Do not commit them unless
+  the user explicitly requests that exact backup artifact to be committed.
 - When updating schema, start from the current `mugen.toml`, add missing keys,
   and remove obsolete keys only if current code requires it.
 - After editing `mugen.toml`, report keys structurally added, removed, or
@@ -77,8 +95,22 @@ Task startup checks:
 - Before editing `downstream.toml`, create `_dev/bak` if needed and write a
   timestamped backup such as
   `_dev/bak/downstream.toml.pre-edit-<timestamp>.bak`.
+- Treat `_dev/bak` backups as local safety artifacts. Do not commit them unless
+  the user explicitly requests that exact backup artifact to be committed.
 - After editing `downstream.toml`, report keys structurally added, removed, or
   relocated; confirm unrelated values were preserved; and name the backup file.
+- After editing `downstream.toml`, validate it with a tomllib parse check such
+  as:
+  `<PYTHON_INTERPRETER> - <<'PY'`
+  `import tomllib`
+  `from pathlib import Path`
+  `data = tomllib.loads(Path("downstream.toml").read_text())`
+  `assert data.get("schema_version") == 1`
+  `for key in ("name", "author", "copyright", "email", "version"):`
+  `    assert key in data["app"]`
+  `for key in ("repo", "branch", "sync_ref"):`
+  `    assert key in data["upstream"]`
+  `PY`
 
 Downstream Python requirements:
 - Downstream-only Python dependencies belong in a downstream-owned requirements
@@ -96,14 +128,21 @@ Git workflow:
 - Never commit directly to `develop` or `main`.
 - Create a feature branch for the task, such as `fix/<topic>`,
   `feat/<topic>`, `docs/<topic>`, or `chore/<topic>`.
+- Branch names must be lowercase and hyphenated, with no spaces, local
+  usernames, absolute paths, raw issue text containing sensitive details, or
+  private customer names unless the downstream repo is explicitly scoped to that
+  customer.
 - Push feature branches to `origin` only.
-- Commits and PRs are automated for this session: after implementing the task and
-  passing quality gates, create the commit, push the branch, open the PR,
+- If `<COMMIT_POLICY>` is `auto-after-gates`, then after implementing the task
+  and passing quality gates, create the commit, push the branch, open the PR,
   monitor GitHub to completion, merge when allowed, and perform post-merge
   cleanup without asking for separate commit approval.
-- Stop before committing only if the user explicitly disables automated commits
-  or if quality gates, repo policy, mergeability, or required review status
-  blocks completion.
+- If `<COMMIT_POLICY>` is `ask-before-commit`, then after implementing the task
+  and passing quality gates, stop and ask for explicit commit approval. Once the
+  user approves the commit, complete the commit, push, PR, monitoring, merge,
+  and cleanup workflow without asking again.
+- Stop before committing if quality gates, repo policy, mergeability, or
+  required review status blocks completion.
 
 Conventional commit enforcement:
 - The git commit subject, PR title, and merge-commit subject must all use
@@ -132,12 +171,25 @@ Quality gates before commit or push:
 - If quality gates fail, do not commit or push. Report the failure and the next
   debugging options.
 
+Downstream release tasks:
+- Validate that downstream release versions use numeric SemVer core form
+  `X.Y.Z` before creating a release branch or tag.
+- Validate that release branches use `release/{app-slug}-vX.Y.Z` and release
+  tags use `{app-slug}-vX.Y.Z`, where `{app-slug}` is the downstream app slug.
+- Reject bare upstream-style tags such as `vX.Y.Z`, tags without the app slug,
+  branches with spaces, or names containing local usernames or sensitive
+  customer details.
+- Tag only the merged `origin/main` commit and push only the explicit downstream
+  release tag. Never run `git push --tags`.
+
 PR creation and monitoring:
 - After push, create the PR with `gh pr create -R <GH_REPO>` targeting
   `develop`.
 - Provide the PR URL.
 - PR descriptions must not include absolute paths, usernames, interpreter paths,
-  or machine-specific commands.
+  machine-specific commands, secrets, local repo names, private customer names
+  unless the downstream repo is explicitly scoped to that customer, or raw
+  environment variable values.
 - After PR creation, monitor GitHub status with `gh pr view -R <GH_REPO>` and/or
   `gh pr checks -R <GH_REPO>`.
 - Poll every 30 seconds for up to 30 minutes from PR creation.

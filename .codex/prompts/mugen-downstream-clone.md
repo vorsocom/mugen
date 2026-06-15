@@ -7,9 +7,11 @@ Use this prompt to create a new downstream application repository from
 Clone muGen as a downstream application with a merge-clean downstream release
 workflow.
 
+Suggested chat title: muGen Downstream Clone - <APP_SLUG>
+
 Inputs:
 - Downstream app display name: <APP_NAME>
-- App slug: <APP_SLUG>
+- App slug: <APP_SLUG>, using lowercase letters, digits, and hyphens only
 - Local directory: <LOCAL_DIR>
 - Downstream origin URL: <ORIGIN_URL>
 - Downstream author: <AUTHOR>
@@ -30,6 +32,8 @@ Preflight requirements:
    already contains branches/tags unless the user explicitly confirms reuse.
 4. Verify `gh` authentication before attempting GitHub repository edits such as
    setting the default branch.
+5. If a GitHub repository identifier is supplied or derived for `gh` commands,
+   verify it matches the downstream origin URL before making repository edits.
 
 Clone/setup requirements:
 1. Clone `git@github.com:vorsocom/mugen.git` into the local directory.
@@ -65,6 +69,20 @@ Clone/setup requirements:
 13. Commit `downstream.toml` as
     `chore(downstream): initialize provenance` and push to `origin/develop`
     unless explicitly told not to commit.
+
+Upstream tag detection:
+1. Determine `sync_ref` from the cloned upstream `main` commit.
+2. Inspect remote tags without importing them locally:
+   `git ls-remote --tags git@github.com:vorsocom/mugen.git`.
+3. Treat `refs/tags/<tag>` as a lightweight tag candidate and
+   `refs/tags/<tag>^{}` as the peeled commit for an annotated tag.
+4. If exactly one remote tag candidate resolves to `sync_ref`, record that tag
+   in `upstream.sync_tag`.
+5. If no remote tag resolves to `sync_ref`, omit `upstream.sync_tag`; on later
+   upstream syncs, remove any stale `upstream.sync_tag`.
+6. If multiple remote tags resolve to the same `sync_ref`, stop and ask which
+   tag should be recorded instead of guessing.
+7. Do not run `git fetch --tags` or `git push --tags` during this process.
 
 Downstream Python requirements:
 1. Do not add downstream-only dependencies to upstream `pyproject.toml` unless
@@ -103,14 +121,24 @@ Downstream release workflow:
 4. Do not add downstream provenance or downstream release metadata to
    `pyproject.toml`; use `downstream.toml` instead.
 5. Start each release from fresh `origin/develop`.
-6. Create `release/<APP_SLUG>-vX.Y.Z`.
-7. Update only `[app].version` in `downstream.toml`.
-8. Commit as `chore(release): <APP_SLUG>-vX.Y.Z`.
-9. Open a PR from `release/<APP_SLUG>-vX.Y.Z` to `main`.
-10. After merge, resolve the merged `origin/main` commit and create annotated
+6. Validate that the release version is exactly `X.Y.Z`, using numeric SemVer
+   core components with no prefix or suffix.
+7. Validate that the release branch is exactly
+   `release/<APP_SLUG>-vX.Y.Z`.
+8. Reject bare upstream-style tags such as `vX.Y.Z`, tags without the app slug,
+   branches with spaces, or names containing local usernames or sensitive
+   customer details.
+9. Update only `[app].version` in `downstream.toml`.
+10. Commit as `chore(release): <APP_SLUG>-vX.Y.Z`.
+11. Open a PR from `release/<APP_SLUG>-vX.Y.Z` to `main`.
+12. PR descriptions must not include absolute paths, usernames, interpreter
+    paths, machine-specific commands, secrets, local repo names, private
+    customer names unless the downstream repo is explicitly scoped to that
+    customer, or raw environment variable values.
+13. After merge, resolve the merged `origin/main` commit and create annotated
     tag `<APP_SLUG>-vX.Y.Z` at that commit.
-11. Push only the explicit downstream tag; never run `git push --tags`.
-12. Sync the merged `origin/main` release commit back into `develop`, then
+14. Push only the explicit downstream tag; never run `git push --tags`.
+15. Sync the merged `origin/main` release commit back into `develop`, then
     delete the release branch.
 
 Upstream sync workflow:
@@ -160,6 +188,17 @@ Verification:
 - Verify the downstream GitHub default branch is `develop`.
 - Verify `downstream.toml` parses and contains required `[app]` and
   `[upstream]` metadata.
+  Run a parse check such as:
+  `python3 - <<'PY'`
+  `import tomllib`
+  `from pathlib import Path`
+  `data = tomllib.loads(Path("downstream.toml").read_text())`
+  `assert data.get("schema_version") == 1`
+  `for key in ("name", "author", "copyright", "email", "version"):`
+  `    assert key in data["app"]`
+  `for key in ("repo", "branch", "sync_ref"):`
+  `    assert key in data["upstream"]`
+  `PY`
 - Dry-check that the downstream release-prep commit would modify only
   `downstream.toml`.
 ```
