@@ -70,6 +70,18 @@ Clone/setup requirements:
     `chore(downstream): initialize provenance` and push to `origin/develop`
     unless explicitly told not to commit.
 
+Downstream artifact layout:
+- Create `downstream/README.md` during clone setup.
+- Prefer `downstream/` for downstream-owned deployment templates, operator
+  documentation, overlays, examples, and app-specific artifacts.
+- Recommended subdirectories:
+  - `downstream/aws/` for AWS deployment templates and examples.
+  - `downstream/docs/` for downstream operator and deployment notes.
+- Keep files in fixed tool locations only when required, such as GitHub Actions
+  workflows under `.github/workflows`.
+- Name fixed-location downstream files distinctly, for example
+  `.github/workflows/deploy-<APP_SLUG>-ecs.yml`.
+
 Upstream tag detection:
 1. Determine `sync_ref` from the cloned upstream `main` commit.
 2. Inspect remote tags without importing them locally:
@@ -111,6 +123,19 @@ Downstream Python requirements:
 9. Do not store downstream runtime extension registration in the requirements
    file; use `MUGEN_EXTENSIONS_JSON`, `MUGEN_MIGRATION_TRACKS_JSON`, config
    overlays, or downstream-owned runtime config for that.
+
+Downstream deployment fork policy:
+- If a downstream app intentionally forks upstream deployment behavior, put the
+  downstream source of truth in downstream-specific files.
+- Keep generic upstream deployment files present for upstream synchronization
+  context unless explicitly removed.
+- Do not make generic upstream deployment workflows the downstream production
+  source of truth.
+- If a generic upstream deployment workflow remains and could deploy
+  infrastructure, guard it so it cannot deploy from the downstream repository.
+- When upstream changes deployment behavior on `upstream/main`, review those
+  changes and port relevant behavior into downstream workflow, templates, and
+  docs.
 
 Downstream release workflow:
 1. Downstream app versions are independent from upstream muGen versions.

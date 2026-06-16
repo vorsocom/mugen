@@ -45,6 +45,16 @@ Workspace:
   `pyproject.toml`, `poetry.lock`, `quartman.py`, and upstream README
   version/badge behavior as upstream-owned unless the user explicitly chooses to
   fork that behavior.
+- Prefer `downstream/` for downstream-owned deployment templates, operator docs,
+  overlays, examples, and app-specific artifacts.
+- Keep fixed-location tool files only where required, such as workflows under
+  `.github/workflows`.
+- Name downstream fixed-location files distinctly, for example
+  `deploy-<app-slug>-ecs.yml`.
+- Treat generic upstream deployment workflows and templates as upstream-owned
+  unless the user explicitly forks deployment behavior.
+- When deployment behavior is forked, create downstream-specific workflow,
+  template, and docs; keep generic upstream files unchanged or guarded.
 
 Task startup checks:
 - Verify current directory is `<DOWNSTREAM_REPO_PATH>`.
@@ -170,6 +180,27 @@ Quality gates before commit or push:
   before running gates.
 - If quality gates fail, do not commit or push. Report the failure and the next
   debugging options.
+
+Downstream deployment sync:
+- Downstream deployment files are not automatically updated when upstream
+  changes generic deployment behavior.
+- When syncing from `upstream/main`, review workflow, action input, task
+  template, migration/reseed, smoke-test, and env/secret contract changes.
+- Port relevant changes into downstream-specific deployment files and docs.
+- Do not assume upstream generic deployment files are the downstream production
+  source of truth.
+
+GitHub Actions troubleshooting:
+- If a check fails but normal logs do not show the cause, inspect check-run
+  annotations:
+  `gh api repos/<GH_REPO>/check-runs/<CHECK_RUN_ID>/annotations`
+- Always pass explicit repo for logs:
+  `gh run view -R <GH_REPO> <RUN_ID> --job <JOB_ID> --log-failed`
+- If a hosted runner reports `No space left on device`, treat it as CI resource
+  pressure first.
+- Full muGen dev dependency installs may need pre-install disk cleanup and
+  reduced cache scope.
+- Avoid caching `~/.cache/pip` in heavyweight test jobs unless measured safe.
 
 Downstream release tasks:
 - Validate that downstream release versions use numeric SemVer core form
