@@ -12,6 +12,9 @@ Suggested chat title: muGen Downstream Clone - <APP_SLUG>
 Inputs:
 - Downstream app display name: <APP_NAME>
 - App slug: <APP_SLUG>, using lowercase letters, digits, and hyphens only
+- If an app slug is required and the user did not explicitly provide one,
+  default `<APP_SLUG>` to the GitHub repository name from the downstream origin
+  URL.
 - Local directory: <LOCAL_DIR>
 - Downstream origin URL: <ORIGIN_URL>
 - Downstream author: <AUTHOR>
