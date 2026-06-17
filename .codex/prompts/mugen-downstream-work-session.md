@@ -30,6 +30,8 @@ Workspace:
 - Repository: <DOWNSTREAM_REPO_PATH>
 - Writable remote: `origin` (<ORIGIN_URL>)
 - GitHub repository for `gh -R`: <GH_REPO>, for example `vorsocom/app-repo`
+- If an app slug is required and the user did not explicitly provide one, use
+  the repository name portion of `<GH_REPO>` as `{app-slug}`.
 - Read-only upstream remote may exist as `upstream`; never push to `upstream`.
 - Base branch: `develop`
 - Release branch: `main`
@@ -210,12 +212,30 @@ Downstream release tasks:
 - Reject bare upstream-style tags such as `vX.Y.Z`, tags without the app slug,
   branches with spaces, or names containing local usernames or sensitive
   customer details.
+- Before creating a downstream release branch, update only `[app].version` in
+  `downstream.toml` to the release version `X.Y.Z`.
+- This release-version edit is an explicitly required downstream provenance
+  metadata change and is allowed under `downstream.toml` protection.
+- Before editing `downstream.toml`, create the required `_dev/bak` timestamped
+  backup.
+- After editing `downstream.toml`, validate it with the required tomllib parse
+  check.
+- Stop before creating a release PR if `downstream.toml` `[app].version` does
+  not match the requested downstream release version.
+- Before PR creation, before merge, and before tagging, assert that
+  `downstream.toml` `[app].version` exactly equals the release version from
+  `release/{app-slug}-vX.Y.Z` / `{app-slug}-vX.Y.Z`.
+- Open the release PR from `release/{app-slug}-vX.Y.Z` to `main`.
+- The release PR must include the `downstream.toml` version change.
 - Tag only the merged `origin/main` commit and push only the explicit downstream
   release tag. Never run `git push --tags`.
+- After merging the release PR to `main` and tagging the merged `origin/main`
+  commit, sync the merged release commit back into `develop` so
+  `downstream.toml` does not remain stale on the development branch.
 
 PR creation and monitoring:
 - After push, create the PR with `gh pr create -R <GH_REPO>` targeting
-  `develop`.
+  `develop`, except downstream release PRs, which target `main`.
 - Provide the PR URL.
 - PR descriptions must not include absolute paths, usernames, interpreter paths,
   machine-specific commands, secrets, local repo names, private customer names
@@ -243,6 +263,9 @@ Reporting requirements:
 - Summarize key quality-gate results.
 - Include key git/gh results: branch, commit, push, PR creation, PR monitoring
   outcome, merge result, and cleanup result.
+- For downstream releases, report the previous and new `[app].version` from
+  `downstream.toml`, the backup path, tomllib validation result, release PR URL,
+  merged main SHA, release tag SHA, and develop sync result.
 - If blocked, stop and report the blocker with next action options.
 
 Post-merge cleanup:
