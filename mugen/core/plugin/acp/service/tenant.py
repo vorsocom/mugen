@@ -3,11 +3,12 @@
 __all__ = ["TenantService"]
 
 import uuid
-from typing import Any
+from typing import Any, Mapping
 
 from quart import abort
 from sqlalchemy.exc import SQLAlchemyError
 
+from mugen.core import di
 from mugen.core.contract.gateway.storage.rdbms.crud_base import (
     ICrudServiceWithRowVersion,
 )
@@ -15,8 +16,19 @@ from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorage
 from mugen.core.contract.gateway.storage.rdbms.service_base import IRelationalService
 from mugen.core.contract.gateway.storage.rdbms.types import RowVersionConflict
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
+from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
+from mugen.core.plugin.acp.contract.sdk.tenant_lifecycle import (
+    tenant_lifecycle_contributors,
+)
 from mugen.core.plugin.acp.contract.service import ITenantService
 from mugen.core.plugin.acp.domain import TenantDE
+from mugen.core.plugin.acp.sdk.tenant_materialization import (
+    materialize_tenant_role_templates,
+)
+
+
+def _registry_provider():
+    return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_REGISTRY)
 
 
 class TenantService(
@@ -25,13 +37,45 @@ class TenantService(
 ):
     """A service for the Tenant declarative model."""
 
-    def __init__(self, table: str, rsg: IRelationalStorageGateway, **kwargs):
+    def __init__(
+        self,
+        table: str,
+        rsg: IRelationalStorageGateway,
+        registry_provider=_registry_provider,
+        **kwargs,
+    ):
         super().__init__(
             de_type=TenantDE,
             table=table,
             rsg=rsg,
             **kwargs,
         )
+        self._registry_provider = registry_provider
+
+    async def create(self, values: Mapping[str, Any]) -> TenantDE:
+        """Create a tenant and run tenant-created provisioning hooks."""
+        tenant = await super().create(values)
+        contributors = tenant_lifecycle_contributors()
+        registry: IAdminRegistry | None = self._registry_provider()
+
+        if registry is None:
+            raise RuntimeError("ACP registry is required for tenant provisioning.")
+
+        if tenant.id is None:
+            raise RuntimeError("Created tenant has no id.")
+
+        await materialize_tenant_role_templates(
+            tenant_id=tenant.id,
+            registry=registry,
+        )
+
+        for contributor in contributors:
+            await contributor.tenant_created(
+                tenant=tenant,
+                registry=registry,
+            )
+
+        return tenant
 
     async def _transition_status(
         self,
