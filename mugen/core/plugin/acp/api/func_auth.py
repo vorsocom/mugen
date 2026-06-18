@@ -24,6 +24,9 @@ from mugen.core.plugin.acp.contract.service.jwt import (
     JwtVerifyParams,
     JwtVerifyProfile,
 )
+from mugen.core.plugin.acp.contract.sdk.auth_session import (
+    auth_session_role_contributors,
+)
 from mugen.core.plugin.acp.utility.identity import resolve_acp_admin_namespace
 from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.plugin.channel_orchestration.human_handoff_auth import (
@@ -65,6 +68,27 @@ async def _session_roles(
     auth_svc: IAuthorizationService,
 ) -> list[str]:
     roles = {f"{r.namespace}:{r.name}" for r in (user.global_roles or [])}
+    roles.update(
+        await _builtin_any_tenant_session_permissions(
+            user,
+            auth_svc=auth_svc,
+        )
+    )
+    for contributor in auth_session_role_contributors():
+        contributed = await contributor.session_roles_for_user(
+            user=user,
+            auth_svc=auth_svc,
+        )
+        roles.update(contributed or ())
+    return sorted(roles)
+
+
+async def _builtin_any_tenant_session_permissions(
+    user,
+    *,
+    auth_svc: IAuthorizationService,
+) -> list[str]:
+    permissions = []
     for permission in (
         HUMAN_HANDOFF_OPERATOR_PERMISSION,
         KNOWLEDGE_PACK_CONFIGURATOR_PERMISSION,
@@ -77,8 +101,8 @@ async def _session_roles(
             allow_global_admin=True,
         )
         if has_permission:
-            roles.add(permission)
-    return sorted(roles)
+            permissions.append(permission)
+    return permissions
 
 
 @api.get("core/acp/v1/auth/.well-known/jwks.json")

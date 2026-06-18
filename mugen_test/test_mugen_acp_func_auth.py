@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 import unittest
 import uuid
@@ -12,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from mugen.core.plugin.acp.api.decorator import auth as auth_decorator
 from mugen.core.plugin.acp.api import func_auth
+from mugen.core.plugin.acp.contract.sdk import auth_session
 
 
 class _AbortCalled(Exception):
@@ -102,6 +104,18 @@ def _services():
     )
     logger = Mock()
     return user_svc, refresh_svc, jwt_svc, logger
+
+
+class _RoleContributor:
+    """Test contributor for auth-session roles."""
+
+    def __init__(self, roles):
+        self.roles = roles
+        self.calls = []
+
+    async def session_roles_for_user(self, *, user, auth_svc):
+        self.calls.append((user, auth_svc))
+        return self.roles
 
 
 class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
@@ -195,6 +209,63 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(roles, [func_auth.WEB_PLATFORM_ACCESS_PERMISSION])
+
+    async def test_session_roles_includes_registered_contributors(self) -> None:
+        user = _user(global_roles=[SimpleNamespace(namespace="com.test", name="admin")])
+        auth_svc = SimpleNamespace(
+            has_permission_for_any_tenant=AsyncMock(return_value=False)
+        )
+        contributor = _RoleContributor(
+            [
+                "com.test.ui:setup",
+                "com.test.ui:setup",
+                "com.test.ui:review",
+            ]
+        )
+
+        with patch.object(auth_session, "_AUTH_SESSION_ROLE_CONTRIBUTORS", []):
+            auth_session.register_auth_session_role_contributor(contributor)
+            self.assertEqual(
+                auth_session.auth_session_role_contributors(),
+                (contributor,),
+            )
+
+            roles = await func_auth._session_roles(  # pylint: disable=protected-access
+                user,
+                auth_svc=auth_svc,
+            )
+
+        self.assertEqual(
+            roles,
+            [
+                "com.test.ui:review",
+                "com.test.ui:setup",
+                "com.test:admin",
+            ],
+        )
+        self.assertEqual(contributor.calls, [(user, auth_svc)])
+
+    async def test_session_roles_ignores_empty_contributors(self) -> None:
+        user = _user(global_roles=[SimpleNamespace(namespace="com.test", name="admin")])
+        auth_svc = SimpleNamespace(
+            has_permission_for_any_tenant=AsyncMock(return_value=False)
+        )
+        contributor = _RoleContributor([])
+
+        with patch.object(auth_session, "_AUTH_SESSION_ROLE_CONTRIBUTORS", []):
+            auth_session.register_auth_session_role_contributor(contributor)
+            roles = await func_auth._session_roles(  # pylint: disable=protected-access
+                user,
+                auth_svc=auth_svc,
+            )
+
+        self.assertEqual(roles, ["com.test:admin"])
+
+    async def test_func_auth_has_no_downstream_plugin_imports(self) -> None:
+        source = inspect.getsource(func_auth)
+
+        self.assertNotIn("redcell", source.lower())
+        self.assertNotIn("wargame", source.lower())
 
     async def test_user_login_validation_and_lookup_failures(self) -> None:
         user_svc, refresh_svc, jwt_svc, logger = _services()
@@ -387,6 +458,34 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
         )
         refresh_svc.create.assert_awaited_once()
         user_svc.update.assert_awaited_once()
+
+        contributor = _RoleContributor(["com.test.ui:setup"])
+        auth_svc.has_permission_for_any_tenant.reset_mock()
+        refresh_svc.create.reset_mock()
+        user_svc.update.reset_mock()
+        with (
+            patch.object(auth_session, "_AUTH_SESSION_ROLE_CONTRIBUTORS", []),
+            patch.object(
+                func_auth,
+                "request",
+                new=SimpleNamespace(
+                    get_json=AsyncMock(
+                        return_value={"Username": "alice", "Password": "secret"}
+                    )
+                ),
+            ),
+        ):
+            auth_session.register_auth_session_role_contributor(contributor)
+            body, status = await func_auth.user_login(
+                config_provider=_config,
+                logger_provider=lambda: logger,
+                jwt_provider=lambda: jwt_svc,
+                registry_provider=lambda: registry,
+                auth_provider=lambda: auth_svc,
+            )
+
+        self.assertEqual(status, 200)
+        self.assertIn("com.test.ui:setup", body["roles"])
 
         refresh_svc.create = AsyncMock(side_effect=SQLAlchemyError("db"))
         with (
@@ -885,6 +984,33 @@ class TestMugenAcpFuncAuth(unittest.IsolatedAsyncioTestCase):
                 ),
             ]
         )
+
+        contributor = _RoleContributor(["com.test.ui:review"])
+        refresh_svc.create = AsyncMock(return_value=None)
+        refresh_svc.delete = AsyncMock(return_value=None)
+        jwt_svc.sign = Mock(side_effect=["contrib-access", "contrib-refresh"])
+        auth_svc.has_permission_for_any_tenant.reset_mock()
+        with (
+            patch.object(auth_session, "_AUTH_SESSION_ROLE_CONTRIBUTORS", []),
+            patch.object(
+                func_auth,
+                "request",
+                new=SimpleNamespace(
+                    get_json=AsyncMock(return_value={"RefreshToken": "rt"})
+                ),
+            ),
+        ):
+            auth_session.register_auth_session_role_contributor(contributor)
+            body, status = await endpoint(
+                config_provider=_config,
+                logger_provider=lambda: logger,
+                jwt_provider=lambda: jwt_svc,
+                registry_provider=lambda: registry,
+                auth_provider=lambda: auth_svc,
+            )
+
+        self.assertEqual(status, 200)
+        self.assertIn("com.test.ui:review", body["roles"])
 
     async def test_user_refresh_aborts_when_role_resolution_fails(self) -> None:
         user_svc, refresh_svc, jwt_svc, logger = _services()
