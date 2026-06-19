@@ -838,6 +838,15 @@ def contribute(
         for ptyp in (admin_ns.verb("read"), admin_ns.verb("manage"))
     )
 
+    registry.register_default_global_grant(
+        DefaultGlobalGrant(
+            admin_ns.key(GLOBAL_ROLE_HANDOFF_OPERATOR),
+            admin_ns.obj("tenant"),
+            admin_ns.verb("read"),
+            True,
+        )
+    )
+
     # -------------------------------------------------------------------------
     # 6) AdminResources
     # -------------------------------------------------------------------------

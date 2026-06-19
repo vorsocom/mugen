@@ -70,6 +70,28 @@ class TestAcpContribRolePermissionLifecycle(unittest.TestCase):
             "Handoff Operator",
         )
 
+    def test_contribute_grants_handoff_operator_tenant_read(self) -> None:
+        admin_namespace = "com.test.acp"
+        registry = AdminRegistry(strict_permission_decls=True)
+
+        contribute(
+            registry,
+            admin_namespace=admin_namespace,
+            plugin_namespace=admin_namespace,
+        )
+
+        manifest = registry.build_seed_manifest()
+        self.assertTrue(
+            any(
+                grant.global_role
+                == f"{admin_namespace}:{GLOBAL_ROLE_HANDOFF_OPERATOR}"
+                and grant.permission_object == f"{admin_namespace}:tenant"
+                and grant.permission_type == f"{admin_namespace}:read"
+                and grant.permitted is True
+                for grant in manifest.default_global_grants
+            )
+        )
+
     def test_resources_register_lifecycle_actions(self) -> None:
         registry = AdminRegistry(strict_permission_decls=True)
 
