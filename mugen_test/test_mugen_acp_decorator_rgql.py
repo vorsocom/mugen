@@ -49,6 +49,10 @@ _bootstrap_namespace_packages()
 from mugen.core.plugin.acp.api.decorator import rgql as rgql_mod
 from mugen.core.gateway.storage.rdbms.rgql_adapter.error import RGQLExpandError
 from mugen.core.plugin.acp.domain import TenantDE, TenantMembershipDE, UserDE
+from mugen.core.plugin.acp.edm.global_role import global_role_type
+from mugen.core.plugin.acp.edm.global_role_membership import (
+    global_role_membership_type,
+)
 from mugen.core.plugin.acp.edm.tenant import tenant_type
 from mugen.core.plugin.acp.edm.tenant_membership import tenant_membership_type
 from mugen.core.plugin.acp.edm.user import user_type
@@ -98,6 +102,11 @@ class _FakeExpansionContext:
 class _FakeEdmType:
     def __init__(self) -> None:
         self.name = "ACP.User"
+        self.properties = {
+            "Name": SimpleNamespace(),
+            "RoleId": SimpleNamespace(),
+            "Secret": SimpleNamespace(),
+        }
         self.nav_properties = {
             "Role": SimpleNamespace(
                 target_type=SimpleNamespace(name="ACP.GlobalRole", is_collection=False),
@@ -116,9 +125,20 @@ class _FakeSchema:
     def get_type(self, _edm_type_name: str):
         return self._edm_type
 
+    def try_get_type(self, edm_type_name: str):
+        if edm_type_name == self._edm_type.name:
+            return self._edm_type
+        return None
+
 
 class _FakeRegistry:
-    def __init__(self, *, service, rgql_enabled: bool = True):
+    def __init__(
+        self,
+        *,
+        service,
+        rgql_enabled: bool = True,
+        search_fields: tuple[str, ...] = (),
+    ):
         self.schema_index = {"Users": "ACP.User"}
         self.schema = _FakeSchema()
         self._service = service
@@ -128,6 +148,7 @@ class _FakeRegistry:
             behavior=SimpleNamespace(
                 rgql_enabled=rgql_enabled,
                 rgql_max_expand_depth=None,
+                search_fields=search_fields,
             ),
         )
         self._resource_by_type = {
@@ -259,6 +280,301 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 rgql_mod._registry_provider(), "registry-svc"
             )
+
+    def test_search_filter_groups_cover_direct_and_related_fields(self) -> None:
+        model = EdmModel(
+            types={
+                "ACP.GlobalRole": global_role_type,
+                "ACP.GlobalRoleMembership": global_role_membership_type,
+                "ACP.User": user_type,
+            },
+            entity_sets={
+                "GlobalRoles": EntitySet("GlobalRoles", TypeRef("ACP.GlobalRole")),
+                "GlobalRoleMemberships": EntitySet(
+                    "GlobalRoleMemberships",
+                    TypeRef("ACP.GlobalRoleMembership"),
+                ),
+                "Users": EntitySet("Users", TypeRef("ACP.User")),
+            },
+        )
+        table_names = {
+            "ACP.GlobalRole": "admin_global_role",
+            "ACP.GlobalRoleMembership": "admin_global_role_membership",
+            "ACP.User": "admin_user",
+        }
+
+        def _planner(base_type_name: str):
+            return lambda path: rgql_mod.plan_related_path(
+                base_type_name=base_type_name,
+                prop_path=path,
+                model=model,
+                table_resolver=lambda edm_type_name: table_names[edm_type_name],
+                max_nav_depth=4,
+            )
+
+        direct_groups = rgql_mod._search_filter_groups(
+            rgql_mod.SearchTerm("handoff", is_phrase=False),
+            search_fields=("Namespace", "Name", "DisplayName"),
+            edm_type=global_role_type,
+            path_planner=_planner("ACP.GlobalRole"),
+        )
+        self.assertEqual(
+            [group.text_filters[0].field for group in direct_groups],
+            ["namespace", "name", "display_name"],
+        )
+        self.assertTrue(
+            all(
+                group.text_filters[0].op is rgql_mod.TextFilterOp.CONTAINS
+                for group in direct_groups
+            )
+        )
+
+        related_groups = rgql_mod._search_filter_groups(
+            rgql_mod.SearchTerm("alice", is_phrase=False),
+            search_fields=("User/Username", "GlobalRole/DisplayName"),
+            edm_type=global_role_membership_type,
+            path_planner=_planner("ACP.GlobalRoleMembership"),
+        )
+        self.assertEqual(
+            [
+                group.related_text_filters[0].field
+                for group in related_groups
+            ],
+            ["username", "display_name"],
+        )
+        self.assertEqual(
+            related_groups[0].related_text_filters[0].path_hops[0].target_table,
+            "admin_user",
+        )
+        self.assertEqual(
+            related_groups[1].related_text_filters[0].path_hops[0].target_table,
+            "admin_global_role",
+        )
+
+        combined_groups = rgql_mod._search_filter_groups(
+            rgql_mod.SearchBinary(
+                "and",
+                rgql_mod.SearchTerm("alice", is_phrase=False),
+                rgql_mod.SearchTerm("operator", is_phrase=False),
+            ),
+            search_fields=("User/Username", "GlobalRole/DisplayName"),
+            edm_type=global_role_membership_type,
+            path_planner=_planner("ACP.GlobalRoleMembership"),
+        )
+        self.assertEqual(len(combined_groups), 4)
+        self.assertTrue(
+            all(
+                len(group.related_text_filters) == 2
+                for group in combined_groups
+            )
+        )
+
+        or_groups = rgql_mod._search_filter_groups(
+            rgql_mod.SearchBinary(
+                "or",
+                rgql_mod.SearchTerm("alice", is_phrase=False),
+                rgql_mod.SearchTerm("bob", is_phrase=False),
+            ),
+            search_fields=("User/Username",),
+            edm_type=global_role_membership_type,
+            path_planner=_planner("ACP.GlobalRoleMembership"),
+        )
+        self.assertEqual(len(or_groups), 2)
+
+        with self.assertRaises(ValueError):
+            rgql_mod._search_filter_groups(
+                rgql_mod.SearchNot(
+                    rgql_mod.SearchTerm("alice", is_phrase=False),
+                ),
+                search_fields=("User/Username",),
+                edm_type=global_role_membership_type,
+                path_planner=_planner("ACP.GlobalRoleMembership"),
+            )
+
+        with self.assertRaises(ValueError):
+            rgql_mod._search_filter_groups(
+                rgql_mod.SearchBinary(
+                    "xor",
+                    rgql_mod.SearchTerm("alice", is_phrase=False),
+                    rgql_mod.SearchTerm("bob", is_phrase=False),
+                ),
+                search_fields=("User/Username",),
+                edm_type=global_role_membership_type,
+                path_planner=_planner("ACP.GlobalRoleMembership"),
+            )
+
+        with self.assertRaises(ValueError):
+            rgql_mod._search_filter_groups(
+                rgql_mod.SearchTerm("alice", is_phrase=False),
+                search_fields=("Missing",),
+                edm_type=global_role_membership_type,
+                path_planner=_planner("ACP.GlobalRoleMembership"),
+            )
+
+        class _UnknownSearch(rgql_mod.SearchExpr):
+            pass
+
+        with self.assertRaises(ValueError):
+            rgql_mod._search_filter_groups(
+                _UnknownSearch(),
+                search_fields=("User/Username",),
+                edm_type=global_role_membership_type,
+                path_planner=_planner("ACP.GlobalRoleMembership"),
+            )
+
+    def test_search_filter_group_helpers_cover_empty_and_conflict_paths(self) -> None:
+        merged = rgql_mod._merge_filter_groups(
+            rgql_mod.FilterGroup(where={"name": "alice"}),
+            rgql_mod.FilterGroup(
+                where={
+                    "name": "alice",
+                    "role": "operator",
+                }
+            ),
+        )
+        self.assertEqual(
+            merged.where,
+            {
+                "name": "alice",
+                "role": "operator",
+            },
+        )
+        self.assertEqual(
+            rgql_mod._and_filter_groups(
+                None,
+                [rgql_mod.FilterGroup(where={"name": "alice"})],
+            )[0].where,
+            {"name": "alice"},
+        )
+        self.assertEqual(
+            rgql_mod._and_filter_groups(
+                [rgql_mod.FilterGroup(where={"name": "alice"})],
+                None,
+            )[0].where,
+            {"name": "alice"},
+        )
+
+        with self.assertRaises(ValueError):
+            rgql_mod._merge_filter_groups(
+                rgql_mod.FilterGroup(where={"name": "alice"}),
+                rgql_mod.FilterGroup(where={"name": "bob"}),
+            )
+
+    async def test_list_path_applies_configured_search_fields(self) -> None:
+        async def _endpoint(**kwargs):
+            return kwargs
+
+        service = SimpleNamespace(
+            list=AsyncMock(return_value=[]),
+            count=AsyncMock(return_value=0),
+        )
+        registry = _FakeRegistry(
+            service=service,
+            rgql_enabled=True,
+            search_fields=("Name",),
+        )
+        auth_svc = SimpleNamespace(has_permission=AsyncMock(return_value=True))
+        logger = SimpleNamespace(debug=Mock(), error=Mock())
+        opts = SimpleNamespace(
+            select=None,
+            expand=[],
+            count=False,
+            search=rgql_mod.SearchTerm("alice", is_phrase=False),
+        )
+
+        class _Adapter:
+            def build_relational_query(self, _opts, **_kwargs):
+                return ([], [], None, None)
+
+        wrapped = rgql_mod.rgql_enabled(
+            config_provider=_config,
+            logger_provider=lambda: logger,
+            auth_provider=lambda: auth_svc,
+            registry_provider=lambda: registry,
+        )(_endpoint)
+
+        with (
+            patch.object(rgql_mod, "SemanticChecker", new=_FakeSemanticChecker),
+            patch.object(rgql_mod, "RGQLToRelationalAdapter", new=lambda: _Adapter()),
+            patch.object(rgql_mod, "parse_rgql_url", return_value=_rgql_url(opts=opts)),
+            patch.object(
+                rgql_mod,
+                "make_default_where_provider",
+                return_value=lambda _edm_type_name: {},
+            ),
+        ):
+            async with self.app.test_request_context(
+                "/api/core/acp/v1/Users?$search=alice",
+                method="GET",
+            ):
+                result = await wrapped(
+                    entity_set="Users",
+                    entity_id=None,
+                    auth_user=str(uuid.uuid4()),
+                )
+
+        filter_groups = service.list.await_args.kwargs["filter_groups"]
+        self.assertEqual(result["rgql"].filter_groups, filter_groups)
+        self.assertEqual(filter_groups[0].text_filters[0].field, "name")
+        self.assertEqual(filter_groups[0].text_filters[0].value, "alice")
+
+    async def test_list_path_rejects_invalid_configured_search_field(self) -> None:
+        async def _endpoint(**kwargs):
+            return kwargs
+
+        service = SimpleNamespace(
+            list=AsyncMock(return_value=[]),
+            count=AsyncMock(return_value=0),
+        )
+        registry = _FakeRegistry(
+            service=service,
+            rgql_enabled=True,
+            search_fields=("Missing",),
+        )
+        auth_svc = SimpleNamespace(has_permission=AsyncMock(return_value=True))
+        logger = SimpleNamespace(debug=Mock(), error=Mock())
+        opts = SimpleNamespace(
+            select=None,
+            expand=[],
+            count=False,
+            search=rgql_mod.SearchTerm("alice", is_phrase=False),
+        )
+
+        class _Adapter:
+            def build_relational_query(self, _opts, **_kwargs):
+                return ([], [], None, None)
+
+        wrapped = rgql_mod.rgql_enabled(
+            config_provider=_config,
+            logger_provider=lambda: logger,
+            auth_provider=lambda: auth_svc,
+            registry_provider=lambda: registry,
+        )(_endpoint)
+
+        with (
+            patch.object(rgql_mod, "SemanticChecker", new=_FakeSemanticChecker),
+            patch.object(rgql_mod, "RGQLToRelationalAdapter", new=lambda: _Adapter()),
+            patch.object(rgql_mod, "parse_rgql_url", return_value=_rgql_url(opts=opts)),
+            patch.object(
+                rgql_mod,
+                "make_default_where_provider",
+                return_value=lambda _edm_type_name: {},
+            ),
+            patch.object(rgql_mod, "abort", side_effect=_abort_raiser),
+        ):
+            async with self.app.test_request_context(
+                "/api/core/acp/v1/Users?$search=alice",
+                method="GET",
+            ):
+                with self.assertRaises(_AbortCalled) as ex:
+                    await wrapped(
+                        entity_set="Users",
+                        entity_id=None,
+                        auth_user=str(uuid.uuid4()),
+                    )
+
+        self.assertEqual(ex.exception.code, 400)
+        service.list.assert_not_awaited()
 
     async def test_unknown_entity_set_and_rgql_disabled(self) -> None:
         async def _endpoint(**kwargs):

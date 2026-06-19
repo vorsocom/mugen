@@ -37,12 +37,60 @@ _bootstrap_namespace_packages()
 from mugen.core.plugin.acp.api.validation.generic import (
     RowVersionValidation,
 )
+from mugen.core.plugin.acp.constants import (  # noqa: E402
+    GLOBAL_ROLE_HANDOFF_OPERATOR,
+    GLOBAL_ROLE_WEB_USER,
+)
 from mugen.core.plugin.acp.contrib import contribute
 from mugen.core.plugin.acp.sdk.registry import AdminRegistry
 
 
 class TestAcpContribRolePermissionLifecycle(unittest.TestCase):
     """Covers lifecycle action registration for role and permission resources."""
+
+    def test_contribute_registers_least_privilege_global_roles(self) -> None:
+        """Contributor should seed least privilege global roles."""
+        admin_namespace = "com.test.acp"
+        registry = AdminRegistry(strict_permission_decls=True)
+
+        contribute(
+            registry,
+            admin_namespace=admin_namespace,
+            plugin_namespace=admin_namespace,
+        )
+
+        manifest = registry.build_seed_manifest()
+        roles = {role.key: role.display_name for role in manifest.global_roles}
+        self.assertEqual(
+            roles[f"{admin_namespace}:{GLOBAL_ROLE_WEB_USER}"],
+            "Web User",
+        )
+        self.assertEqual(
+            roles[f"{admin_namespace}:{GLOBAL_ROLE_HANDOFF_OPERATOR}"],
+            "Handoff Operator",
+        )
+
+    def test_contribute_grants_handoff_operator_tenant_read(self) -> None:
+        admin_namespace = "com.test.acp"
+        registry = AdminRegistry(strict_permission_decls=True)
+
+        contribute(
+            registry,
+            admin_namespace=admin_namespace,
+            plugin_namespace=admin_namespace,
+        )
+
+        manifest = registry.build_seed_manifest()
+        self.assertTrue(
+            any(
+                grant.global_role
+                == f"{admin_namespace}:{GLOBAL_ROLE_HANDOFF_OPERATOR}"
+                and grant.permission_object == f"{admin_namespace}:tenant"
+                and grant.permission_type == f"{admin_namespace}:read"
+                and grant.permitted is True
+                for grant in manifest.default_global_grants
+            )
+        )
 
     def test_resources_register_lifecycle_actions(self) -> None:
         registry = AdminRegistry(strict_permission_decls=True)
@@ -83,6 +131,33 @@ class TestAcpContribRolePermissionLifecycle(unittest.TestCase):
         self.assertEqual(
             permission_type_resource.capabilities.actions["reactivate"]["schema"],
             RowVersionValidation,
+        )
+
+    def test_global_roles_and_memberships_register_search_fields(self) -> None:
+        registry = AdminRegistry(strict_permission_decls=True)
+
+        contribute(
+            registry,
+            admin_namespace="com.test.acp",
+            plugin_namespace="com.test.acp",
+        )
+
+        global_roles = registry.get_resource("GlobalRoles")
+        self.assertEqual(
+            global_roles.behavior.search_fields,
+            ("Namespace", "Name", "DisplayName"),
+        )
+
+        global_role_memberships = registry.get_resource("GlobalRoleMemberships")
+        self.assertEqual(
+            global_role_memberships.behavior.search_fields,
+            (
+                "User/Username",
+                "User/LoginEmail",
+                "GlobalRole/Namespace",
+                "GlobalRole/Name",
+                "GlobalRole/DisplayName",
+            ),
         )
 
 

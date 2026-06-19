@@ -6,6 +6,10 @@ from mugen.core.plugin.acp.contract.sdk.permission import (
     PermissionTypeDef,
 )
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
+from mugen.core.plugin.acp.constants import (
+    GLOBAL_ROLE_ADMINISTRATOR,
+    GLOBAL_ROLE_WEB_USER,
+)
 from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.plugin.web.auth import (
     WEB_PLATFORM_ACCESS_PERMISSION,
@@ -37,7 +41,15 @@ def contribute(
     registry.register_permission_type(access_permission_type)
     registry.register_default_global_grant(
         DefaultGlobalGrant(
-            admin_ns.key("administrator"),
+            admin_ns.key(GLOBAL_ROLE_ADMINISTRATOR),
+            WEB_PLATFORM_ACCESS_PERMISSION,
+            WEB_PLATFORM_ACCESS_PERMISSION,
+            True,
+        )
+    )
+    registry.register_default_global_grant(
+        DefaultGlobalGrant(
+            admin_ns.key(GLOBAL_ROLE_WEB_USER),
             WEB_PLATFORM_ACCESS_PERMISSION,
             WEB_PLATFORM_ACCESS_PERMISSION,
             True,
