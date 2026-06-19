@@ -48,6 +48,11 @@ _bootstrap_namespace_packages()
 # pylint: disable=wrong-import-position
 from mugen.core.plugin.acp.api.decorator import rgql as rgql_mod
 from mugen.core.gateway.storage.rdbms.rgql_adapter.error import RGQLExpandError
+from mugen.core.plugin.acp.domain import TenantDE, TenantMembershipDE, UserDE
+from mugen.core.plugin.acp.edm.tenant import tenant_type
+from mugen.core.plugin.acp.edm.tenant_membership import tenant_membership_type
+from mugen.core.plugin.acp.edm.user import user_type
+from mugen.core.utility.rgql.model import EdmModel, EntitySet, TypeRef
 
 
 class _AbortCalled(Exception):
@@ -143,6 +148,66 @@ class _FakeRegistry:
         if service_key == "user_svc":
             return self._service
         return self._service
+
+
+class _TenantDiscoveryRegistry:
+    def __init__(self, *, services):
+        behavior = SimpleNamespace(
+            rgql_enabled=True,
+            rgql_max_expand_depth=None,
+        )
+        self.schema_index = {
+            "Users": "ACP.User",
+            "TenantMemberships": "ACP.TenantMembership",
+            "Tenants": "ACP.Tenant",
+        }
+        self.schema = EdmModel(
+            types={
+                "ACP.User": user_type,
+                "ACP.TenantMembership": tenant_membership_type,
+                "ACP.Tenant": tenant_type,
+            },
+            entity_sets={
+                "Users": EntitySet("Users", TypeRef("ACP.User")),
+                "TenantMemberships": EntitySet(
+                    "TenantMemberships",
+                    TypeRef("ACP.TenantMembership"),
+                ),
+                "Tenants": EntitySet("Tenants", TypeRef("ACP.Tenant")),
+            },
+        )
+        self.resources = {
+            "Users": SimpleNamespace(
+                service_key="user_svc",
+                namespace="com.test.acp",
+                behavior=behavior,
+            ),
+            "TenantMemberships": SimpleNamespace(
+                service_key="membership_svc",
+                namespace="com.test.acp",
+                behavior=behavior,
+            ),
+            "Tenants": SimpleNamespace(
+                service_key="tenant_svc",
+                namespace="com.test.acp",
+                behavior=behavior,
+            ),
+        }
+        self._resource_by_type = {
+            "ACP.User": self.resources["Users"],
+            "ACP.TenantMembership": self.resources["TenantMemberships"],
+            "ACP.Tenant": self.resources["Tenants"],
+        }
+        self._services = services
+
+    def get_resource(self, entity_set: str):
+        return self.resources[entity_set]
+
+    def get_resource_by_type(self, edm_type_name: str):
+        return self._resource_by_type[edm_type_name]
+
+    def get_edm_service(self, service_key: str):
+        return self._services[service_key]
 
 
 def _config():
@@ -682,6 +747,308 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
             "com.test.acp:global_role",
         )
 
+    async def test_current_user_can_expand_active_tenant_memberships(self) -> None:
+        async def _endpoint(**kwargs):
+            return kwargs
+
+        user_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        membership_id = uuid.uuid4()
+
+        user_service = SimpleNamespace(
+            get=AsyncMock(
+                return_value=UserDE(
+                    id=user_id,
+                    username="sbricp_2026_06_onesyn",
+                )
+            ),
+            table="admin_user",
+        )
+        membership = TenantMembershipDE(
+            id=membership_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            role_in_tenant="player",
+            status="active",
+            row_version=17,
+        )
+        membership_service = SimpleNamespace(
+            list_partitioned_by_fk=AsyncMock(return_value=[membership]),
+            table="admin_tenant_membership",
+        )
+        tenant_service = SimpleNamespace(
+            list=AsyncMock(
+                return_value=[
+                    TenantDE(
+                        id=tenant_id,
+                        name="vorsocom",
+                        slug="vorsocom",
+                        status="active",
+                        row_version=5,
+                    )
+                ]
+            ),
+            table="admin_tenant",
+        )
+        registry = _TenantDiscoveryRegistry(
+            services={
+                "user_svc": user_service,
+                "membership_svc": membership_service,
+                "tenant_svc": tenant_service,
+            }
+        )
+        auth_svc = SimpleNamespace(has_permission=AsyncMock(return_value=False))
+        logger = SimpleNamespace(debug=Mock(), error=Mock())
+        wrapped = rgql_mod.rgql_enabled(
+            config_provider=_config,
+            logger_provider=lambda: logger,
+            auth_provider=lambda: auth_svc,
+            registry_provider=lambda: registry,
+        )(_endpoint)
+
+        with patch.object(
+            rgql_mod,
+            "make_default_where_provider",
+            return_value=lambda _edm_type_name: {},
+        ):
+            async with self.app.test_request_context(
+                (
+                    f"/api/core/acp/v1/Users/{user_id}"
+                    "?$expand=TenantMemberships($expand=Tenant)"
+                ),
+                method="GET",
+            ):
+                result = await wrapped(
+                    entity_set="Users",
+                    entity_id=str(user_id),
+                    auth_user=str(user_id),
+                )
+
+        membership_kwargs = membership_service.list_partitioned_by_fk.await_args.kwargs
+        self.assertEqual(membership_kwargs["fk_field"], "user_id")
+        self.assertEqual(membership_kwargs["fk_values"], [user_id])
+        self.assertEqual(
+            membership_kwargs["filter_groups"][0].where,
+            {"status": "active"},
+        )
+
+        payload = result["rgql"].values[0]
+        memberships = payload["TenantMemberships"]
+        self.assertEqual(len(memberships), 1)
+        self.assertEqual(
+            memberships[0],
+            {
+                "TenantId": tenant_id,
+                "Status": "active",
+                "Tenant": {
+                    "Id": tenant_id,
+                    "Name": "vorsocom",
+                    "Slug": "vorsocom",
+                },
+            },
+        )
+        self.assertNotIn("RoleInTenant", memberships[0])
+        self.assertEqual(auth_svc.has_permission.await_count, 2)
+
+    async def test_other_user_cannot_use_self_tenant_discovery_expand(self) -> None:
+        async def _endpoint(**kwargs):
+            return kwargs
+
+        auth_user_id = uuid.uuid4()
+        other_user_id = uuid.uuid4()
+        user_service = SimpleNamespace(
+            get=AsyncMock(return_value=UserDE(id=other_user_id, username="other")),
+            table="admin_user",
+        )
+        membership_service = SimpleNamespace(
+            list_partitioned_by_fk=AsyncMock(return_value=[]),
+            table="admin_tenant_membership",
+        )
+        tenant_service = SimpleNamespace(
+            list=AsyncMock(return_value=[]),
+            table="admin_tenant",
+        )
+        registry = _TenantDiscoveryRegistry(
+            services={
+                "user_svc": user_service,
+                "membership_svc": membership_service,
+                "tenant_svc": tenant_service,
+            }
+        )
+        auth_svc = SimpleNamespace(has_permission=AsyncMock(return_value=False))
+        logger = SimpleNamespace(debug=Mock(), error=Mock())
+        wrapped = rgql_mod.rgql_enabled(
+            config_provider=_config,
+            logger_provider=lambda: logger,
+            auth_provider=lambda: auth_svc,
+            registry_provider=lambda: registry,
+        )(_endpoint)
+
+        with patch.object(
+            rgql_mod,
+            "make_default_where_provider",
+            return_value=lambda _edm_type_name: {},
+        ):
+            async with self.app.test_request_context(
+                (
+                    f"/api/core/acp/v1/Users/{other_user_id}"
+                    "?$expand=TenantMemberships($expand=Tenant)"
+                ),
+                method="GET",
+            ):
+                result = await wrapped(
+                    entity_set="Users",
+                    entity_id=str(other_user_id),
+                    auth_user=str(auth_user_id),
+                )
+
+        membership_service.list_partitioned_by_fk.assert_not_awaited()
+        self.assertNotIn("TenantMemberships", result["rgql"].values[0])
+        self.assertEqual(result["rgql"].expand, [])
+        auth_svc.has_permission.assert_awaited_once()
+
+    async def test_current_user_self_discovery_blocks_other_expands(
+        self,
+    ) -> None:
+        async def _endpoint(**kwargs):
+            return kwargs
+
+        user_id = uuid.uuid4()
+        entity = _Entity(id=user_id, name="Alice", role_id=uuid.uuid4())
+        service = SimpleNamespace(
+            get=AsyncMock(return_value=entity),
+            list=AsyncMock(return_value=[]),
+            count=AsyncMock(return_value=0),
+        )
+        registry = _FakeRegistry(service=service, rgql_enabled=True)
+        auth_svc = SimpleNamespace(has_permission=AsyncMock(return_value=False))
+        logger = SimpleNamespace(debug=Mock(), error=Mock())
+
+        class _Adapter:
+            def build_relational_query(self, _opts, **_kwargs):
+                return ([], [], None, None)
+
+        class _Ctx:
+            def __init__(self, **kwargs):
+                self.max_depth = kwargs["max_depth"]
+                self._perm_provider = kwargs["path_permission_provider"]
+
+            async def permitted(self, edm_type, path: str) -> bool:
+                return await self._perm_provider(edm_type, path)
+
+        opts = SimpleNamespace(
+            select=["Name"],
+            expand=[SimpleNamespace(path="Role", levels=None)],
+            count=False,
+        )
+        wrapped = rgql_mod.rgql_enabled(
+            config_provider=_config,
+            logger_provider=lambda: logger,
+            auth_provider=lambda: auth_svc,
+            registry_provider=lambda: registry,
+        )(_endpoint)
+
+        with (
+            patch.object(rgql_mod, "SemanticChecker", new=_FakeSemanticChecker),
+            patch.object(rgql_mod, "RGQLToRelationalAdapter", new=lambda: _Adapter()),
+            patch.object(rgql_mod, "ExpansionContext", new=_Ctx),
+            patch.object(rgql_mod, "parse_rgql_url", return_value=_rgql_url(opts=opts)),
+            patch.object(
+                rgql_mod,
+                "make_default_where_provider",
+                return_value=lambda _edm_type_name: {},
+            ),
+            patch.object(rgql_mod, "expand_navs_bulk", new=AsyncMock()),
+        ):
+            async with self.app.test_request_context(
+                f"/api/core/acp/v1/Users/{user_id}?$expand=Role",
+                method="GET",
+            ):
+                result = await wrapped(
+                    entity_set="Users",
+                    entity_id=str(user_id),
+                    auth_user=str(user_id),
+                )
+
+        self.assertEqual(result["rgql"].expand, [])
+        self.assertNotIn("Role", result["rgql"].values[0])
+        auth_svc.has_permission.assert_awaited_once()
+
+    async def test_existing_tenant_membership_permission_is_not_trimmed(self) -> None:
+        async def _endpoint(**kwargs):
+            return kwargs
+
+        user_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        user_service = SimpleNamespace(
+            get=AsyncMock(return_value=UserDE(id=user_id, username="admin")),
+            table="admin_user",
+        )
+        membership = TenantMembershipDE(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            user_id=user_id,
+            role_in_tenant="player",
+            status="active",
+        )
+        membership_service = SimpleNamespace(
+            list_partitioned_by_fk=AsyncMock(return_value=[membership]),
+            table="admin_tenant_membership",
+        )
+        tenant_service = SimpleNamespace(
+            list=AsyncMock(
+                return_value=[
+                    TenantDE(
+                        id=tenant_id,
+                        name="vorsocom",
+                        slug="vorsocom",
+                        status="active",
+                    )
+                ]
+            ),
+            table="admin_tenant",
+        )
+        registry = _TenantDiscoveryRegistry(
+            services={
+                "user_svc": user_service,
+                "membership_svc": membership_service,
+                "tenant_svc": tenant_service,
+            }
+        )
+        auth_svc = SimpleNamespace(has_permission=AsyncMock(return_value=True))
+        logger = SimpleNamespace(debug=Mock(), error=Mock())
+        wrapped = rgql_mod.rgql_enabled(
+            config_provider=_config,
+            logger_provider=lambda: logger,
+            auth_provider=lambda: auth_svc,
+            registry_provider=lambda: registry,
+        )(_endpoint)
+
+        with patch.object(
+            rgql_mod,
+            "make_default_where_provider",
+            return_value=lambda _edm_type_name: {},
+        ):
+            async with self.app.test_request_context(
+                (
+                    f"/api/core/acp/v1/Users/{user_id}"
+                    "?$expand=TenantMemberships($expand=Tenant)"
+                ),
+                method="GET",
+            ):
+                result = await wrapped(
+                    entity_set="Users",
+                    entity_id=str(user_id),
+                    auth_user=str(user_id),
+                )
+
+        membership_kwargs = membership_service.list_partitioned_by_fk.await_args.kwargs
+        self.assertEqual(membership_kwargs["filter_groups"], [])
+
+        membership_payload = result["rgql"].values[0]["TenantMemberships"][0]
+        self.assertEqual(membership_payload["RoleInTenant"], "player")
+        self.assertEqual(membership_payload["Tenant"]["Status"], "active")
+
     async def test_rgql_guard_branches_for_limits_and_expand_shapes(self) -> None:
         async def _endpoint(**kwargs):
             return kwargs
@@ -1034,7 +1401,11 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
             patch.object(rgql_mod, "SemanticChecker", new=_FakeSemanticChecker),
             patch.object(rgql_mod, "RGQLToRelationalAdapter", new=lambda: _Adapter()),
             patch.object(rgql_mod, "ExpansionContext", new=_FakeExpansionContext),
-            patch.object(rgql_mod, "plan_related_path", side_effect=_fake_plan_related_path),
+            patch.object(
+                rgql_mod,
+                "plan_related_path",
+                side_effect=_fake_plan_related_path,
+            ),
             patch.object(
                 rgql_mod,
                 "parse_rgql_url",
@@ -1109,7 +1480,11 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
             patch.object(rgql_mod, "SemanticChecker", new=_FakeSemanticChecker),
             patch.object(rgql_mod, "RGQLToRelationalAdapter", new=lambda: _Adapter()),
             patch.object(rgql_mod, "ExpansionContext", new=_FakeExpansionContext),
-            patch.object(rgql_mod, "plan_related_path", side_effect=_fake_plan_related_path),
+            patch.object(
+                rgql_mod,
+                "plan_related_path",
+                side_effect=_fake_plan_related_path,
+            ),
             patch.object(
                 rgql_mod,
                 "parse_rgql_url",
@@ -1428,7 +1803,13 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
                 "RGQLToRelationalAdapter",
                 new=lambda: _Adapter(
                     (
-                        [SimpleNamespace(where=[1], scalar_filters=[], text_filters=[])],
+                        [
+                            SimpleNamespace(
+                                where=[1],
+                                scalar_filters=[],
+                                text_filters=[],
+                            )
+                        ],
                         [],
                         None,
                         None,
@@ -1448,7 +1829,11 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
                 side_effect=lambda filter_groups, where: filter_groups,
             ),
             patch.object(rgql_mod, "normalise_expand_levels", return_value=1),
-            patch.object(rgql_mod, "expand_navs_bulk", new=AsyncMock(return_value=None)),
+            patch.object(
+                rgql_mod,
+                "expand_navs_bulk",
+                new=AsyncMock(return_value=None),
+            ),
         ):
             async with self.app.test_request_context(
                 "/api/core/acp/v1/Users?$select=Id,RoleId,Name&$expand=Role",
@@ -1473,7 +1858,10 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
             config_provider=_config,
             logger_provider=lambda: logger,
             auth_provider=lambda: auth_svc,
-            registry_provider=lambda: _FakeRegistry(service=none_service, rgql_enabled=True),
+            registry_provider=lambda: _FakeRegistry(
+                service=none_service,
+                rgql_enabled=True,
+            ),
         )(_endpoint)
         with patch.object(
             rgql_mod,
