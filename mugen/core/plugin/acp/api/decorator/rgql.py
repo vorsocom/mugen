@@ -1,7 +1,7 @@
 """Defines utility decorators for RGQL-enabled API endpoints."""
 
 import uuid
-from dataclasses import fields
+from dataclasses import dataclass, fields
 from functools import wraps
 from types import SimpleNamespace
 from typing import Any, Sequence
@@ -45,6 +45,23 @@ from mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_to_relational import (
 
 # pylint: disable=too-many-statements
 # pylint: disable=too-many-arguments
+
+_EDM_TENANT = "ACP.Tenant"
+_EDM_TENANT_MEMBERSHIP = "ACP.TenantMembership"
+_EDM_USER = "ACP.User"
+_NAV_TENANT = "Tenant"
+_NAV_TENANT_MEMBERSHIPS = "TenantMemberships"
+_SELF_TENANT_DISCOVERY_FIELDS = {
+    _EDM_TENANT_MEMBERSHIP: frozenset({"tenant_id", "status", "tenant"}),
+    _EDM_TENANT: frozenset({"id", "name", "slug"}),
+}
+
+
+@dataclass
+class _SelfTenantDiscoveryState:
+    """Tracks whether this request is using the self tenant discovery exception."""
+
+    enabled: bool = False
 
 
 def _config_provider():
@@ -117,15 +134,36 @@ def rgql_enabled(
             except ValueError:
                 abort(400, "Invalid UUID for path parameter: auth_user.")
 
+            is_current_user_entity_request = False
+            if entity_set == "Users" and entity_id is not None:
+                try:
+                    is_current_user_entity_request = (
+                        uuid.UUID(str(entity_id)) == auth_user_id
+                    )
+                except ValueError:
+                    # Entity ID validation is handled below on the entity path.
+                    is_current_user_entity_request = False
+
             allow_global_admin = kwargs.get("allow_global_admin")
             if allow_global_admin is None:
                 allow_global_admin = False
 
+            self_tenant_discovery = _SelfTenantDiscoveryState()
+
             # --- helpers ---
-            default_where_provider = make_default_where_provider(
+            base_default_where_provider = make_default_where_provider(
                 registry=registry,
                 tenant_id=tenant_id,
             )
+
+            def default_where_provider(type_name: str) -> dict[str, Any]:
+                defaults = dict(base_default_where_provider(type_name))
+                if (
+                    self_tenant_discovery.enabled
+                    and type_name == _EDM_TENANT_MEMBERSHIP
+                ):
+                    defaults["status"] = "active"
+                return defaults
 
             def _serialize_entity(
                 entity,
@@ -138,12 +176,39 @@ def rgql_enabled(
                     v = getattr(entity, f.name)
                     if v is None:
                         continue
+                    discovery_fields = None
+                    if self_tenant_discovery.enabled:
+                        discovery_fields = _SELF_TENANT_DISCOVERY_FIELDS.get(
+                            edm_type.name
+                        )
+                    if discovery_fields is not None and f.name not in discovery_fields:
+                        continue
                     title = snake_to_title(f.name)
                     if edm_type.property_redacted(title):
                         continue
                     if columns is None or f.name in columns or title in expand_paths:
                         out[title] = v
                 return out
+
+            def _self_tenant_discovery_path_permitted(
+                edm_type: EdmType,
+                path: str,
+            ) -> bool:
+                if not is_current_user_entity_request:
+                    return False
+
+                if edm_type.name == _EDM_USER and path == _NAV_TENANT_MEMBERSHIPS:
+                    self_tenant_discovery.enabled = True
+                    return True
+
+                if (
+                    self_tenant_discovery.enabled
+                    and edm_type.name == _EDM_TENANT_MEMBERSHIP
+                    and path == _NAV_TENANT
+                ):
+                    return True
+
+                return False
 
             async def _resource_path_permitted(
                 edm_type: EdmType,
@@ -164,13 +229,17 @@ def rgql_enabled(
                 perm_obj = ns.obj(title_to_snake(leaf))
                 perm_type = ns.verb("read")
 
-                return await auth_svc.has_permission(
+                permitted = await auth_svc.has_permission(
                     user_id=auth_user_id,
                     permission_object=perm_obj,
                     permission_type=perm_type,
                     tenant_id=tenant_id,
                     allow_global_admin=allow_global_admin,
                 )
+                if permitted:
+                    return True
+
+                return _self_tenant_discovery_path_permitted(edm_type, path)
 
             admin_edm_schema = registry.schema
             semantic_checker = SemanticChecker(model=admin_edm_schema)
