@@ -4,7 +4,7 @@ import uuid
 from dataclasses import dataclass, fields
 from functools import wraps
 from types import SimpleNamespace
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from quart import abort, current_app, request
 from sqlalchemy.exc import SQLAlchemyError
@@ -15,6 +15,9 @@ from mugen.core.contract.gateway.storage.rdbms.types import (
     FilterGroup,
     OrderClause,
     RelatedPathHop,
+    RelatedTextFilter,
+    TextFilter,
+    TextFilterOp,
 )
 from mugen.core.plugin.acp.contract.service.authorization import IAuthorizationService
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
@@ -31,6 +34,12 @@ from mugen.core.utility.rgql import ParseError as RGQLParseError
 from mugen.core.utility.rgql import parse_rgql_url, RGQLQueryOptions, SemanticChecker
 from mugen.core.utility.rgql import SemanticError as RGQLSemanticError
 from mugen.core.utility.rgql.model import EdmType
+from mugen.core.utility.rgql.search_parser import (
+    SearchBinary,
+    SearchExpr,
+    SearchNot,
+    SearchTerm,
+)
 from mugen.core.gateway.storage.rdbms.rgql_adapter.error import RGQLExpandError
 from mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_expand import (
     apply_to_filter_groups,
@@ -56,12 +65,145 @@ _SELF_TENANT_DISCOVERY_FIELDS = {
     _EDM_TENANT: frozenset({"id", "name", "slug"}),
 }
 
+PathPlanner = Callable[[str], tuple[Sequence[RelatedPathHop], str] | None]
+
 
 @dataclass
 class _SelfTenantDiscoveryState:
     """Tracks whether this request is using the self tenant discovery exception."""
 
     enabled: bool = False
+
+
+def _merge_filter_groups(
+    left: FilterGroup,
+    right: FilterGroup,
+) -> FilterGroup:
+    """Merge two conjunctive filter groups into one."""
+    where = dict(left.where)
+    for key, value in right.where.items():
+        if key in where and where[key] != value:
+            raise ValueError(f"Conflicting equality predicates for column {key!r}")
+        where[key] = value
+
+    return FilterGroup(
+        where=where,
+        text_filters=[*left.text_filters, *right.text_filters],
+        scalar_filters=[*left.scalar_filters, *right.scalar_filters],
+        related_text_filters=[
+            *left.related_text_filters,
+            *right.related_text_filters,
+        ],
+        related_scalar_filters=[
+            *left.related_scalar_filters,
+            *right.related_scalar_filters,
+        ],
+    )
+
+
+def _and_filter_groups(
+    left: Sequence[FilterGroup] | None,
+    right: Sequence[FilterGroup] | None,
+) -> list[FilterGroup]:
+    """Combine two DNF filter group sets with logical AND."""
+    if not left:
+        return list(right or [])
+
+    if not right:
+        return list(left)
+
+    return [
+        _merge_filter_groups(left_group, right_group)
+        for left_group in left
+        for right_group in right
+    ]
+
+
+def _search_term_filter_groups(
+    term: SearchTerm,
+    *,
+    search_fields: Sequence[str],
+    edm_type: EdmType,
+    path_planner: PathPlanner,
+) -> list[FilterGroup]:
+    """Build OR filter groups for a single configured search term."""
+    groups: list[FilterGroup] = []
+    for field in search_fields:
+        path_plan = path_planner(field)
+        if path_plan is None:
+            if "/" in field or field not in edm_type.properties:
+                raise ValueError(f"Unknown $search field {field!r}.")
+
+            groups.append(
+                FilterGroup(
+                    text_filters=[
+                        TextFilter(
+                            field=title_to_snake(field),
+                            op=TextFilterOp.CONTAINS,
+                            value=term.text,
+                            case_sensitive=False,
+                        )
+                    ]
+                )
+            )
+            continue
+
+        hops, terminal_col = path_plan
+        groups.append(
+            FilterGroup(
+                related_text_filters=[
+                    RelatedTextFilter(
+                        path_hops=list(hops),
+                        field=terminal_col,
+                        op=TextFilterOp.CONTAINS,
+                        value=term.text,
+                        case_sensitive=False,
+                    )
+                ]
+            )
+        )
+
+    return groups
+
+
+def _search_filter_groups(
+    expr: SearchExpr,
+    *,
+    search_fields: Sequence[str],
+    edm_type: EdmType,
+    path_planner: PathPlanner,
+) -> list[FilterGroup]:
+    """Translate a configured RGQL $search AST to DNF filter groups."""
+    if isinstance(expr, SearchTerm):
+        return _search_term_filter_groups(
+            expr,
+            search_fields=search_fields,
+            edm_type=edm_type,
+            path_planner=path_planner,
+        )
+
+    if isinstance(expr, SearchBinary):
+        left = _search_filter_groups(
+            expr.left,
+            search_fields=search_fields,
+            edm_type=edm_type,
+            path_planner=path_planner,
+        )
+        right = _search_filter_groups(
+            expr.right,
+            search_fields=search_fields,
+            edm_type=edm_type,
+            path_planner=path_planner,
+        )
+        if expr.op == "or":
+            return [*left, *right]
+        if expr.op == "and":
+            return _and_filter_groups(left, right)
+
+    if isinstance(expr, SearchNot):
+        raise ValueError("$search not expressions are not supported.")
+
+    raise ValueError(f"Unsupported $search expression: {expr!r}")
 
 
 def _config_provider():
@@ -379,6 +521,27 @@ def rgql_enabled(
                         )
                     except ValueError as exc:
                         abort(400, str(exc))
+
+                    search_fields = tuple(
+                        getattr(resource.behavior, "search_fields", ()) or ()
+                    )
+                    search_expr = getattr(opts, "search", None)
+                    if search_expr is not None and search_fields:
+                        try:
+                            search_filter_groups = _search_filter_groups(
+                                search_expr,
+                                search_fields=search_fields,
+                                edm_type=edm_type,
+                                path_planner=lambda path: _plan_nav_path(
+                                    edm_type.name, path
+                                ),
+                            )
+                            filter_groups = _and_filter_groups(
+                                filter_groups,
+                                search_filter_groups,
+                            )
+                        except ValueError as exc:
+                            abort(400, str(exc))
 
                     if order_by and len(order_by) > max_orderby:
                         abort(400, f"Max $orderby ({max_orderby}) exceeded.")

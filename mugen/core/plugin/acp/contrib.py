@@ -300,6 +300,7 @@ def contribute(
             "allow_delete": False,
             "allow_manage": False,
             "soft_delete": SoftDeletePolicy(),
+            "search_fields": ("Namespace", "Name", "DisplayName"),
             "crud": CrudPolicy(
                 create_schema=GlobalRoleCreateValidation,
                 update_schema=GlobalRoleUpdateValidation,
@@ -314,6 +315,13 @@ def contribute(
             "allow_delete": True,
             "allow_manage": False,
             "soft_delete": SoftDeletePolicy(),
+            "search_fields": (
+                "User/Username",
+                "User/LoginEmail",
+                "GlobalRole/Namespace",
+                "GlobalRole/Name",
+                "GlobalRole/DisplayName",
+            ),
             "crud": CrudPolicy(
                 create_schema=GlobalRoleMembershipCreateValidation,
             ),
@@ -861,6 +869,7 @@ def contribute(
                 behavior=AdminBehavior(
                     soft_delete=r.get("soft_delete", SoftDeletePolicy()),
                     rgql_enabled=True,
+                    search_fields=tuple(r.get("search_fields", ())),
                 ),
                 crud=r.get("crud", CrudPolicy()),
                 title=_humanize(entity_set),
