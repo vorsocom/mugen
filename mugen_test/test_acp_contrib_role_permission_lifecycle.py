@@ -111,6 +111,33 @@ class TestAcpContribRolePermissionLifecycle(unittest.TestCase):
             RowVersionValidation,
         )
 
+    def test_global_roles_and_memberships_register_search_fields(self) -> None:
+        registry = AdminRegistry(strict_permission_decls=True)
+
+        contribute(
+            registry,
+            admin_namespace="com.test.acp",
+            plugin_namespace="com.test.acp",
+        )
+
+        global_roles = registry.get_resource("GlobalRoles")
+        self.assertEqual(
+            global_roles.behavior.search_fields,
+            ("Namespace", "Name", "DisplayName"),
+        )
+
+        global_role_memberships = registry.get_resource("GlobalRoleMemberships")
+        self.assertEqual(
+            global_role_memberships.behavior.search_fields,
+            (
+                "User/Username",
+                "User/LoginEmail",
+                "GlobalRole/Namespace",
+                "GlobalRole/Name",
+                "GlobalRole/DisplayName",
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

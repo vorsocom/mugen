@@ -113,6 +113,7 @@ class AdminBehavior:
     soft_delete: SoftDeletePolicy = field(default_factory=SoftDeletePolicy)
     rgql_enabled: bool = True
     rgql_max_expand_depth: Optional[int] = None
+    search_fields: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
