@@ -39,7 +39,8 @@ Contribution responsibilities
 -----------------------------
 This module registers:
 - Permission types: read/create/update/delete/manage (owned by admin_namespace)
-- Baseline global roles: administrator and authenticated (namespaced)
+- Baseline global roles: administrator, authenticated, web_user, handoff_operator
+  (namespaced)
 - Permission objects for each admin resource (owned by admin_namespace)
 - Default global grants: administrator receives read/create/update/delete on all
   admin-owned permission objects
@@ -123,6 +124,12 @@ from mugen.core.plugin.acp.api.validation.tenant import (
     TenantMembershipUpdateValidation,
     TenantUpdateValidation,
 )
+from mugen.core.plugin.acp.constants import (
+    GLOBAL_ROLE_ADMINISTRATOR,
+    GLOBAL_ROLE_AUTHENTICATED,
+    GLOBAL_ROLE_HANDOFF_OPERATOR,
+    GLOBAL_ROLE_WEB_USER,
+)
 from mugen.core.plugin.acp.contract.sdk.binding import (
     TableSpec,
     EdmTypeSpec,
@@ -189,7 +196,8 @@ def contribute(
     - Registers permission types under the admin namespace:
         "<admin_namespace>:read|create|update|delete|manage"
     - Registers baseline global roles:
-        "<admin_namespace>:administrator", "<admin_namespace>:authenticated"
+        "<admin_namespace>:administrator", "<admin_namespace>:authenticated",
+        "<admin_namespace>:web_user", "<admin_namespace>:handoff_operator"
     - Registers a catalog of AdminResources for core admin entities, including:
         - entity_set (route segment / collection name)
         - edm_type ("ACP.<Entity>")
@@ -233,15 +241,29 @@ def contribute(
     registry.register_global_role(
         GlobalRoleDef(
             namespace=admin_ns.ns,
-            name="administrator",
+            name=GLOBAL_ROLE_ADMINISTRATOR,
             display_name="Administrator",
         )
     )
     registry.register_global_role(
         GlobalRoleDef(
             namespace=admin_ns.ns,
-            name="authenticated",
+            name=GLOBAL_ROLE_AUTHENTICATED,
             display_name="Authenticated",
+        )
+    )
+    registry.register_global_role(
+        GlobalRoleDef(
+            namespace=admin_ns.ns,
+            name=GLOBAL_ROLE_WEB_USER,
+            display_name="Web User",
+        )
+    )
+    registry.register_global_role(
+        GlobalRoleDef(
+            namespace=admin_ns.ns,
+            name=GLOBAL_ROLE_HANDOFF_OPERATOR,
+            display_name="Handoff Operator",
         )
     )
 
@@ -797,13 +819,13 @@ def contribute(
     ]
 
     registry.register_default_global_grants(
-        DefaultGlobalGrant(admin_ns.key("administrator"), pobj, ptyp, True)
+        DefaultGlobalGrant(admin_ns.key(GLOBAL_ROLE_ADMINISTRATOR), pobj, ptyp, True)
         for pobj in admin_obj_keys
         for ptyp in admin_verb_keys
     )
 
     registry.register_default_global_grants(
-        DefaultGlobalGrant(admin_ns.key("authenticated"), pobj, ptyp, True)
+        DefaultGlobalGrant(admin_ns.key(GLOBAL_ROLE_AUTHENTICATED), pobj, ptyp, True)
         for pobj in (admin_ns.obj("user"),)
         for ptyp in (admin_ns.verb("read"), admin_ns.verb("manage"))
     )

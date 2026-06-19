@@ -2,6 +2,10 @@
 
 import unittest
 
+from mugen.core.plugin.acp.constants import (
+    GLOBAL_ROLE_ADMINISTRATOR,
+    GLOBAL_ROLE_WEB_USER,
+)
 from mugen.core.plugin.acp.contract.sdk.permission import GlobalRoleDef
 from mugen.core.plugin.acp.sdk.registry import AdminRegistry
 from mugen.core.plugin.web.auth import WEB_PLATFORM_ACCESS_PERMISSION
@@ -14,13 +18,17 @@ class TestMuGenWebContrib(unittest.TestCase):
     def test_contribute_registers_web_access_permission_seed_metadata(self) -> None:
         admin_namespace = "com.vorsocomputing.mugen.acp"
         registry = AdminRegistry(strict_permission_decls=True)
-        registry.register_global_role(
-            GlobalRoleDef(
-                namespace=admin_namespace,
-                name="administrator",
-                display_name="Administrator",
+        for name, display_name in (
+            (GLOBAL_ROLE_ADMINISTRATOR, "Administrator"),
+            (GLOBAL_ROLE_WEB_USER, "Web User"),
+        ):
+            registry.register_global_role(
+                GlobalRoleDef(
+                    namespace=admin_namespace,
+                    name=name,
+                    display_name=display_name,
+                )
             )
-        )
 
         contribute(
             registry,
@@ -40,7 +48,16 @@ class TestMuGenWebContrib(unittest.TestCase):
         )
         self.assertTrue(
             any(
-                grant.global_role == f"{admin_namespace}:administrator"
+                grant.global_role == f"{admin_namespace}:{GLOBAL_ROLE_ADMINISTRATOR}"
+                and grant.permission_object == WEB_PLATFORM_ACCESS_PERMISSION
+                and grant.permission_type == WEB_PLATFORM_ACCESS_PERMISSION
+                and grant.permitted is True
+                for grant in manifest.default_global_grants
+            )
+        )
+        self.assertTrue(
+            any(
+                grant.global_role == f"{admin_namespace}:{GLOBAL_ROLE_WEB_USER}"
                 and grant.permission_object == WEB_PLATFORM_ACCESS_PERMISSION
                 and grant.permission_type == WEB_PLATFORM_ACCESS_PERMISSION
                 and grant.permitted is True
