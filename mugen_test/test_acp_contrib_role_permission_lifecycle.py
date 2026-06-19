@@ -37,12 +37,38 @@ _bootstrap_namespace_packages()
 from mugen.core.plugin.acp.api.validation.generic import (
     RowVersionValidation,
 )
+from mugen.core.plugin.acp.constants import (  # noqa: E402
+    GLOBAL_ROLE_HANDOFF_OPERATOR,
+    GLOBAL_ROLE_WEB_USER,
+)
 from mugen.core.plugin.acp.contrib import contribute
 from mugen.core.plugin.acp.sdk.registry import AdminRegistry
 
 
 class TestAcpContribRolePermissionLifecycle(unittest.TestCase):
     """Covers lifecycle action registration for role and permission resources."""
+
+    def test_contribute_registers_least_privilege_global_roles(self) -> None:
+        """Contributor should seed least privilege global roles."""
+        admin_namespace = "com.test.acp"
+        registry = AdminRegistry(strict_permission_decls=True)
+
+        contribute(
+            registry,
+            admin_namespace=admin_namespace,
+            plugin_namespace=admin_namespace,
+        )
+
+        manifest = registry.build_seed_manifest()
+        roles = {role.key: role.display_name for role in manifest.global_roles}
+        self.assertEqual(
+            roles[f"{admin_namespace}:{GLOBAL_ROLE_WEB_USER}"],
+            "Web User",
+        )
+        self.assertEqual(
+            roles[f"{admin_namespace}:{GLOBAL_ROLE_HANDOFF_OPERATOR}"],
+            "Handoff Operator",
+        )
 
     def test_resources_register_lifecycle_actions(self) -> None:
         registry = AdminRegistry(strict_permission_decls=True)

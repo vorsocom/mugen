@@ -2,6 +2,10 @@
 
 import unittest
 
+from mugen.core.plugin.acp.constants import (
+    GLOBAL_ROLE_ADMINISTRATOR,
+    GLOBAL_ROLE_HANDOFF_OPERATOR,
+)
 from mugen.core.plugin.acp.contract.sdk.permission import (
     GlobalRoleDef,
     PermissionTypeDef,
@@ -74,13 +78,17 @@ class TestChannelOrchestrationContribBinding(unittest.TestCase):
 
         for verb in ("read", "create", "update", "delete", "manage"):
             registry.register_permission_type(PermissionTypeDef(admin_ns.ns, verb))
-        registry.register_global_role(
-            GlobalRoleDef(
-                namespace=admin_ns.ns,
-                name="administrator",
-                display_name="Administrator",
+        for name, display_name in (
+            (GLOBAL_ROLE_ADMINISTRATOR, "Administrator"),
+            (GLOBAL_ROLE_HANDOFF_OPERATOR, "Handoff Operator"),
+        ):
+            registry.register_global_role(
+                GlobalRoleDef(
+                    namespace=admin_ns.ns,
+                    name=name,
+                    display_name=display_name,
+                )
             )
-        )
 
         contribute(
             registry,
@@ -228,7 +236,16 @@ class TestChannelOrchestrationContribBinding(unittest.TestCase):
         )
         self.assertTrue(
             any(
-                grant.global_role == admin_ns.key("administrator")
+                grant.global_role == admin_ns.key(GLOBAL_ROLE_ADMINISTRATOR)
+                and grant.permission_object == HUMAN_HANDOFF_OPERATOR_PERMISSION
+                and grant.permission_type == HUMAN_HANDOFF_OPERATOR_PERMISSION
+                and grant.permitted is True
+                for grant in manifest.default_global_grants
+            )
+        )
+        self.assertTrue(
+            any(
+                grant.global_role == admin_ns.key(GLOBAL_ROLE_HANDOFF_OPERATOR)
                 and grant.permission_object == HUMAN_HANDOFF_OPERATOR_PERMISSION
                 and grant.permission_type == HUMAN_HANDOFF_OPERATOR_PERMISSION
                 and grant.permitted is True

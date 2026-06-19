@@ -3,6 +3,10 @@
 import re
 from typing import Any
 
+from mugen.core.plugin.acp.constants import (
+    GLOBAL_ROLE_ADMINISTRATOR,
+    GLOBAL_ROLE_HANDOFF_OPERATOR,
+)
 from mugen.core.plugin.acp.contract.sdk.binding import (
     EdmTypeSpec,
     RelationalServiceSpec,
@@ -368,13 +372,21 @@ def contribute(
     ]
 
     registry.register_default_global_grants(
-        DefaultGlobalGrant(admin_ns.key("administrator"), pobj, ptyp, True)
+        DefaultGlobalGrant(admin_ns.key(GLOBAL_ROLE_ADMINISTRATOR), pobj, ptyp, True)
         for pobj in obj_keys
         for ptyp in admin_verb_keys
     )
     registry.register_default_global_grant(
         DefaultGlobalGrant(
-            admin_ns.key("administrator"),
+            admin_ns.key(GLOBAL_ROLE_ADMINISTRATOR),
+            HUMAN_HANDOFF_OPERATOR_PERMISSION,
+            HUMAN_HANDOFF_OPERATOR_PERMISSION,
+            True,
+        )
+    )
+    registry.register_default_global_grant(
+        DefaultGlobalGrant(
+            admin_ns.key(GLOBAL_ROLE_HANDOFF_OPERATOR),
             HUMAN_HANDOFF_OPERATOR_PERMISSION,
             HUMAN_HANDOFF_OPERATOR_PERMISSION,
             True,
