@@ -58,13 +58,21 @@ from mugen.core.contract.agent import (
 )
 from mugen.core.contract.context import ContextScope
 from mugen.core.contract.gateway.completion import (
+    CompletionContinuationState,
     CompletionInferenceConfig,
     CompletionMessage,
     CompletionRequest,
     CompletionResponse,
+    CompletionTool,
+    CompletionToolCall,
+    CompletionUsage,
     ICompletionGateway,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.contract.gateway.completion_workflow import (
+    normalize_completion_tool_call,
+    serialize_completion_response_for_log,
+)
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
 from mugen.core.contract.gateway.storage.rdbms.service_base import IRelationalService
 from mugen.core.contract.gateway.storage.rdbms.types import FilterGroup, OrderBy
@@ -183,7 +191,9 @@ def _serialize_join_state(join_state: JoinState | None) -> dict[str, Any] | None
         "required_child_run_ids": list(join_state.required_child_run_ids),
         "completed_child_run_ids": list(join_state.completed_child_run_ids),
         "last_joined_sequence_no": join_state.last_joined_sequence_no,
-        "timeout_at": None if join_state.timeout_at is None else join_state.timeout_at.isoformat(),
+        "timeout_at": (
+            None if join_state.timeout_at is None else join_state.timeout_at.isoformat()
+        ),
         "policy": _serialize_join_policy(join_state.policy),
         "metadata": dict(join_state.metadata),
     }
@@ -266,7 +276,9 @@ def _deserialize_state(payload: dict[str, Any] | None) -> PlanRunState:
     payload = dict(payload or {})
     return PlanRunState(
         goal=str(payload.get("goal") or ""),
-        status=PlanRunStatus(str(payload.get("status") or PlanRunStatus.PREPARED.value)),
+        status=PlanRunStatus(
+            str(payload.get("status") or PlanRunStatus.PREPARED.value)
+        ),
         iteration_count=int(payload.get("iteration_count") or 0),
         background_iteration_count=int(payload.get("background_iteration_count") or 0),
         last_response_text=_normalize_optional_text(payload.get("last_response_text")),
@@ -294,7 +306,9 @@ def _deserialize_outcome(payload: dict[str, Any] | None) -> PlanOutcome | None:
     if not isinstance(payload, dict):
         return None
     return PlanOutcome(
-        status=PlanOutcomeStatus(str(payload.get("status") or PlanOutcomeStatus.FAILED.value)),
+        status=PlanOutcomeStatus(
+            str(payload.get("status") or PlanOutcomeStatus.FAILED.value)
+        ),
         final_user_responses=tuple(payload.get("final_user_responses") or ()),
         assistant_response=_normalize_optional_text(payload.get("assistant_response")),
         completion=_deserialize_completion(payload.get("completion")),
@@ -304,48 +318,49 @@ def _deserialize_outcome(payload: dict[str, Any] | None) -> PlanOutcome | None:
     )
 
 
-def _serialize_completion(completion: CompletionResponse | None) -> dict[str, Any] | None:
-    if completion is None:
-        return None
-    usage = None
-    if completion.usage is not None:
-        usage = {
-            "input_tokens": completion.usage.input_tokens,
-            "output_tokens": completion.usage.output_tokens,
-            "total_tokens": completion.usage.total_tokens,
-            "vendor_fields": dict(completion.usage.vendor_fields),
-        }
-    return {
-        "content": completion.content,
-        "model": completion.model,
-        "stop_reason": completion.stop_reason,
-        "message": dict(completion.message or {}) if completion.message else None,
-        "tool_calls": [dict(item) for item in completion.tool_calls],
-        "usage": usage,
-        "vendor_fields": dict(completion.vendor_fields),
-    }
+def _serialize_completion(
+    completion: CompletionResponse | None,
+) -> dict[str, Any] | None:
+    return serialize_completion_response_for_log(completion)
 
 
-def _deserialize_completion(payload: dict[str, Any] | None) -> CompletionResponse | None:
+def _deserialize_completion(
+    payload: dict[str, Any] | None,
+) -> CompletionResponse | None:
     if not isinstance(payload, dict):
         return None
     usage_payload = payload.get("usage")
     usage = None
     if isinstance(usage_payload, dict):
-        from mugen.core.contract.gateway.completion import CompletionUsage
-
         usage = CompletionUsage(
             input_tokens=usage_payload.get("input_tokens"),
             output_tokens=usage_payload.get("output_tokens"),
             total_tokens=usage_payload.get("total_tokens"),
+            reasoning_tokens=usage_payload.get("reasoning_tokens"),
             vendor_fields=dict(usage_payload.get("vendor_fields") or {}),
         )
+    tool_calls: list[CompletionToolCall | dict[str, Any]] = []
+    for item in list(payload.get("tool_calls") or ()):
+        normalized = normalize_completion_tool_call(item)
+        if normalized is not None:
+            tool_calls.append(normalized)
+        elif isinstance(item, dict):
+            tool_calls.append(dict(item))
     return CompletionResponse(
         content=payload.get("content"),
         model=_normalize_optional_text(payload.get("model")),
         stop_reason=_normalize_optional_text(payload.get("stop_reason")),
         message=dict(payload.get("message") or {}) if payload.get("message") else None,
-        tool_calls=list(payload.get("tool_calls") or ()),
+        tool_calls=tool_calls,
+        output_items=[
+            dict(item)
+            for item in list(payload.get("output_items") or ())
+            if isinstance(item, dict)
+        ],
+        reasoning_state=CompletionContinuationState.from_dict(
+            payload.get("reasoning_state")
+        ),
+        provider_state=dict(payload.get("provider_state") or {}),
         usage=usage,
         vendor_fields=dict(payload.get("vendor_fields") or {}),
     )
@@ -386,6 +401,27 @@ def _tool_spec(descriptor: CapabilityDescriptor) -> dict[str, Any]:
     }
 
 
+def _completion_tool(descriptor: CapabilityDescriptor) -> CompletionTool:
+    return CompletionTool(
+        name=descriptor.key,
+        description=descriptor.description or descriptor.title,
+        input_schema=descriptor.input_schema
+        or {"type": "object", "properties": {}, "additionalProperties": True},
+        kind="function",
+        provider_hints=dict(descriptor.metadata),
+    )
+
+
+def _merge_completion_tools(
+    *,
+    base_tools: list[CompletionTool],
+    capabilities: tuple[CapabilityDescriptor, ...],
+) -> list[CompletionTool]:
+    if not capabilities:
+        return list(base_tools)
+    return list(base_tools) + [_completion_tool(item) for item in capabilities]
+
+
 def _merge_vendor_tools(
     *,
     vendor_params: dict[str, Any],
@@ -399,44 +435,34 @@ def _merge_vendor_tools(
     return merged
 
 
-def _tool_call_invocations(tool_calls: list[dict[str, Any]]) -> tuple[CapabilityInvocation, ...]:
+def _tool_call_invocations(tool_calls: list[Any]) -> tuple[CapabilityInvocation, ...]:
     invocations: list[CapabilityInvocation] = []
-    for tool_call in tool_calls:
-        function_payload = tool_call.get("function")
-        if isinstance(function_payload, dict):
-            capability_key = _normalize_optional_text(function_payload.get("name"))
-            raw_arguments = function_payload.get("arguments")
-        else:
-            capability_key = _normalize_optional_text(tool_call.get("name"))
-            raw_arguments = tool_call.get("arguments")
-        if capability_key is None:
+    for raw_tool_call in tool_calls:
+        tool_call = normalize_completion_tool_call(raw_tool_call)
+        if tool_call is None:
             continue
-        if isinstance(raw_arguments, str):
-            try:
-                parsed_arguments = json.loads(raw_arguments)
-            except json.JSONDecodeError:
-                parsed_arguments = {}
-        else:
-            parsed_arguments = raw_arguments
-        arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
         invocations.append(
             CapabilityInvocation(
-                capability_key=capability_key,
-                arguments=arguments,
-                idempotency_key=_normalize_optional_text(tool_call.get("id")),
+                capability_key=tool_call.name,
+                arguments=dict(tool_call.arguments),
+                idempotency_key=_normalize_optional_text(tool_call.id),
             )
         )
     return tuple(invocations)
 
 
-class AgentPlanRunService(IRelationalService[AgentPlanRunDE]):  # pylint: disable=too-few-public-methods
+class AgentPlanRunService(
+    IRelationalService[AgentPlanRunDE]
+):  # pylint: disable=too-few-public-methods
     """CRUD service for plan-run rows."""
 
     def __init__(self, table: str, rsg: IRelationalStorageGateway, **kwargs) -> None:
         super().__init__(de_type=AgentPlanRunDE, table=table, rsg=rsg, **kwargs)
 
 
-class AgentPlanStepService(IRelationalService[AgentPlanStepDE]):  # pylint: disable=too-few-public-methods
+class AgentPlanStepService(
+    IRelationalService[AgentPlanStepDE]
+):  # pylint: disable=too-few-public-methods
     """CRUD service for append-only plan-step rows."""
 
     def __init__(self, table: str, rsg: IRelationalStorageGateway, **kwargs) -> None:
@@ -459,8 +485,12 @@ class CodeConfiguredAgentPolicyResolver(IAgentPolicyResolver):
         requested_agent_key = _normalize_optional_text(request.agent_key)
         route_agent_key = None
         if route_cfg is not None:
-            route_agent_key = _normalize_optional_text(_cfg_value(route_cfg, "agent_key"))
-        selected_agent_key = requested_agent_key or route_agent_key or defaults.agent_key
+            route_agent_key = _normalize_optional_text(
+                _cfg_value(route_cfg, "agent_key")
+            )
+        selected_agent_key = (
+            requested_agent_key or route_agent_key or defaults.agent_key
+        )
 
         policy = defaults
         agent_cfg = self._agent_config(cfg, selected_agent_key)
@@ -493,7 +523,10 @@ class CodeConfiguredAgentPolicyResolver(IAgentPolicyResolver):
     def _route_config(cfg: Any, service_route_key: str | None) -> Any | None:
         normalized_route = _normalize_optional_text(service_route_key)
         for route_cfg in _cfg_list(cfg, "routes"):
-            if _normalize_optional_text(_cfg_value(route_cfg, "service_route_key")) != normalized_route:
+            if (
+                _normalize_optional_text(_cfg_value(route_cfg, "service_route_key"))
+                != normalized_route
+            ):
                 continue
             return route_cfg
         return None
@@ -504,7 +537,10 @@ class CodeConfiguredAgentPolicyResolver(IAgentPolicyResolver):
         if normalized_agent_key is None:
             return None
         for agent_cfg in _cfg_list(cfg, "agents"):
-            if _normalize_optional_text(_cfg_value(agent_cfg, "agent_key")) != normalized_agent_key:
+            if (
+                _normalize_optional_text(_cfg_value(agent_cfg, "agent_key"))
+                != normalized_agent_key
+            ):
                 continue
             return agent_cfg
         return None
@@ -561,7 +597,8 @@ class CodeConfiguredAgentPolicyResolver(IAgentPolicyResolver):
             enabled=enabled,
             current_turn_enabled=current_turn_enabled,
             background_enabled=background_enabled,
-            agent_key=_normalize_optional_text(_cfg_value(cfg, "agent_key")) or seed.agent_key,
+            agent_key=_normalize_optional_text(_cfg_value(cfg, "agent_key"))
+            or seed.agent_key,
             planner_key=str(_cfg_value(cfg, "planner_key") or seed.planner_key),
             evaluator_key=str(_cfg_value(cfg, "evaluator_key") or seed.evaluator_key),
             response_synthesizer_key=str(
@@ -649,6 +686,13 @@ class LLMPlannerStrategy(IPlannerStrategy):
                 operation=base.operation,
                 model=base.model,
                 inference=base.inference,
+                reasoning=base.reasoning,
+                tools=_merge_completion_tools(
+                    base_tools=list(base.tools),
+                    capabilities=capabilities,
+                ),
+                tool_results=list(base.tool_results),
+                continuation_state=base.continuation_state,
                 vendor_params=_merge_vendor_tools(
                     vendor_params=dict(base.vendor_params),
                     capabilities=capabilities,
@@ -662,7 +706,9 @@ class LLMPlannerStrategy(IPlannerStrategy):
                 CompletionMessage(
                     role="user",
                     content={
-                        "agent_observations": [self._observation_payload(item) for item in observations],
+                        "agent_observations": [
+                            self._observation_payload(item) for item in observations
+                        ],
                         "instruction": "Continue using tools if needed, otherwise respond to the user.",
                     },
                 )
@@ -672,6 +718,13 @@ class LLMPlannerStrategy(IPlannerStrategy):
                 operation=base.operation,
                 model=base.model,
                 inference=base.inference,
+                reasoning=base.reasoning,
+                tools=_merge_completion_tools(
+                    base_tools=list(base.tools),
+                    capabilities=capabilities,
+                ),
+                tool_results=list(base.tool_results),
+                continuation_state=base.continuation_state,
                 vendor_params=_merge_vendor_tools(
                     vendor_params=dict(base.vendor_params),
                     capabilities=capabilities,
@@ -692,7 +745,9 @@ class LLMPlannerStrategy(IPlannerStrategy):
                     "goal": request.user_message,
                     "service_route_key": request.service_route_key,
                     "run_state": _serialize_state(run.state),
-                    "observations": [self._observation_payload(item) for item in observations],
+                    "observations": [
+                        self._observation_payload(item) for item in observations
+                    ],
                 },
             ),
         ]
@@ -700,6 +755,10 @@ class LLMPlannerStrategy(IPlannerStrategy):
             messages=messages,
             operation="completion",
             inference=CompletionInferenceConfig(temperature=0.1),
+            tools=_merge_completion_tools(
+                base_tools=[],
+                capabilities=capabilities,
+            ),
             vendor_params=_merge_vendor_tools(
                 vendor_params={},
                 capabilities=capabilities,
@@ -749,7 +808,8 @@ class LLMEvaluationStrategy(IEvaluatorStrategy):
             (
                 item.capability_result
                 for item in request.observations
-                if item.capability_result is not None and item.capability_result.ok is False
+                if item.capability_result is not None
+                and item.capability_result.ok is False
             ),
             None,
         )
@@ -903,7 +963,9 @@ class ACPActionCapabilityProvider(ICapabilityProvider):
             actions = getattr(resource.capabilities, "actions", {}) or {}
             service = self._admin_registry.get_edm_service(resource.service_key)
             for action_name, action_cap in actions.items():
-                schema = action_cap.get("schema") if isinstance(action_cap, dict) else None
+                schema = (
+                    action_cap.get("schema") if isinstance(action_cap, dict) else None
+                )
                 if schema is None:
                     continue
                 descriptor = self._descriptor_from_action(
@@ -956,12 +1018,16 @@ class ACPActionCapabilityProvider(ICapabilityProvider):
 
         arguments = dict(invocation.arguments)
         entity_id = arguments.pop("entity_id", arguments.pop("id", None))
-        auth_user_id = arguments.pop("auth_user_id", request.metadata.get("auth_user_id"))
+        auth_user_id = arguments.pop(
+            "auth_user_id", request.metadata.get("auth_user_id")
+        )
         if auth_user_id is None:
             auth_user_id = request.scope.sender_id
         schema = descriptor.metadata.get("schema")
         try:
-            validated = schema.model_validate(arguments) if schema is not None else arguments
+            validated = (
+                schema.model_validate(arguments) if schema is not None else arguments
+            )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             return CapabilityResult(
                 capability_key=invocation.capability_key,
@@ -1093,7 +1159,10 @@ class AllowlistExecutionGuard(IExecutionGuard):
         policy: AgentRuntimePolicy,
     ) -> None:
         _ = (request, run, descriptor)
-        if policy.capability_allow and invocation.capability_key not in policy.capability_allow:
+        if (
+            policy.capability_allow
+            and invocation.capability_key not in policy.capability_allow
+        ):
             raise RuntimeError(
                 f"Capability {invocation.capability_key!r} is not allowed for this route."
             )
@@ -1177,16 +1246,20 @@ class RelationalPlanRunStore(IPlanRunStore):
                 "policy_json": _serialize_policy(policy),
                 "run_state_json": _serialize_state(state),
                 "metadata_json": dict(request.metadata),
-                "parent_run_id": _uuid_or_none(None if lineage is None else lineage.parent_run_id),
-                "root_run_id": _uuid_or_none(None if lineage is None else lineage.root_run_id),
+                "parent_run_id": _uuid_or_none(
+                    None if lineage is None else lineage.parent_run_id
+                ),
+                "root_run_id": _uuid_or_none(
+                    None if lineage is None else lineage.root_run_id
+                ),
                 "agent_key": _normalize_optional_text(
-                    None
-                    if lineage is None
-                    else lineage.agent_key
+                    None if lineage is None else lineage.agent_key
                 )
                 or request.agent_key
                 or policy.agent_key,
-                "spawned_by_step_no": None if lineage is None else lineage.spawned_by_step_no,
+                "spawned_by_step_no": (
+                    None if lineage is None else lineage.spawned_by_step_no
+                ),
                 "join_state_json": _serialize_join_state(join_state),
                 "current_sequence_no": 0,
                 "next_wakeup_at": None,
@@ -1237,16 +1310,16 @@ class RelationalPlanRunStore(IPlanRunStore):
                         None if run.lineage is None else run.lineage.agent_key
                     )
                     or run.policy.agent_key,
-                    "spawned_by_step_no": None
-                    if run.lineage is None
-                    else run.lineage.spawned_by_step_no,
+                    "spawned_by_step_no": (
+                        None if run.lineage is None else run.lineage.spawned_by_step_no
+                    ),
                     "join_state_json": _serialize_join_state(run.join_state),
                     "current_sequence_no": run.cursor.next_sequence_no - 1,
                     "next_wakeup_at": run.next_wakeup_at,
                     "lease_owner": None if run.lease is None else run.lease.owner,
-                    "lease_expires_at": None
-                    if run.lease is None
-                    else run.lease.expires_at,
+                    "lease_expires_at": (
+                        None if run.lease is None else run.lease.expires_at
+                    ),
                     "final_outcome_json": _serialize_outcome(run.final_outcome),
                     "last_error": run.state.last_error,
                 },
@@ -1322,7 +1395,9 @@ class RelationalPlanRunStore(IPlanRunStore):
             return None
         now = _utc_now()
         if row.lease_expires_at is not None and row.lease_expires_at > now:
-            if _normalize_optional_text(row.lease_owner) != _normalize_optional_text(owner):
+            if _normalize_optional_text(row.lease_owner) != _normalize_optional_text(
+                owner
+            ):
                 return None
         expires_at = now.replace(microsecond=0) + timedelta(seconds=lease_seconds)
         updated = self._require_updated_row(
@@ -1375,7 +1450,10 @@ class RelationalPlanRunStore(IPlanRunStore):
                 continue
             join_ready = await self._join_barrier_satisfied(row)
             join_timed_out = self._join_timed_out(row=row, current=current)
-            if getattr(row, "join_state_json", None) is not None and join_ready is False:
+            if (
+                getattr(row, "join_state_json", None) is not None
+                and join_ready is False
+            ):
                 if join_timed_out:
                     due.append(self._row_to_run(row))
                     if len(due) >= limit:
@@ -1421,10 +1499,16 @@ class RelationalPlanRunStore(IPlanRunStore):
         )
         return _deserialize_outcome(updated.final_outcome_json) or outcome
 
-    async def list_steps(self, *, run_id: str, limit: int | None = None) -> list[PlanRunStep]:
+    async def list_steps(
+        self, *, run_id: str, limit: int | None = None
+    ) -> list[PlanRunStep]:
         run_row = await self._require_run_row(run_id)
         steps = await self._step_service.list(
-            filter_groups=[FilterGroup(where={"tenant_id": run_row.tenant_id, "run_id": run_row.id})],
+            filter_groups=[
+                FilterGroup(
+                    where={"tenant_id": run_row.tenant_id, "run_id": run_row.id}
+                )
+            ],
             order_by=[OrderBy(field="sequence_no")],
             limit=limit,
         )
@@ -1568,12 +1652,16 @@ class RelationalPlanRunStore(IPlanRunStore):
             or getattr(row, "spawned_by_step_no", None) is not None
         ):
             lineage = PlanRunLineage(
-                parent_run_id=None
-                if getattr(row, "parent_run_id", None) is None
-                else str(row.parent_run_id),
-                root_run_id=None
-                if getattr(row, "root_run_id", None) is None
-                else str(row.root_run_id),
+                parent_run_id=(
+                    None
+                    if getattr(row, "parent_run_id", None) is None
+                    else str(row.parent_run_id)
+                ),
+                root_run_id=(
+                    None
+                    if getattr(row, "root_run_id", None) is None
+                    else str(row.root_run_id)
+                ),
                 spawned_by_step_no=getattr(row, "spawned_by_step_no", None),
                 agent_key=_normalize_optional_text(getattr(row, "agent_key", None)),
             )

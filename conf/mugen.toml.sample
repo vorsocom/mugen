@@ -739,6 +739,12 @@ encoder.max_concurrency = 4
 # sampling_controls controls whether temperature/top_p are sent:
 # - "enabled" (default) preserves existing behavior.
 # - "disabled" omits temperature/top_p for models that reject sampling controls.
+# Reasoning-workflow adapters may use these optional nested defaults:
+# api.<operation>.reasoning.mode = "adaptive" | "enabled" | "disabled"
+# api.<operation>.reasoning.effort = "low" | "medium" | "high"
+# api.<operation>.reasoning.budget_tokens = 4096
+# api.<operation>.reasoning.include_encrypted_state = true
+# api.<operation>.reasoning.visibility = "opaque"
 # stream behavior and provider-specific extras can be overridden per request
 # through CompletionRequest vendor_params.
 api.classification.model = ""
