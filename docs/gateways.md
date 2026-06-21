@@ -270,6 +270,11 @@ OpenAI surface routing:
 - Per-request override:
   - `CompletionRequest.vendor_params["openai_api"]`
   - allowed values: `chat_completions`, `responses`
+- Requests with normalized `reasoning`, `tools`, `tool_results`, or
+  `continuation_state` automatically use Responses unless the request explicitly
+  sets `openai_api = "chat_completions"`.
+- Explicit Chat Completions requests that include normalized reasoning workflow
+  fields fail fast with `CompletionGatewayError`.
 
 Supports normalized inference fields:
 
@@ -335,6 +340,19 @@ OpenAI compatibility notes:
 - In Responses mode, system-role messages are joined into `instructions`; other
   messages are sent as `input`.
 - In Responses mode, token limit is sent as `max_output_tokens`.
+- In Responses mode, normalized `CompletionTool` values are serialized as flat
+  function tools (`type`, `name`, `description`, `parameters`, `strict`).
+- In Responses mode, normalized `CompletionToolResult` values are serialized as
+  `function_call_output` input items.
+- OpenAI continuation uses `previous_response_id` when available. Without a
+  response id, preserved reasoning/output items are replayed before new input
+  for stateless continuation.
+- `CompletionReasoningConfig.effort` maps to OpenAI `reasoning.effort`.
+  `include_encrypted_state = true` adds
+  `reasoning.encrypted_content` to `include`.
+- Responses output items are copied to `CompletionResponse.output_items`;
+  reasoning items and non-reasoning output items are retained in opaque
+  `CompletionContinuationState` for replay.
 - In Chat Completions mode, token limit defaults to `max_completion_tokens`.
 - Responses-mode validation/API failures are fail-fast; there is no implicit
   fallback to Chat Completions.

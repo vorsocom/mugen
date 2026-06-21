@@ -8,10 +8,14 @@ from typing import Any
 from openai import OpenAIError
 
 from mugen.core.contract.gateway.completion import (
+    CompletionContinuationState,
     CompletionGatewayError,
     CompletionInferenceConfig,
     CompletionMessage,
     CompletionRequest,
+    CompletionReasoningConfig,
+    CompletionTool,
+    CompletionToolResult,
 )
 from mugen.core.gateway.completion.openai import OpenAICompletionGateway
 
@@ -52,15 +56,21 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
 
     async def test_check_readiness_resolves_required_operation_configs(self) -> None:
         config = _make_config()
-        config.openai.api.dict["classification"] = dict(config.openai.api.dict["completion"])
+        config.openai.api.dict["classification"] = dict(
+            config.openai.api.dict["completion"]
+        )
         logging_gateway = Mock()
         api = SimpleNamespace(
             chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
             responses=SimpleNamespace(create=AsyncMock()),
-            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+            models=SimpleNamespace(
+                list=AsyncMock(return_value=SimpleNamespace(data=[]))
+            ),
         )
 
-        with patch("mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api
+        ):
             gateway = OpenAICompletionGateway(config, logging_gateway)
 
         await gateway.check_readiness()
@@ -68,7 +78,9 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
 
     async def test_check_readiness_raises_when_models_list_is_missing(self) -> None:
         config = _make_config()
-        config.openai.api.dict["classification"] = dict(config.openai.api.dict["completion"])
+        config.openai.api.dict["classification"] = dict(
+            config.openai.api.dict["completion"]
+        )
         logging_gateway = Mock()
         api = SimpleNamespace(
             chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
@@ -76,15 +88,21 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             models=SimpleNamespace(list=None),
         )
 
-        with patch("mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api
+        ):
             gateway = OpenAICompletionGateway(config, logging_gateway)
 
         with self.assertRaisesRegex(RuntimeError, "readiness probe unavailable"):
             await gateway.check_readiness()
 
-    async def test_check_readiness_falls_back_when_limit_kwarg_is_unsupported(self) -> None:
+    async def test_check_readiness_falls_back_when_limit_kwarg_is_unsupported(
+        self,
+    ) -> None:
         config = _make_config()
-        config.openai.api.dict["classification"] = dict(config.openai.api.dict["completion"])
+        config.openai.api.dict["classification"] = dict(
+            config.openai.api.dict["completion"]
+        )
         logging_gateway = Mock()
         calls: list[dict[str, object]] = []
 
@@ -104,7 +122,9 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             models=SimpleNamespace(list=_list_models),
         )
 
-        with patch("mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api
+        ):
             gateway = OpenAICompletionGateway(config, logging_gateway)
 
         await gateway.check_readiness()
@@ -113,12 +133,16 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
     async def test_check_readiness_uses_default_timeout_when_missing(self) -> None:
         config = _make_config()
         config.openai.api.timeout_seconds = None
-        config.openai.api.dict["classification"] = dict(config.openai.api.dict["completion"])
+        config.openai.api.dict["classification"] = dict(
+            config.openai.api.dict["completion"]
+        )
         logging_gateway = Mock()
         api = SimpleNamespace(
             chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
             responses=SimpleNamespace(create=AsyncMock()),
-            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+            models=SimpleNamespace(
+                list=AsyncMock(return_value=SimpleNamespace(data=[]))
+            ),
         )
 
         wait_for_calls: list[float] = []
@@ -129,22 +153,31 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api),
-            patch("mugen.core.gateway.completion.openai.asyncio.wait_for", side_effect=_wait_for),
+            patch(
+                "mugen.core.gateway.completion.openai.asyncio.wait_for",
+                side_effect=_wait_for,
+            ),
         ):
             gateway = OpenAICompletionGateway(config, logging_gateway)
             await gateway.check_readiness()
 
         self.assertEqual(wait_for_calls, [5.0])
 
-    async def test_check_readiness_uses_internal_timeout_value_without_fallback(self) -> None:
+    async def test_check_readiness_uses_internal_timeout_value_without_fallback(
+        self,
+    ) -> None:
         config = _make_config()
         config.openai.api.timeout_seconds = None
-        config.openai.api.dict["classification"] = dict(config.openai.api.dict["completion"])
+        config.openai.api.dict["classification"] = dict(
+            config.openai.api.dict["completion"]
+        )
         logging_gateway = Mock()
         api = SimpleNamespace(
             chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
             responses=SimpleNamespace(create=AsyncMock()),
-            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+            models=SimpleNamespace(
+                list=AsyncMock(return_value=SimpleNamespace(data=[]))
+            ),
         )
 
         wait_for_calls: list[float] = []
@@ -155,7 +188,10 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api),
-            patch("mugen.core.gateway.completion.openai.asyncio.wait_for", side_effect=_wait_for),
+            patch(
+                "mugen.core.gateway.completion.openai.asyncio.wait_for",
+                side_effect=_wait_for,
+            ),
         ):
             gateway = OpenAICompletionGateway(config, logging_gateway)
             gateway._timeout_seconds = 0  # pylint: disable=protected-access
@@ -165,12 +201,16 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
 
     async def test_check_readiness_wraps_probe_failures(self) -> None:
         config = _make_config()
-        config.openai.api.dict["classification"] = dict(config.openai.api.dict["completion"])
+        config.openai.api.dict["classification"] = dict(
+            config.openai.api.dict["completion"]
+        )
         logging_gateway = Mock()
         api = SimpleNamespace(
             chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
             responses=SimpleNamespace(create=AsyncMock()),
-            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+            models=SimpleNamespace(
+                list=AsyncMock(return_value=SimpleNamespace(data=[]))
+            ),
         )
 
         async def _wait_for(awaitable, timeout):
@@ -180,7 +220,10 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api),
-            patch("mugen.core.gateway.completion.openai.asyncio.wait_for", side_effect=_wait_for),
+            patch(
+                "mugen.core.gateway.completion.openai.asyncio.wait_for",
+                side_effect=_wait_for,
+            ),
         ):
             gateway = OpenAICompletionGateway(config, logging_gateway)
             with self.assertRaisesRegex(RuntimeError, "readiness probe failed"):
@@ -188,14 +231,20 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
 
     async def test_aclose_handles_missing_sync_and_async_close(self) -> None:
         config = _make_config()
-        config.openai.api.dict["classification"] = dict(config.openai.api.dict["completion"])
+        config.openai.api.dict["classification"] = dict(
+            config.openai.api.dict["completion"]
+        )
         logging_gateway = Mock()
         api = SimpleNamespace(
             chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
             responses=SimpleNamespace(create=AsyncMock()),
-            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+            models=SimpleNamespace(
+                list=AsyncMock(return_value=SimpleNamespace(data=[]))
+            ),
         )
-        with patch("mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api
+        ):
             gateway = OpenAICompletionGateway(config, logging_gateway)
 
         gateway._api = SimpleNamespace()  # pylint: disable=protected-access
@@ -211,9 +260,13 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             calls.append("async")
             return None
 
-        gateway._api = SimpleNamespace(close=_sync_close)  # pylint: disable=protected-access
+        gateway._api = SimpleNamespace(
+            close=_sync_close
+        )  # pylint: disable=protected-access
         self.assertIsNone(await gateway.aclose())
-        gateway._api = SimpleNamespace(close=_async_close)  # pylint: disable=protected-access
+        gateway._api = SimpleNamespace(
+            close=_async_close
+        )  # pylint: disable=protected-access
         self.assertIsNone(await gateway.aclose())
         self.assertEqual(calls, ["sync", "async"])
 
@@ -558,7 +611,9 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
         ):
             await gateway.get_completion(request)
 
-    async def test_get_completion_rejects_invalid_inference_stream_boolean(self) -> None:
+    async def test_get_completion_rejects_invalid_inference_stream_boolean(
+        self,
+    ) -> None:
         config = _make_config()
         logging_gateway = Mock()
         api = SimpleNamespace(
@@ -1313,7 +1368,9 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
         )
         api = SimpleNamespace(
             chat=SimpleNamespace(
-                completions=SimpleNamespace(create=AsyncMock(return_value=chat_payload)),
+                completions=SimpleNamespace(
+                    create=AsyncMock(return_value=chat_payload)
+                ),
             ),
             responses=SimpleNamespace(create=AsyncMock()),
         )
@@ -1335,7 +1392,9 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
         api.chat.completions.create.assert_awaited_once()
         api.responses.create.assert_not_called()
 
-    async def test_get_completion_chat_serializes_structured_message_content(self) -> None:
+    async def test_get_completion_chat_serializes_structured_message_content(
+        self,
+    ) -> None:
         config = _make_config()
         logging_gateway = Mock()
         chat_payload = SimpleNamespace(
@@ -1350,7 +1409,9 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
         )
         api = SimpleNamespace(
             chat=SimpleNamespace(
-                completions=SimpleNamespace(create=AsyncMock(return_value=chat_payload)),
+                completions=SimpleNamespace(
+                    create=AsyncMock(return_value=chat_payload)
+                ),
             ),
             responses=SimpleNamespace(create=AsyncMock()),
         )
@@ -1527,6 +1588,377 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.content, "ok")
         api.chat.completions.create.assert_not_called()
 
+    async def test_get_completion_auto_routes_normalized_tools_to_responses(
+        self,
+    ) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        response_payload = {
+            "id": "resp_tools",
+            "status": "completed",
+            "model": "gpt-4o-mini",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "ok"}],
+                }
+            ],
+        }
+        api = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=AsyncMock()),
+            ),
+            responses=SimpleNamespace(create=AsyncMock(return_value=response_payload)),
+        )
+
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI",
+            return_value=api,
+        ):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            tools=[
+                CompletionTool(
+                    name="lookup",
+                    description="Lookup a value.",
+                    input_schema={"type": "object", "properties": {"id": {}}},
+                    strict=True,
+                    provider_hints={"openai": {"extra": "hint"}},
+                )
+            ],
+            vendor_params={
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            "description": "Legacy duplicate.",
+                            "parameters": {"type": "object"},
+                        },
+                    }
+                ],
+                "tool_choice": "auto",
+            },
+        )
+
+        response = await gateway.get_completion(request)
+
+        _, kwargs = api.responses.create.await_args
+        self.assertEqual(response.content, "ok")
+        self.assertEqual(
+            kwargs["tools"],
+            [
+                {
+                    "type": "function",
+                    "name": "lookup",
+                    "description": "Lookup a value.",
+                    "parameters": {"type": "object", "properties": {"id": {}}},
+                    "strict": True,
+                    "extra": "hint",
+                }
+            ],
+        )
+        self.assertEqual(kwargs["tool_choice"], "auto")
+        api.chat.completions.create.assert_not_called()
+
+    async def test_get_completion_responses_serializes_reasoning_and_tool_results(
+        self,
+    ) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        response_payload = {
+            "id": "resp_next",
+            "previous_response_id": "resp_prev",
+            "conversation": {"id": "conv_1"},
+            "status": "completed",
+            "model": "gpt-5.5",
+            "output": [
+                {
+                    "id": "rs_1",
+                    "type": "reasoning",
+                    "encrypted_content": "sealed",
+                },
+                {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "done"}],
+                },
+            ],
+            "usage": {
+                "input_tokens": 4,
+                "output_tokens": 5,
+                "total_tokens": 9,
+                "output_tokens_details": {"reasoning_tokens": 3},
+            },
+        }
+        api = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=AsyncMock()),
+            ),
+            responses=SimpleNamespace(create=AsyncMock(return_value=response_payload)),
+        )
+
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI",
+            return_value=api,
+        ):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        request = CompletionRequest(
+            operation="completion",
+            model="gpt-5.5",
+            messages=[CompletionMessage(role="user", content="continue")],
+            reasoning=CompletionReasoningConfig(
+                effort="medium",
+                include_encrypted_state=True,
+            ),
+            tool_results=[
+                CompletionToolResult(
+                    tool_call_id="call_1",
+                    name="lookup",
+                    content={"ok": True},
+                )
+            ],
+            continuation_state=CompletionContinuationState(
+                provider="openai",
+                response_id="resp_prev",
+                output_items=[{"id": "msg_prev", "type": "message"}],
+                reasoning_items=[{"id": "rs_prev", "type": "reasoning"}],
+            ),
+        )
+
+        response = await gateway.get_completion(request)
+
+        _, kwargs = api.responses.create.await_args
+        self.assertEqual(kwargs["model"], "gpt-5.5")
+        self.assertEqual(kwargs["reasoning"], {"effort": "medium"})
+        self.assertEqual(kwargs["include"], ["reasoning.encrypted_content"])
+        self.assertEqual(kwargs["previous_response_id"], "resp_prev")
+        self.assertEqual(
+            kwargs["input"],
+            [
+                {"role": "user", "content": "continue"},
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": '{"ok": true}',
+                },
+            ],
+        )
+        self.assertEqual(response.content, "done")
+        self.assertEqual(response.usage.reasoning_tokens, 3)
+        self.assertEqual(response.reasoning_state.response_id, "resp_next")
+        self.assertEqual(response.reasoning_state.conversation_id, "conv_1")
+        self.assertEqual(response.reasoning_state.reasoning_items[0]["id"], "rs_1")
+        self.assertEqual(response.reasoning_state.output_items[0]["id"], "msg_1")
+        self.assertEqual(response.provider_state["previous_response_id"], "resp_prev")
+
+    async def test_get_completion_responses_replays_stateless_continuation_items(
+        self,
+    ) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        response_payload = {
+            "id": "resp_replay",
+            "status": "completed",
+            "model": "gpt-4o-mini",
+            "output": [],
+            "output_text": "ok",
+        }
+        api = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=AsyncMock()),
+            ),
+            responses=SimpleNamespace(create=AsyncMock(return_value=response_payload)),
+        )
+
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI",
+            return_value=api,
+        ):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="continue")],
+            tool_results=[
+                CompletionToolResult(
+                    tool_call_id="call_1",
+                    content="result",
+                    is_error=True,
+                )
+            ],
+            continuation_state=CompletionContinuationState(
+                provider="openai",
+                reasoning_items=[
+                    {
+                        "id": "rs_prev",
+                        "type": "reasoning",
+                        "encrypted_content": "sealed",
+                    }
+                ],
+                output_items=[
+                    {
+                        "id": "fc_prev",
+                        "type": "function_call",
+                        "name": "lookup",
+                        "call_id": "call_1",
+                        "arguments": "{}",
+                    }
+                ],
+            ),
+        )
+
+        await gateway.get_completion(request)
+
+        _, kwargs = api.responses.create.await_args
+        self.assertNotIn("previous_response_id", kwargs)
+        self.assertEqual(
+            kwargs["input"],
+            [
+                {
+                    "id": "rs_prev",
+                    "type": "reasoning",
+                    "encrypted_content": "sealed",
+                },
+                {
+                    "id": "fc_prev",
+                    "type": "function_call",
+                    "name": "lookup",
+                    "call_id": "call_1",
+                    "arguments": "{}",
+                },
+                {"role": "user", "content": "continue"},
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": '{"error": "result"}',
+                },
+            ],
+        )
+
+    async def test_get_completion_operation_reasoning_defaults_use_responses(
+        self,
+    ) -> None:
+        config = _make_config()
+        config.openai.api.dict["completion"]["reasoning"] = {
+            "effort": "low",
+            "include_encrypted_state": True,
+        }
+        logging_gateway = Mock()
+        response_payload = {
+            "id": "resp_reasoning_defaults",
+            "status": "completed",
+            "model": "gpt-5.5",
+            "output": [],
+            "output_text": "ok",
+        }
+        api = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=AsyncMock()),
+            ),
+            responses=SimpleNamespace(create=AsyncMock(return_value=response_payload)),
+        )
+
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI",
+            return_value=api,
+        ):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        await gateway.get_completion(_simple_request())
+
+        _, kwargs = api.responses.create.await_args
+        self.assertEqual(kwargs["reasoning"], {"effort": "low"})
+        self.assertEqual(kwargs["include"], ["reasoning.encrypted_content"])
+        api.chat.completions.create.assert_not_called()
+
+    async def test_get_completion_explicit_chat_rejects_normalized_workflow_fields(
+        self,
+    ) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        api = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=AsyncMock()),
+            ),
+            responses=SimpleNamespace(create=AsyncMock()),
+        )
+
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI",
+            return_value=api,
+        ):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            reasoning=CompletionReasoningConfig(effort="low"),
+            tools=[CompletionTool(name="lookup")],
+            tool_results=[CompletionToolResult(tool_call_id="call_1", content="x")],
+            continuation_state=CompletionContinuationState(provider="openai"),
+            vendor_params={"openai_api": "chat_completions"},
+        )
+
+        with self.assertRaisesRegex(
+            CompletionGatewayError,
+            "reasoning, tools, tool_results, continuation_state",
+        ):
+            await gateway.get_completion(request)
+        api.chat.completions.create.assert_not_called()
+        api.responses.create.assert_not_called()
+
+    async def test_get_completion_responses_merges_reasoning_and_preserves_state_id(
+        self,
+    ) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        response_payload = {
+            "id": "resp_merge",
+            "status": "completed",
+            "model": "gpt-5.5",
+            "output": [],
+            "output_text": "ok",
+        }
+        api = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=AsyncMock()),
+            ),
+            responses=SimpleNamespace(create=AsyncMock(return_value=response_payload)),
+        )
+
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI",
+            return_value=api,
+        ):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            reasoning=CompletionReasoningConfig(effort="low"),
+            continuation_state=CompletionContinuationState(
+                provider="openai",
+                response_id="resp_state",
+            ),
+            vendor_params={
+                "reasoning": {"summary": "auto"},
+                "previous_response_id": "resp_vendor",
+            },
+        )
+
+        await gateway.get_completion(request)
+
+        _, kwargs = api.responses.create.await_args
+        self.assertEqual(kwargs["reasoning"], {"effort": "low", "summary": "auto"})
+        self.assertEqual(kwargs["previous_response_id"], "resp_state")
+
     async def test_get_completion_responses_does_not_emit_chat_only_fields(
         self,
     ) -> None:
@@ -1676,15 +2108,22 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
 
         response = await gateway.get_completion(_simple_request())
 
-        self.assertEqual(response.tool_calls[0]["id"], "fc_1")
+        self.assertEqual(response.tool_calls[0].id, "call_1")
+        self.assertEqual(response.tool_calls[0].name, "lookup_weather")
+        self.assertEqual(response.tool_calls[0].arguments, {"city": "Paris"})
         self.assertEqual(response.usage.input_tokens, 10)
         self.assertEqual(response.usage.output_tokens, 4)
+        self.assertEqual(response.usage.reasoning_tokens, 2)
         self.assertEqual(
             response.usage.vendor_fields["output_tokens_details"]["reasoning_tokens"],
             2,
         )
         self.assertEqual(response.vendor_fields["id"], "resp_5")
         self.assertEqual(response.vendor_fields["status"], "completed")
+        self.assertEqual(response.output_items[1]["id"], "fc_1")
+        self.assertEqual(response.reasoning_state.response_id, "resp_5")
+        self.assertEqual(response.reasoning_state.output_items[1]["id"], "fc_1")
+        self.assertEqual(response.provider_state["id"], "resp_5")
 
     async def test_get_completion_responses_stream_aggregates_events(self) -> None:
         config = _make_config()
@@ -1761,14 +2200,14 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
         response = await gateway.get_completion(request)
 
         self.assertEqual(response.content, "hello")
-        self.assertEqual(response.tool_calls[0]["id"], "fc_2")
-        self.assertEqual(response.tool_calls[0]["arguments"], "{\"city\":\"Paris\"}")
+        self.assertEqual(response.tool_calls[0].id, "call_2")
+        self.assertEqual(response.tool_calls[0].arguments, {"city": "Paris"})
         self.assertEqual(response.usage.total_tokens, 9)
         self.assertEqual(response.vendor_fields["stream_text_deltas"], "hello")
         self.assertEqual(response.vendor_fields["stream_output_items"][0]["id"], "fc_2")
         self.assertEqual(
             response.vendor_fields["stream_tool_call_arguments"]["fc_2"],
-            "{\"city\":\"Paris\"}",
+            '{"city":"Paris"}',
         )
 
     async def test_get_completion_responses_stream_raises_on_error_event(
@@ -1843,7 +2282,9 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             chat=SimpleNamespace(
                 completions=SimpleNamespace(create=AsyncMock()),
             ),
-            responses=SimpleNamespace(create=AsyncMock(return_value=_stream_chunks([]))),
+            responses=SimpleNamespace(
+                create=AsyncMock(return_value=_stream_chunks([]))
+            ),
         )
 
         with patch(
@@ -2267,9 +2708,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             [
                 {
                     "type": "response.incomplete",
-                    "response": {
-                        "incomplete_details": {"reason": "max_output_tokens"}
-                    },
+                    "response": {"incomplete_details": {"reason": "max_output_tokens"}},
                 }
             ]
         )
@@ -2366,9 +2805,9 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
                 {"id": "new", "type": "function_call", "arguments": ""},
             ],
             stream_tool_call_arguments={
-                "known": "{\"a\":1}",
-                "new": "{\"b\":2}",
-                "orphan": "{\"c\":3}",
+                "known": '{"a":1}',
+                "new": '{"b":2}',
+                "orphan": '{"c":3}',
             },
         )
         self.assertTrue(any(item.get("id") == "orphan" for item in merged))
@@ -2402,6 +2841,142 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
                 return {}
 
         self.assertIsNone(gateway._usage_from_payload(_EmptyPayload()))
+
+    def test_responses_workflow_helper_branches(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI",
+            return_value=Mock(),
+        ):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+        )
+        self.assertIsNone(
+            gateway._resolve_responses_reasoning(
+                request=request,
+                operation_config={"model": "gpt-4o-mini"},
+            )
+        )
+        self.assertIsNone(
+            gateway._resolve_responses_reasoning(
+                request=request,
+                operation_config={
+                    "model": "gpt-4o-mini",
+                    "reasoning": {"mode": "disabled", "effort": "low"},
+                },
+            )
+        )
+        self.assertEqual(
+            gateway._resolve_responses_reasoning(
+                request=CompletionRequest(
+                    operation="completion",
+                    messages=[],
+                    reasoning=CompletionReasoningConfig(mode="enabled"),
+                ),
+                operation_config={"model": "gpt-4o-mini"},
+            ),
+            {},
+        )
+        self.assertEqual(
+            gateway._resolve_previous_response_id(
+                CompletionRequest(
+                    operation="completion",
+                    messages=[],
+                    continuation_state=CompletionContinuationState(
+                        provider="openai",
+                        provider_state={"previous_response_id": " resp_prev "},
+                    ),
+                )
+            ),
+            "resp_prev",
+        )
+        self.assertEqual(
+            gateway._merge_responses_include_values(
+                "reasoning.encrypted_content",
+                ["reasoning.encrypted_content", "message.output_text.logprobs", 1],
+            ),
+            ["reasoning.encrypted_content", "message.output_text.logprobs"],
+        )
+        self.assertEqual(
+            gateway._merge_responses_include_values(["a", "a"], []),
+            ["a"],
+        )
+        self.assertEqual(gateway._iter_string_values({"bad": True}), [])
+        self.assertEqual(
+            gateway._merge_dict_values({"effort": "low"}, "ignored"),
+            {"effort": "low"},
+        )
+        self.assertEqual(
+            gateway._serialize_responses_contract_tool(CompletionTool(name="minimal")),
+            {
+                "type": "function",
+                "name": "minimal",
+                "parameters": {},
+            },
+        )
+        self.assertEqual(
+            gateway._merge_responses_tools(
+                [{"type": "function"}],
+                [
+                    1,
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "with_extra",
+                            "parameters": {"type": "object"},
+                        },
+                        "metadata": {"x": 1},
+                    },
+                ],
+            ),
+            [
+                {"type": "function"},
+                {
+                    "type": "function",
+                    "name": "with_extra",
+                    "parameters": {"type": "object"},
+                    "metadata": {"x": 1},
+                },
+            ],
+        )
+        self.assertEqual(
+            gateway._serialize_tool_result_output(
+                CompletionToolResult(tool_call_id="call_1", content="ok")
+            ),
+            "ok",
+        )
+        self.assertEqual(
+            gateway._serialize_tool_result_output(
+                CompletionToolResult(
+                    tool_call_id="call_1",
+                    content={"bad": True},
+                    is_error=True,
+                )
+            ),
+            '{"error": {"bad": true}}',
+        )
+
+        numeric_state = gateway._responses_reasoning_state(
+            response_payload={"id": 123, "conversation": {"id": 456}},
+            output_items=[{"id": "rs", "type": "reasoning"}],
+            reasoning_items=[{"id": "rs", "type": "reasoning"}],
+            provider_state={},
+        )
+        self.assertEqual(numeric_state.response_id, "123")
+        self.assertEqual(numeric_state.conversation_id, "456")
+
+        string_conversation_state = gateway._responses_reasoning_state(
+            response_payload={"conversation": "conv_string"},
+            output_items=[],
+            reasoning_items=[],
+            provider_state={},
+        )
+        self.assertEqual(string_conversation_state.conversation_id, "conv_string")
 
     def test_constructor_raises_when_timeout_missing_in_production(self) -> None:
         config = _make_config()
