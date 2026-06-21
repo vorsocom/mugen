@@ -12,6 +12,8 @@ from mugen.core.contract.gateway.completion import (
 )
 
 REDACTED_VALUE = "<redacted>"
+COMPLETION_CONTINUATION_STATE_METADATA_KEY = "completion_continuation_state"
+COMPLETION_TOOL_CALL_ID_METADATA_KEY = "completion_tool_call_id"
 
 _SENSITIVE_KEYS = {
     "api_key",
@@ -103,6 +105,50 @@ def serialize_continuation_state_for_log(
     if isinstance(state, dict):
         return CompletionContinuationState.from_dict(state).to_redacted_dict()
     return {"provider_state": REDACTED_VALUE}
+
+
+def completion_continuation_state_from_metadata(
+    metadata: dict[str, Any] | None,
+) -> CompletionContinuationState | None:
+    """Return durable completion continuation state from a metadata payload."""
+    if not isinstance(metadata, dict):
+        return None
+    payload = metadata.get(COMPLETION_CONTINUATION_STATE_METADATA_KEY)
+    if isinstance(payload, CompletionContinuationState):
+        return payload
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return CompletionContinuationState.from_dict(payload)
+    except (TypeError, ValueError):
+        return None
+
+
+def metadata_with_completion_continuation_state(
+    metadata: dict[str, Any] | None,
+    state: CompletionContinuationState | None,
+) -> dict[str, Any]:
+    """Return metadata with raw continuation state preserved for replay."""
+    merged = dict(metadata or {})
+    if state is None:
+        return merged
+    merged[COMPLETION_CONTINUATION_STATE_METADATA_KEY] = state.to_dict()
+    return merged
+
+
+def serialize_completion_metadata_for_log(
+    metadata: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Serialize metadata while summarizing opaque continuation payloads."""
+    if not isinstance(metadata, dict):
+        return {}
+    redacted = redact_provider_payload(dict(metadata))
+    state = completion_continuation_state_from_metadata(metadata)
+    if state is not None:
+        redacted[COMPLETION_CONTINUATION_STATE_METADATA_KEY] = (
+            serialize_continuation_state_for_log(state)
+        )
+    return redacted
 
 
 def redact_provider_payload(value: Any) -> Any:

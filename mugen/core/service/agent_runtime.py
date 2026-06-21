@@ -51,8 +51,16 @@ from mugen.core.contract.agent import (
     PreparedPlanRun,
 )
 from mugen.core.contract.context import ContextScope
-from mugen.core.contract.gateway.completion import CompletionResponse
+from mugen.core.contract.gateway.completion import (
+    CompletionContinuationState,
+    CompletionResponse,
+)
 from mugen.core.contract.gateway.completion_workflow import (
+    COMPLETION_TOOL_CALL_ID_METADATA_KEY,
+    completion_continuation_state_from_metadata,
+    metadata_with_completion_continuation_state,
+    redact_provider_payload,
+    serialize_completion_metadata_for_log,
     serialize_completion_response_for_log,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
@@ -102,10 +110,10 @@ def _serialize_capability_result(
     return {
         "capability_key": result.capability_key,
         "ok": result.ok,
-        "result": result.result,
+        "result": redact_provider_payload(result.result),
         "status_code": result.status_code,
         "error_message": result.error_message,
-        "metadata": dict(result.metadata),
+        "metadata": serialize_completion_metadata_for_log(result.metadata),
     }
 
 
@@ -137,8 +145,8 @@ def _serialize_artifact_ref(artifact: DelegationArtifactRef) -> dict[str, Any]:
         "source_run_id": artifact.source_run_id,
         "source_step_sequence_no": artifact.source_step_sequence_no,
         "summary": artifact.summary,
-        "payload": dict(artifact.payload),
-        "metadata": dict(artifact.metadata),
+        "payload": redact_provider_payload(dict(artifact.payload)),
+        "metadata": serialize_completion_metadata_for_log(artifact.metadata),
     }
 
 
@@ -162,7 +170,7 @@ def _serialize_delegation_instruction(
         "service_route_key": delegation.service_route_key,
         "artifacts": [_serialize_artifact_ref(item) for item in delegation.artifacts],
         "required": delegation.required,
-        "metadata": dict(delegation.metadata),
+        "metadata": serialize_completion_metadata_for_log(delegation.metadata),
     }
 
 
@@ -174,7 +182,7 @@ def _serialize_join_policy(policy: JoinPolicy | None) -> dict[str, Any] | None:
         "on_required_child_failed": policy.on_required_child_failed.value,
         "on_required_child_handoff": policy.on_required_child_handoff.value,
         "on_required_child_stopped": policy.on_required_child_stopped.value,
-        "metadata": dict(policy.metadata),
+        "metadata": serialize_completion_metadata_for_log(policy.metadata),
     }
 
 
@@ -208,7 +216,7 @@ def _serialize_join_state(join_state: JoinState | None) -> dict[str, Any] | None
             None if join_state.timeout_at is None else join_state.timeout_at.isoformat()
         ),
         "policy": _serialize_join_policy(join_state.policy),
-        "metadata": dict(join_state.metadata),
+        "metadata": serialize_completion_metadata_for_log(join_state.metadata),
     }
 
 
@@ -253,13 +261,13 @@ def _serialize_observation(observation: PlanObservation) -> dict[str, Any]:
     return {
         "kind": observation.kind,
         "summary": observation.summary,
-        "payload": dict(observation.payload),
+        "payload": redact_provider_payload(dict(observation.payload)),
         "success": observation.success,
         "capability_result": _serialize_capability_result(
             observation.capability_result
         ),
         "completion": _serialize_completion(observation.completion),
-        "metadata": dict(observation.metadata),
+        "metadata": serialize_completion_metadata_for_log(observation.metadata),
     }
 
 
@@ -271,9 +279,9 @@ def _serialize_decision(decision: PlanDecision) -> dict[str, Any]:
         "capability_invocations": [
             {
                 "capability_key": item.capability_key,
-                "arguments": dict(item.arguments),
+                "arguments": redact_provider_payload(dict(item.arguments)),
                 "idempotency_key": item.idempotency_key,
-                "metadata": dict(item.metadata),
+                "metadata": serialize_completion_metadata_for_log(item.metadata),
             }
             for item in decision.capability_invocations
         ],
@@ -288,11 +296,11 @@ def _serialize_decision(decision: PlanDecision) -> dict[str, Any]:
         "background_payload": (
             None
             if decision.background_payload is None
-            else dict(decision.background_payload)
+            else redact_provider_payload(dict(decision.background_payload))
         ),
         "completion": _serialize_completion(decision.completion),
         "rationale_summary": decision.rationale_summary,
-        "metadata": dict(decision.metadata),
+        "metadata": serialize_completion_metadata_for_log(decision.metadata),
     }
 
 
@@ -306,7 +314,7 @@ def _serialize_evaluation(result: EvaluationResult) -> dict[str, Any]:
             if result.recommended_decision is None
             else result.recommended_decision.value
         ),
-        "metadata": dict(result.metadata),
+        "metadata": serialize_completion_metadata_for_log(result.metadata),
     }
 
 
@@ -318,8 +326,32 @@ def _serialize_outcome(outcome: PlanOutcome) -> dict[str, Any]:
         "completion": _serialize_completion(outcome.completion),
         "background_run_id": outcome.background_run_id,
         "error_message": outcome.error_message,
-        "metadata": dict(outcome.metadata),
+        "metadata": serialize_completion_metadata_for_log(outcome.metadata),
     }
+
+
+def _completion_continuation_state_from_completion(
+    completion: CompletionResponse | None,
+) -> CompletionContinuationState | None:
+    if completion is None:
+        return None
+    return completion.reasoning_state
+
+
+def _latest_completion_continuation_state(
+    run: PreparedPlanRun,
+    *,
+    completion: CompletionResponse | None = None,
+) -> CompletionContinuationState | None:
+    return (
+        _completion_continuation_state_from_completion(completion)
+        or completion_continuation_state_from_metadata(run.state.metadata)
+    )
+
+
+def _tool_call_id_for_invocation(invocation: CapabilityInvocation) -> str | None:
+    metadata_value = invocation.metadata.get(COMPLETION_TOOL_CALL_ID_METADATA_KEY)
+    return _normalize_optional_text(metadata_value) or invocation.idempotency_key
 
 
 def _first_text_response(
@@ -892,6 +924,10 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                 request,
                 run,
                 observations,
+            )
+            run = await self._persist_completion_continuation_state(
+                run=run,
+                completion=decision.completion,
             )
             run = await self._append_step(
                 request=request,
@@ -1496,6 +1532,18 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                 run,
                 invocation,
             )
+            tool_call_id = _tool_call_id_for_invocation(invocation)
+            result_metadata = dict(result.metadata)
+            observation_metadata: dict[str, Any] = {}
+            if tool_call_id is not None:
+                result_metadata.setdefault(
+                    COMPLETION_TOOL_CALL_ID_METADATA_KEY,
+                    tool_call_id,
+                )
+                result.metadata = result_metadata
+                observation_metadata[COMPLETION_TOOL_CALL_ID_METADATA_KEY] = (
+                    tool_call_id
+                )
             observation = PlanObservation(
                 kind="capability_result",
                 summary=result.error_message or invocation.capability_key,
@@ -1506,6 +1554,7 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                 },
                 success=result.ok,
                 capability_result=result,
+                metadata=observation_metadata,
             )
             observations.append(observation)
             run = await self._append_step(
@@ -1633,6 +1682,10 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
         run: PreparedPlanRun,
         outcome: PlanOutcome,
     ) -> PlanOutcome:
+        outcome = self._outcome_with_completion_continuation_state(
+            run=run,
+            outcome=outcome,
+        )
         finalized_outcome = await self._plan_run_store_service.finalize_run(
             run_id=run.run_id,
             outcome=outcome,
@@ -1654,6 +1707,42 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
             outcome=finalized_outcome,
         )
         return finalized_outcome
+
+    async def _persist_completion_continuation_state(
+        self,
+        *,
+        run: PreparedPlanRun,
+        completion: CompletionResponse | None,
+    ) -> PreparedPlanRun:
+        state = _completion_continuation_state_from_completion(completion)
+        if state is None:
+            return run
+        metadata = metadata_with_completion_continuation_state(
+            run.state.metadata,
+            state,
+        )
+        if metadata == run.state.metadata:
+            return run
+        run.state.metadata = metadata
+        return await self._plan_run_store_service.save_run(run)
+
+    @staticmethod
+    def _outcome_with_completion_continuation_state(
+        *,
+        run: PreparedPlanRun,
+        outcome: PlanOutcome,
+    ) -> PlanOutcome:
+        state = _latest_completion_continuation_state(
+            run,
+            completion=outcome.completion,
+        )
+        if state is None:
+            return outcome
+        outcome.metadata = metadata_with_completion_continuation_state(
+            outcome.metadata,
+            state,
+        )
+        return outcome
 
     async def _append_step(
         self,
