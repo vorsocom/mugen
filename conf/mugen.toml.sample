@@ -510,10 +510,12 @@ api.classification.model = "placeholder-model"
 api.classification.max_completion_tokens = 1024
 api.classification.temp = 0.0
 api.classification.top_p = 0.9
+api.classification.sampling_controls = "enabled"
 api.completion.model = "placeholder-model"
 api.completion.max_completion_tokens = 1024
 api.completion.temp = 0.0
 api.completion.top_p = 0.9
+api.completion.sampling_controls = "enabled"
 api.region = ""
 # Pair with api.access_key_id when using explicit AWS credentials.
 api.secret_access_key = "<aws-secret-access-key>"
@@ -549,11 +551,13 @@ api.classification.model = ""
 api.classification.surface = "chat_completions"
 api.classification.temp = 0.0
 api.classification.top_p = 1.0
+api.classification.sampling_controls = "enabled"
 api.classification.max_completion_tokens = 1024
 api.completion.model = ""
 api.completion.surface = "chat_completions"
 api.completion.temp = 0.0
 api.completion.top_p = 1.0
+api.completion.sampling_controls = "enabled"
 api.completion.max_completion_tokens = 1024
 api.base_url = ""
 # Optional query parameter sent as `api-version=<value>`.
@@ -574,11 +578,13 @@ api.classification.model = ""
 api.classification.surface = "chat_completions"
 api.classification.temp = 0.0
 api.classification.top_p = 1.0
+api.classification.sampling_controls = "enabled"
 api.classification.max_completion_tokens = 1024
 api.completion.model = ""
 api.completion.surface = "chat_completions"
 api.completion.temp = 0.0
 api.completion.top_p = 1.0
+api.completion.sampling_controls = "enabled"
 api.completion.max_completion_tokens = 1024
 api.base_url = "https://api.cerebras.ai/v1"
 api.timeout_seconds = 30.0
@@ -616,10 +622,12 @@ api.access_token = ""
 api.classification.model = ""
 api.classification.temp = 0.0
 api.classification.top_p = 1.0
+api.classification.sampling_controls = "enabled"
 api.classification.max_completion_tokens = 1024
 api.completion.model = ""
 api.completion.temp = 0.0
 api.completion.top_p = 1.0
+api.completion.sampling_controls = "enabled"
 api.completion.max_completion_tokens = 1024
 api.connect_timeout_seconds = 10.0
 api.read_timeout_seconds = 30.0
@@ -631,9 +639,11 @@ api.read_timeout_seconds = 30.0
 api.classification.model = ""
 api.classification.temp = 0.0
 api.classification.top_p = 1.0
+api.classification.sampling_controls = "enabled"
 api.completion.model = ""
 api.completion.temp = 0.0
 api.completion.top_p = 1.0
+api.completion.sampling_controls = "enabled"
 api.timeout_seconds = 30.0
 # Provider auth key used for Groq requests.
 api.key = "<groq-api-key>"
@@ -726,17 +736,22 @@ encoder.max_concurrency = 4
 # Per-request override remains available through
 # CompletionRequest.vendor_params["openai_api"].
 # max_completion_tokens is the canonical token-limit field.
+# sampling_controls controls whether temperature/top_p are sent:
+# - "enabled" (default) preserves existing behavior.
+# - "disabled" omits temperature/top_p for models that reject sampling controls.
 # stream behavior and provider-specific extras can be overridden per request
 # through CompletionRequest vendor_params.
 api.classification.model = ""
 api.classification.surface = "chat_completions"
 api.classification.temp = 0.0
 api.classification.top_p = 1.0
+api.classification.sampling_controls = "enabled"
 api.classification.max_completion_tokens = 1024
 api.completion.model = ""
 api.completion.surface = "chat_completions"
 api.completion.temp = 0.0
 api.completion.top_p = 1.0
+api.completion.sampling_controls = "enabled"
 api.completion.max_completion_tokens = 1024
 api.base_url = ""
 api.timeout_seconds = 30.0
@@ -863,10 +878,12 @@ version_table_schema = "mugen"
 api.classification.model = ""
 api.classification.max_completion_tokens = 1024
 api.classification.temp = 0.0
+api.classification.sampling_controls = "enabled"
 api.classification.stop = []
 api.completion.model = ""
 api.completion.max_completion_tokens = 1024
 api.completion.temp = 0.0
+api.completion.sampling_controls = "enabled"
 api.completion.stop = []
 api.endpoint = ""
 api.connect_timeout_seconds = 10.0

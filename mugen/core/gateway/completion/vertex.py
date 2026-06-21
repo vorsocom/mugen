@@ -24,6 +24,9 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.gateway.completion.message_serialization import (
     serialize_completion_message_content,
 )
+from mugen.core.gateway.completion.sampling_controls import (
+    resolve_sampling_parameter_kwargs,
+)
 from mugen.core.gateway.completion.timeout_config import (
     parse_bool_like,
     require_fields_in_production,
@@ -392,17 +395,16 @@ class VertexCompletionGateway(ICompletionGateway):
         if max_tokens is not None:
             generation_config["maxOutputTokens"] = int(max_tokens)
 
-        temperature = request.inference.temperature
-        if temperature is None and "temp" in operation_config:
-            temperature = float(operation_config["temp"])
-        if temperature is not None:
-            generation_config["temperature"] = float(temperature)
-
-        top_p = request.inference.top_p
-        if top_p is None and "top_p" in operation_config:
-            top_p = float(operation_config["top_p"])
-        if top_p is not None:
-            generation_config["topP"] = float(top_p)
+        generation_config.update(
+            resolve_sampling_parameter_kwargs(
+                request=request,
+                operation_config=operation_config,
+                provider=self._provider,
+                provider_label="VertexCompletionGateway",
+                timeout_applied=self._read_timeout_seconds,
+                top_p_key="topP",
+            )
+        )
 
         stop_sequences = self._resolve_stop_sequences(
             request,

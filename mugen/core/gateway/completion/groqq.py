@@ -20,6 +20,9 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.gateway.completion.message_serialization import (
     serialize_completion_message_dict,
 )
+from mugen.core.gateway.completion.sampling_controls import (
+    resolve_sampling_parameter_kwargs,
+)
 from mugen.core.gateway.completion.timeout_config import (
     parse_bool_like,
     require_fields_in_production,
@@ -200,13 +203,6 @@ class GroqCompletionGateway(ICompletionGateway):
         operation_config: dict[str, Any],
     ) -> tuple[str, dict[str, Any]]:
         model = request.model or operation_config["model"]
-        temperature = request.inference.temperature
-        if temperature is None:
-            temperature = float(operation_config.get("temp", 0.0))
-
-        top_p = request.inference.top_p
-        if top_p is None:
-            top_p = float(operation_config.get("top_p", 1.0))
 
         stream = self._parse_bool_like(
             request=request,
@@ -220,10 +216,19 @@ class GroqCompletionGateway(ICompletionGateway):
                 for message in request.messages
             ],
             "model": model,
-            "temperature": temperature,
-            "top_p": top_p,
             "stream": stream,
         }
+        kwargs.update(
+            resolve_sampling_parameter_kwargs(
+                request=request,
+                operation_config=operation_config,
+                provider=self._provider,
+                provider_label="GroqCompletionGateway",
+                timeout_applied=self._timeout_seconds,
+                default_temperature=0.0,
+                default_top_p=1.0,
+            )
+        )
 
         stream_options = request.inference.stream_options
         if kwargs["stream"] and isinstance(stream_options, dict) and stream_options:

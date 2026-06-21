@@ -164,7 +164,10 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
                 "_perform_request",
                 return_value=(400, '{"error":{"message":"validation error"}}'),
             ),
-            patch("mugen.core.gateway.completion.sambanova.asyncio.wait_for", side_effect=_wait_for),
+            patch(
+                "mugen.core.gateway.completion.sambanova.asyncio.wait_for",
+                side_effect=_wait_for,
+            ),
         ):
             await gateway.check_readiness()
 
@@ -285,6 +288,30 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["tools"], [{"type": "function"}])
         self.assertEqual(body["user"], "u-1")
 
+    async def test_get_completion_disables_sampling_controls(self) -> None:
+        config = _make_config()
+        config.sambanova.api.dict["completion"]["sampling_controls"] = "disabled"
+        logging_gateway = Mock()
+        gateway = SambaNovaCompletionGateway(config, logging_gateway)
+        payload = '{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            inference=CompletionInferenceConfig(temperature=0.8, top_p=0.3),
+        )
+
+        with patch.object(
+            SambaNovaCompletionGateway,
+            "_perform_request",
+            return_value=(200, payload),
+        ) as perform_request:
+            await gateway.get_completion(request)
+
+        _, kwargs = perform_request.call_args
+        body = kwargs["body"]
+        self.assertNotIn("temperature", body)
+        self.assertNotIn("top_p", body)
+
     async def test_get_completion_defaults_to_bearer_auth_header(self) -> None:
         config = _make_config()
         logging_gateway = Mock()
@@ -302,7 +329,9 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
         headers = kwargs["headers"]
         self.assertIn("Authorization: Bearer basic_key", headers)
 
-    async def test_get_completion_rejects_removed_legacy_auth_vendor_param(self) -> None:
+    async def test_get_completion_rejects_removed_legacy_auth_vendor_param(
+        self,
+    ) -> None:
         config = _make_config()
         logging_gateway = Mock()
         gateway = SambaNovaCompletionGateway(config, logging_gateway)
@@ -557,7 +586,9 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
         body = kwargs["body"]
         self.assertEqual(body["stop"], ["A", "B"])
 
-    async def test_get_completion_preserves_structured_message_and_tool_calls(self) -> None:
+    async def test_get_completion_preserves_structured_message_and_tool_calls(
+        self,
+    ) -> None:
         config = _make_config()
         logging_gateway = Mock()
         gateway = SambaNovaCompletionGateway(config, logging_gateway)
@@ -631,7 +662,9 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             "output_text",
         )
 
-    async def test_get_completion_stream_preserves_structured_object_delta(self) -> None:
+    async def test_get_completion_stream_preserves_structured_object_delta(
+        self,
+    ) -> None:
         config = _make_config()
         logging_gateway = Mock()
         gateway = SambaNovaCompletionGateway(config, logging_gateway)
@@ -810,8 +843,8 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             operation="completion",
             payload=(
                 ": keepalive\n"
-                "data: {\"choices\":[{\"delta\":{\"content\":\"line two\"},\n"
-                "data: \"finish_reason\":\"stop\"}]}\n\n"
+                'data: {"choices":[{"delta":{"content":"line two"},\n'
+                'data: "finish_reason":"stop"}]}\n\n'
                 "data: [DONE]\n\n"
             ),
         )
@@ -832,7 +865,9 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
     def test_parse_streaming_response_raises_for_malformed_json_event(self) -> None:
         config = _make_config()
         gateway = SambaNovaCompletionGateway(config, Mock())
-        with self.assertRaisesRegex(CompletionGatewayError, "Malformed SambaNova SSE frame payload"):
+        with self.assertRaisesRegex(
+            CompletionGatewayError, "Malformed SambaNova SSE frame payload"
+        ):
             gateway._parse_streaming_response(
                 model="Meta-Llama-3.1-70B-Instruct",
                 operation="completion",
@@ -855,7 +890,9 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             [{"type": "output_text", "text": "ok"}],
         )
 
-    def test_parse_streaming_response_ignores_unsupported_delta_content_types(self) -> None:
+    def test_parse_streaming_response_ignores_unsupported_delta_content_types(
+        self,
+    ) -> None:
         config = _make_config()
         gateway = SambaNovaCompletionGateway(config, Mock())
         response = gateway._parse_streaming_response(
@@ -866,7 +903,9 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.content, "")
         self.assertEqual(response.stop_reason, "stop")
 
-    def test_parse_sse_data_frames_supports_lines_without_colons_and_terminal_flush(self) -> None:
+    def test_parse_sse_data_frames_supports_lines_without_colons_and_terminal_flush(
+        self,
+    ) -> None:
         config = _make_config()
         gateway = SambaNovaCompletionGateway(config, Mock())
         self.assertEqual(
@@ -893,7 +932,9 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
                 payload=" :value\n\n",
             )
 
-    def test_parse_sse_data_frames_ignores_blank_lines_without_active_event(self) -> None:
+    def test_parse_sse_data_frames_ignores_blank_lines_without_active_event(
+        self,
+    ) -> None:
         config = _make_config()
         gateway = SambaNovaCompletionGateway(config, Mock())
         self.assertEqual(
@@ -952,7 +993,9 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
         gateway = SambaNovaCompletionGateway(_make_config(), Mock())
         self.assertEqual(
             gateway._resolve_stream_options(  # pylint: disable=protected-access
-                CompletionRequest(messages=[CompletionMessage(role="user", content="x")])
+                CompletionRequest(
+                    messages=[CompletionMessage(role="user", content="x")]
+                )
             ),
             {"include_usage": False},
         )
@@ -969,14 +1012,18 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             SambaNovaCompletionGateway._resolve_stop_sequences(
-                CompletionRequest(messages=[CompletionMessage(role="user", content="x")]),
+                CompletionRequest(
+                    messages=[CompletionMessage(role="user", content="x")]
+                ),
                 operation_config={"stop": "###"},
             ),
             ["###"],
         )
         self.assertEqual(
             SambaNovaCompletionGateway._resolve_stop_sequences(
-                CompletionRequest(messages=[CompletionMessage(role="user", content="x")]),
+                CompletionRequest(
+                    messages=[CompletionMessage(role="user", content="x")]
+                ),
                 operation_config={"stop": ["A", 1, "B", ""]},
             ),
             ["A", "B"],
@@ -1053,7 +1100,9 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
             ):
                 await gateway.get_completion(request)
 
-    async def test_get_completion_rejects_invalid_inference_stream_boolean(self) -> None:
+    async def test_get_completion_rejects_invalid_inference_stream_boolean(
+        self,
+    ) -> None:
         config = _make_config()
         logging_gateway = Mock()
         gateway = SambaNovaCompletionGateway(config, logging_gateway)
@@ -1132,7 +1181,9 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
                 return
 
         with patch("mugen.core.gateway.completion.sambanova.pycurl.Curl", _FakeCurl):
-            gateway._perform_request(headers=["h: v"], body={"hello": "world"})  # pylint: disable=protected-access
+            gateway._perform_request(
+                headers=["h: v"], body={"hello": "world"}
+            )  # pylint: disable=protected-access
 
         self.assertIn(
             4000,
@@ -1178,12 +1229,16 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
                 return
 
         with patch("mugen.core.gateway.completion.sambanova.pycurl.Curl", _FakeCurl):
-            gateway._perform_request(headers=["h: v"], body={"hello": "world"})  # pylint: disable=protected-access
+            gateway._perform_request(
+                headers=["h: v"], body={"hello": "world"}
+            )  # pylint: disable=protected-access
 
         self.assertIn(250, options.values())
         self.assertIn(500, options.values())
 
-    def test_production_with_timeouts_does_not_emit_missing_timeout_warnings(self) -> None:
+    def test_production_with_timeouts_does_not_emit_missing_timeout_warnings(
+        self,
+    ) -> None:
         config = _make_config()
         config.mugen = SimpleNamespace(environment="production")
         config.sambanova.api.connect_timeout_seconds = 3
@@ -1236,7 +1291,9 @@ class TestMugenGatewayCompletionSambaNova(unittest.IsolatedAsyncioTestCase):
                 return_value=None,
             ),
         ):
-            gateway._perform_request(headers=["h: v"], body={"hello": "world"})  # pylint: disable=protected-access
+            gateway._perform_request(
+                headers=["h: v"], body={"hello": "world"}
+            )  # pylint: disable=protected-access
 
         self.assertIn(
             sambanova_mod.pycurl.CONNECTTIMEOUT_MS,

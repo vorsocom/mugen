@@ -20,6 +20,9 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.gateway.completion.message_serialization import (
     serialize_completion_message_dict,
 )
+from mugen.core.gateway.completion.sampling_controls import (
+    resolve_sampling_parameter_kwargs,
+)
 from mugen.core.gateway.completion.timeout_config import (
     parse_bool_like,
     require_fields_in_production,
@@ -234,8 +237,6 @@ class CerebrasCompletionGateway(ICompletionGateway):
         operation_config: dict[str, Any],
     ) -> tuple[str, dict[str, Any]]:
         model = request.model or operation_config["model"]
-        temperature = self._resolve_temperature(request, operation_config=operation_config)
-        top_p = self._resolve_top_p(request, operation_config=operation_config)
         stream = self._resolve_stream(request)
 
         kwargs: dict[str, Any] = {
@@ -246,10 +247,15 @@ class CerebrasCompletionGateway(ICompletionGateway):
             "model": model,
             "stream": stream,
         }
-        if temperature is not None:
-            kwargs["temperature"] = temperature
-        if top_p is not None:
-            kwargs["top_p"] = top_p
+        kwargs.update(
+            resolve_sampling_parameter_kwargs(
+                request=request,
+                operation_config=operation_config,
+                provider=self._provider,
+                provider_label="CerebrasCompletionGateway",
+                timeout_applied=self._timeout_seconds,
+            )
+        )
         if request.inference.stop:
             kwargs["stop"] = request.inference.stop
 
@@ -610,28 +616,6 @@ class CerebrasCompletionGateway(ICompletionGateway):
                 cause=exc,
                 timeout_applied=self._timeout_seconds,
             ) from exc
-
-    @staticmethod
-    def _resolve_temperature(
-        request: CompletionRequest,
-        *,
-        operation_config: dict[str, Any],
-    ) -> float | None:
-        temperature = request.inference.temperature
-        if temperature is None and "temp" in operation_config:
-            temperature = float(operation_config["temp"])
-        return temperature
-
-    @staticmethod
-    def _resolve_top_p(
-        request: CompletionRequest,
-        *,
-        operation_config: dict[str, Any],
-    ) -> float | None:
-        top_p = request.inference.top_p
-        if top_p is None and "top_p" in operation_config:
-            top_p = float(operation_config["top_p"])
-        return top_p
 
     @staticmethod
     def _resolve_max_tokens(

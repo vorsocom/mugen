@@ -19,6 +19,7 @@
         "surface": "chat_completions",
         "temp": 0.0,
         "top_p": 1.0,
+        "sampling_controls": "enabled",
         "max_completion_tokens": 1024
       },
       "completion": {
@@ -26,6 +27,7 @@
         "surface": "chat_completions",
         "temp": 0.0,
         "top_p": 1.0,
+        "sampling_controls": "enabled",
         "max_completion_tokens": 1024
       }
     }

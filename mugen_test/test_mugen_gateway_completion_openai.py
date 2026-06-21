@@ -670,6 +670,220 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("top_p", kwargs)
         self.assertNotIn("stop", kwargs)
 
+    async def test_get_completion_sampling_controls_absent_keeps_defaults(
+        self,
+    ) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+        payload = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[
+                SimpleNamespace(
+                    finish_reason="stop", message=SimpleNamespace(content="ok")
+                )
+            ],
+            usage=None,
+        )
+        api = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=AsyncMock(return_value=payload),
+                ),
+            ),
+        )
+
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api
+        ):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        await gateway.get_completion(_simple_request())
+
+        _, kwargs = api.chat.completions.create.await_args
+        self.assertEqual(kwargs["temperature"], 0.1)
+        self.assertEqual(kwargs["top_p"], 0.8)
+
+    async def test_get_completion_disables_inherited_sampling_controls_for_responses(
+        self,
+    ) -> None:
+        config = _make_config()
+        config.openai.api.dict["completion"].update(
+            {
+                "model": "gpt-5.5",
+                "surface": "responses",
+                "sampling_controls": "disabled",
+                "max_completion_tokens": 4046,
+            }
+        )
+        logging_gateway = Mock()
+        response_payload = {
+            "id": "resp_reasoning",
+            "object": "response",
+            "created_at": 123,
+            "status": "completed",
+            "model": "gpt-5.5",
+            "output": [
+                {
+                    "id": "msg_reasoning",
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "ok"}],
+                }
+            ],
+            "usage": {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3},
+        }
+        api = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
+            responses=SimpleNamespace(create=AsyncMock(return_value=response_payload)),
+        )
+
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI",
+            return_value=api,
+        ):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        await gateway.get_completion(_simple_request())
+
+        _, kwargs = api.responses.create.await_args
+        self.assertEqual(kwargs["model"], "gpt-5.5")
+        self.assertEqual(kwargs["max_output_tokens"], 4046)
+        self.assertNotIn("temperature", kwargs)
+        self.assertNotIn("top_p", kwargs)
+
+    async def test_get_completion_disables_request_sampling_controls_for_responses(
+        self,
+    ) -> None:
+        config = _make_config()
+        config.openai.api.dict["completion"].update(
+            {
+                "surface": "responses",
+                "sampling_controls": "disabled",
+            }
+        )
+        logging_gateway = Mock()
+        response_payload = {
+            "id": "resp_reasoning",
+            "object": "response",
+            "created_at": 123,
+            "status": "completed",
+            "model": "gpt-4o-mini",
+            "output": [
+                {
+                    "id": "msg_reasoning",
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "ok"}],
+                }
+            ],
+            "usage": {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3},
+        }
+        api = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
+            responses=SimpleNamespace(create=AsyncMock(return_value=response_payload)),
+        )
+
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI",
+            return_value=api,
+        ):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            inference=CompletionInferenceConfig(temperature=0.7, top_p=0.6),
+            vendor_params={
+                "temperature": 0.1,
+                "top_p": 0.1,
+                "text": {"format": {"type": "text"}},
+            },
+        )
+        await gateway.get_completion(request)
+
+        _, kwargs = api.responses.create.await_args
+        self.assertEqual(kwargs["text"], {"format": {"type": "text"}})
+        self.assertNotIn("temperature", kwargs)
+        self.assertNotIn("top_p", kwargs)
+
+    async def test_get_completion_disables_sampling_controls_for_chat(self) -> None:
+        config = _make_config()
+        config.openai.api.dict["completion"]["sampling_controls"] = "disabled"
+        logging_gateway = Mock()
+        response_payload = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[
+                SimpleNamespace(
+                    finish_reason="stop", message=SimpleNamespace(content="ok")
+                )
+            ],
+            usage=None,
+        )
+        api = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=AsyncMock(return_value=response_payload),
+                ),
+            ),
+        )
+
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI", return_value=api
+        ):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            inference=CompletionInferenceConfig(temperature=0.7, top_p=0.6),
+        )
+        await gateway.get_completion(request)
+
+        _, kwargs = api.chat.completions.create.await_args
+        self.assertNotIn("temperature", kwargs)
+        self.assertNotIn("top_p", kwargs)
+
+    def test_sampling_controls_optional_and_invalid_values(self) -> None:
+        config = _make_config()
+        logging_gateway = Mock()
+
+        with patch(
+            "mugen.core.gateway.completion.openai.AsyncOpenAI",
+            return_value=Mock(),
+        ):
+            gateway = OpenAICompletionGateway(config, logging_gateway)
+
+        request = _simple_request()
+        for value in [None, ""]:
+            with self.subTest(value=value):
+                _, kwargs = gateway._serialize_chat_kwargs(
+                    request,
+                    {
+                        "model": "gpt-4o-mini",
+                        "temp": 0.2,
+                        "top_p": 0.3,
+                        "sampling_controls": value,
+                    },
+                )
+                self.assertEqual(kwargs["temperature"], 0.2)
+                self.assertEqual(kwargs["top_p"], 0.3)
+
+        for value in [1, "auto"]:
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                    CompletionGatewayError,
+                    "sampling_controls",
+                ):
+                    gateway._serialize_chat_kwargs(
+                        request,
+                        {
+                            "model": "gpt-4o-mini",
+                            "sampling_controls": value,
+                        },
+                    )
+
     async def test_get_completion_streams_content_tool_calls_and_usage(self) -> None:
         config = _make_config()
         logging_gateway = Mock()
@@ -1437,7 +1651,7 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
                     "type": "function_call",
                     "name": "lookup_weather",
                     "call_id": "call_1",
-                    "arguments": "{\"city\":\"Paris\"}",
+                    "arguments": '{"city":"Paris"}',
                 },
             ],
             "usage": {
@@ -1505,17 +1719,21 @@ class TestMugenGatewayCompletionOpenAI(unittest.IsolatedAsyncioTestCase):
             {"type": "response.output_text.delta", "delta": "lo"},
             {
                 "type": "response.output_item.added",
-                "item": {"id": "fc_2", "type": "function_call", "name": "lookup_weather"},
+                "item": {
+                    "id": "fc_2",
+                    "type": "function_call",
+                    "name": "lookup_weather",
+                },
             },
             {
                 "type": "response.function_call_arguments.delta",
                 "item_id": "fc_2",
-                "delta": "{\"city\":\"",
+                "delta": '{"city":"',
             },
             {
                 "type": "response.function_call_arguments.done",
                 "item_id": "fc_2",
-                "arguments": "{\"city\":\"Paris\"}",
+                "arguments": '{"city":"Paris"}',
             },
             {"type": "response.completed", "response": completed_payload},
         ]

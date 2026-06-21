@@ -138,9 +138,13 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
             calls.append("async")
             return None
 
-        gateway._client = SimpleNamespace(close=_sync_close)  # pylint: disable=protected-access
+        gateway._client = SimpleNamespace(
+            close=_sync_close
+        )  # pylint: disable=protected-access
         self.assertIsNone(await gateway.aclose())
-        gateway._client = SimpleNamespace(close=_async_close)  # pylint: disable=protected-access
+        gateway._client = SimpleNamespace(
+            close=_async_close
+        )  # pylint: disable=protected-access
         self.assertIsNone(await gateway.aclose())
         self.assertEqual(calls, ["sync", "async"])
 
@@ -718,7 +722,10 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
                 CompletionMessage(role="system", content={"policy": "strict"}),
                 CompletionMessage(
                     role="user",
-                    content={"message": "hello", "ingress_metadata": {"tenant": "global"}},
+                    content={
+                        "message": "hello",
+                        "ingress_metadata": {"tenant": "global"},
+                    },
                 ),
                 CompletionMessage(role="tool", content={"trace_id": "abc123"}),
             ],
@@ -754,6 +761,22 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inferred["maxTokens"], 12)
         self.assertEqual(inferred["temperature"], 0.3)
         self.assertEqual(inferred["topP"], 0.7)
+
+        disabled = gateway._build_inference_config(
+            CompletionRequest(
+                operation="completion",
+                model="anthropic.claude",
+                messages=[CompletionMessage(role="user", content="hello")],
+                inference=CompletionInferenceConfig(temperature=0.8, top_p=0.6),
+            ),
+            {
+                "max_completion_tokens": "12",
+                "temp": "0.3",
+                "top_p": "0.7",
+                "sampling_controls": "disabled",
+            },
+        )
+        self.assertEqual(disabled, {"maxTokens": 12})
 
     async def test_converse_applies_optional_fields_and_arn_rules(self) -> None:
         bedrock_client = Mock()
@@ -1116,9 +1139,14 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(response.content, "hello")
-        self.assertEqual(response.vendor_fields["additionalModelResponseFields"], {"x": 1})
+        self.assertEqual(
+            response.vendor_fields["additionalModelResponseFields"], {"x": 1}
+        )
 
-        payload = {"choices": [{"text": "fallback", "stop_reason": "length"}], "usage": {}}
+        payload = {
+            "choices": [{"text": "fallback", "stop_reason": "length"}],
+            "usage": {},
+        }
         invoke_request = self._build_request(
             model="deepseek.r1-v1:0",
             vendor_params={
@@ -1153,12 +1181,18 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(BedrockCompletionGateway._extract_path({"a": [1]}, "a.9"))
         self.assertIsNone(BedrockCompletionGateway._extract_path({"a": 1}, "a.b"))
         self.assertIsNone(BedrockCompletionGateway._extract_path({"a": {}}, "a.b"))
-        self.assertEqual(BedrockCompletionGateway._coerce_text_candidate([{"x": 1}]), None)
         self.assertEqual(
-            BedrockCompletionGateway._coerce_text_candidate({"content": [{"text": "x"}]}),
+            BedrockCompletionGateway._coerce_text_candidate([{"x": 1}]), None
+        )
+        self.assertEqual(
+            BedrockCompletionGateway._coerce_text_candidate(
+                {"content": [{"text": "x"}]}
+            ),
             "x",
         )
-        self.assertEqual(BedrockCompletionGateway._coerce_text_candidate({"x": 1}), None)
+        self.assertEqual(
+            BedrockCompletionGateway._coerce_text_candidate({"x": 1}), None
+        )
 
         usage = BedrockCompletionGateway._extract_usage(
             {"usage": {"prompt_tokens": 2, "output_tokens": 1}}
@@ -1251,13 +1285,20 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
 
     def test_error_helpers(self) -> None:
         error = ClientError(
-            {"Error": {"Code": "ValidationException", "Message": "Converse unsupported"}},
+            {
+                "Error": {
+                    "Code": "ValidationException",
+                    "Message": "Converse unsupported",
+                }
+            },
             operation_name="Converse",
         )
         message = BedrockCompletionGateway._error_message_from_client_error(error)
         self.assertIn("ValidationException", message)
 
-        self.assertTrue(BedrockCompletionGateway._should_fallback_to_invoke_model(error))
+        self.assertTrue(
+            BedrockCompletionGateway._should_fallback_to_invoke_model(error)
+        )
         self.assertFalse(
             BedrockCompletionGateway._should_fallback_to_invoke_model(
                 ClientError(
@@ -1297,7 +1338,9 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "BedrockCompletionGateway.i"):
             gateway._resolve_optional_positive_int(0, "i")
 
-    def test_constructor_raises_when_timeout_controls_missing_in_production(self) -> None:
+    def test_constructor_raises_when_timeout_controls_missing_in_production(
+        self,
+    ) -> None:
         config = _make_config()
         config.mugen = SimpleNamespace(environment="production")
         logging_gateway = Mock()
@@ -1314,7 +1357,9 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
 
         boto_client.assert_not_called()
 
-    def test_production_with_timeout_controls_does_not_emit_missing_warnings(self) -> None:
+    def test_production_with_timeout_controls_does_not_emit_missing_warnings(
+        self,
+    ) -> None:
         config = _make_config()
         config.mugen = SimpleNamespace(environment="production")
         config.aws.bedrock.api.connect_timeout_seconds = 1
