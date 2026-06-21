@@ -65,11 +65,15 @@ from mugen.core.contract.gateway.completion import (
     CompletionResponse,
     CompletionTool,
     CompletionToolCall,
+    CompletionToolResult,
     CompletionUsage,
     ICompletionGateway,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.contract.gateway.completion_workflow import (
+    COMPLETION_TOOL_CALL_ID_METADATA_KEY,
+    completion_continuation_state_from_metadata,
+    serialize_completion_metadata_for_log,
     normalize_completion_tool_call,
     serialize_completion_response_for_log,
 )
@@ -272,6 +276,12 @@ def _serialize_state(state: PlanRunState) -> dict[str, Any]:
     }
 
 
+def _serialize_state_for_prompt(state: PlanRunState) -> dict[str, Any]:
+    payload = _serialize_state(state)
+    payload["metadata"] = serialize_completion_metadata_for_log(state.metadata)
+    return payload
+
+
 def _deserialize_state(payload: dict[str, Any] | None) -> PlanRunState:
     payload = dict(payload or {})
     return PlanRunState(
@@ -300,6 +310,14 @@ def _serialize_outcome(outcome: PlanOutcome | None) -> dict[str, Any] | None:
         "error_message": outcome.error_message,
         "metadata": dict(outcome.metadata),
     }
+
+
+def _serialize_outcome_for_prompt(outcome: PlanOutcome | None) -> dict[str, Any] | None:
+    payload = _serialize_outcome(outcome)
+    if payload is None:
+        return None
+    payload["metadata"] = serialize_completion_metadata_for_log(outcome.metadata)
+    return payload
 
 
 def _deserialize_outcome(payload: dict[str, Any] | None) -> PlanOutcome | None:
@@ -389,18 +407,6 @@ def _coerce_to_text(content: Any) -> str:
     return json.dumps(content, ensure_ascii=True, sort_keys=True)
 
 
-def _tool_spec(descriptor: CapabilityDescriptor) -> dict[str, Any]:
-    return {
-        "type": "function",
-        "function": {
-            "name": descriptor.key,
-            "description": descriptor.description or descriptor.title,
-            "parameters": descriptor.input_schema
-            or {"type": "object", "properties": {}, "additionalProperties": True},
-        },
-    }
-
-
 def _completion_tool(descriptor: CapabilityDescriptor) -> CompletionTool:
     return CompletionTool(
         name=descriptor.key,
@@ -427,12 +433,8 @@ def _merge_vendor_tools(
     vendor_params: dict[str, Any],
     capabilities: tuple[CapabilityDescriptor, ...],
 ) -> dict[str, Any]:
-    merged = dict(vendor_params)
-    if capabilities:
-        merged["tools"] = [_tool_spec(item) for item in capabilities]
-        merged.setdefault("tool_choice", "auto")
-        merged.setdefault("parallel_tool_calls", False)
-    return merged
+    _ = capabilities
+    return dict(vendor_params)
 
 
 def _tool_call_invocations(tool_calls: list[Any]) -> tuple[CapabilityInvocation, ...]:
@@ -441,14 +443,72 @@ def _tool_call_invocations(tool_calls: list[Any]) -> tuple[CapabilityInvocation,
         tool_call = normalize_completion_tool_call(raw_tool_call)
         if tool_call is None:
             continue
+        tool_call_id = _normalize_optional_text(tool_call.id)
         invocations.append(
             CapabilityInvocation(
                 capability_key=tool_call.name,
                 arguments=dict(tool_call.arguments),
-                idempotency_key=_normalize_optional_text(tool_call.id),
+                idempotency_key=tool_call_id,
+                metadata=(
+                    {}
+                    if tool_call_id is None
+                    else {COMPLETION_TOOL_CALL_ID_METADATA_KEY: tool_call_id}
+                ),
             )
         )
     return tuple(invocations)
+
+
+def _completion_continuation_state_for_run(
+    run: PreparedPlanRun,
+    *,
+    base_state: CompletionContinuationState | None = None,
+) -> CompletionContinuationState | None:
+    return completion_continuation_state_from_metadata(run.state.metadata) or base_state
+
+
+def _split_completion_tool_results(
+    observations: tuple[PlanObservation, ...],
+) -> tuple[list[CompletionToolResult], list[PlanObservation]]:
+    tool_results: list[CompletionToolResult] = []
+    generic_observations: list[PlanObservation] = []
+    for observation in observations:
+        tool_result = _completion_tool_result_from_observation(observation)
+        if tool_result is None:
+            generic_observations.append(observation)
+            continue
+        tool_results.append(tool_result)
+    return tool_results, generic_observations
+
+
+def _completion_tool_result_from_observation(
+    observation: PlanObservation,
+) -> CompletionToolResult | None:
+    result = observation.capability_result
+    if result is None:
+        return None
+    tool_call_id = _normalize_optional_text(
+        observation.metadata.get(COMPLETION_TOOL_CALL_ID_METADATA_KEY)
+    ) or _normalize_optional_text(
+        result.metadata.get(COMPLETION_TOOL_CALL_ID_METADATA_KEY)
+    )
+    if tool_call_id is None:
+        return None
+
+    if result.ok:
+        content = result.result
+    else:
+        content = {
+            "error_message": result.error_message,
+            "status_code": result.status_code,
+            "result": result.result,
+        }
+    return CompletionToolResult(
+        tool_call_id=tool_call_id,
+        name=result.capability_key,
+        content=content,
+        is_error=not result.ok,
+    )
 
 
 class AgentPlanRunService(
@@ -679,6 +739,9 @@ class LLMPlannerStrategy(IPlannerStrategy):
         observations: tuple[PlanObservation, ...],
     ) -> CompletionRequest:
         capabilities = tuple(request.available_capabilities or ())
+        observation_tool_results, generic_observations = _split_completion_tool_results(
+            observations
+        )
         if request.prepared_context is not None and not observations:
             base = request.prepared_context.completion_request
             return CompletionRequest(
@@ -692,7 +755,10 @@ class LLMPlannerStrategy(IPlannerStrategy):
                     capabilities=capabilities,
                 ),
                 tool_results=list(base.tool_results),
-                continuation_state=base.continuation_state,
+                continuation_state=_completion_continuation_state_for_run(
+                    run,
+                    base_state=base.continuation_state,
+                ),
                 vendor_params=_merge_vendor_tools(
                     vendor_params=dict(base.vendor_params),
                     capabilities=capabilities,
@@ -702,17 +768,19 @@ class LLMPlannerStrategy(IPlannerStrategy):
         if request.prepared_context is not None:
             base = request.prepared_context.completion_request
             messages = list(base.messages)
-            messages.append(
-                CompletionMessage(
-                    role="user",
-                    content={
-                        "agent_observations": [
-                            self._observation_payload(item) for item in observations
-                        ],
-                        "instruction": "Continue using tools if needed, otherwise respond to the user.",
-                    },
+            if generic_observations:
+                messages.append(
+                    CompletionMessage(
+                        role="user",
+                        content={
+                            "agent_observations": [
+                                self._observation_payload(item)
+                                for item in generic_observations
+                            ],
+                            "instruction": "Continue using tools if needed, otherwise respond to the user.",
+                        },
+                    )
                 )
-            )
             return CompletionRequest(
                 messages=messages,
                 operation=base.operation,
@@ -723,8 +791,11 @@ class LLMPlannerStrategy(IPlannerStrategy):
                     base_tools=list(base.tools),
                     capabilities=capabilities,
                 ),
-                tool_results=list(base.tool_results),
-                continuation_state=base.continuation_state,
+                tool_results=list(base.tool_results) + observation_tool_results,
+                continuation_state=_completion_continuation_state_for_run(
+                    run,
+                    base_state=base.continuation_state,
+                ),
                 vendor_params=_merge_vendor_tools(
                     vendor_params=dict(base.vendor_params),
                     capabilities=capabilities,
@@ -744,9 +815,10 @@ class LLMPlannerStrategy(IPlannerStrategy):
                 content={
                     "goal": request.user_message,
                     "service_route_key": request.service_route_key,
-                    "run_state": _serialize_state(run.state),
+                    "run_state": _serialize_state_for_prompt(run.state),
                     "observations": [
-                        self._observation_payload(item) for item in observations
+                        self._observation_payload(item)
+                        for item in generic_observations
                     ],
                 },
             ),
@@ -759,6 +831,8 @@ class LLMPlannerStrategy(IPlannerStrategy):
                 base_tools=[],
                 capabilities=capabilities,
             ),
+            tool_results=observation_tool_results,
+            continuation_state=_completion_continuation_state_for_run(run),
             vendor_params=_merge_vendor_tools(
                 vendor_params={},
                 capabilities=capabilities,
@@ -872,7 +946,7 @@ class LLMEvaluationStrategy(IEvaluatorStrategy):
             {
                 "stage": "run",
                 "goal": request.request.user_message,
-                "outcome": _serialize_outcome(outcome),
+                "outcome": _serialize_outcome_for_prompt(outcome),
             }
         )
         if prompted is not None:

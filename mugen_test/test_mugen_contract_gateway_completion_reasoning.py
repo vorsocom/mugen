@@ -14,9 +14,13 @@ from mugen.core.contract.gateway.completion import (
     CompletionUsage,
 )
 from mugen.core.contract.gateway.completion_workflow import (
+    COMPLETION_CONTINUATION_STATE_METADATA_KEY,
     REDACTED_VALUE,
+    completion_continuation_state_from_metadata,
+    metadata_with_completion_continuation_state,
     normalize_completion_tool_call,
     redact_provider_payload,
+    serialize_completion_metadata_for_log,
     serialize_completion_tool_call,
     serialize_continuation_state_for_log,
     serialize_completion_response_for_log,
@@ -233,6 +237,48 @@ class TestMugenContractGatewayCompletionReasoning(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "continuation state"):
             CompletionContinuationState.from_dict([])  # type: ignore[arg-type]
+
+    def test_completion_continuation_metadata_helpers_cover_edge_cases(self) -> None:
+        state = CompletionContinuationState(
+            provider="openai",
+            response_id="resp_1",
+            reasoning_items=[{"encrypted_content": "secret"}],
+        )
+
+        self.assertIsNone(completion_continuation_state_from_metadata(None))
+        self.assertIs(
+            completion_continuation_state_from_metadata(
+                {COMPLETION_CONTINUATION_STATE_METADATA_KEY: state}
+            ),
+            state,
+        )
+        self.assertIsNone(
+            completion_continuation_state_from_metadata(
+                {COMPLETION_CONTINUATION_STATE_METADATA_KEY: {"provider_state": 1}}
+            )
+        )
+        self.assertEqual(
+            metadata_with_completion_continuation_state({"trace": "1"}, None),
+            {"trace": "1"},
+        )
+        self.assertEqual(serialize_completion_metadata_for_log(None), {})
+        redacted = serialize_completion_metadata_for_log(
+            {
+                "trace": "1",
+                COMPLETION_CONTINUATION_STATE_METADATA_KEY: state.to_dict(),
+            }
+        )
+        self.assertEqual(redacted["trace"], "1")
+        self.assertEqual(
+            redacted[COMPLETION_CONTINUATION_STATE_METADATA_KEY][
+                "reasoning_item_count"
+            ],
+            1,
+        )
+        self.assertNotIn(
+            "reasoning_items",
+            redacted[COMPLETION_CONTINUATION_STATE_METADATA_KEY],
+        )
 
     def test_redact_provider_payload_removes_sensitive_values(self) -> None:
         payload = {

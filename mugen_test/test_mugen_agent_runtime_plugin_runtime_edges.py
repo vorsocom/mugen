@@ -48,6 +48,10 @@ from mugen.core.contract.gateway.completion import (
     CompletionToolCall,
     CompletionUsage,
 )
+from mugen.core.contract.gateway.completion_workflow import (
+    COMPLETION_CONTINUATION_STATE_METADATA_KEY,
+    COMPLETION_TOOL_CALL_ID_METADATA_KEY,
+)
 from mugen.core.plugin.agent_runtime.service.registry import AgentComponentRegistry
 import mugen.core.plugin.agent_runtime.service.runtime as runtime_module
 from mugen.core.plugin.agent_runtime.service.runtime import (
@@ -458,7 +462,12 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             completion=completion,
             background_run_id="run-bg",
             error_message="temporary",
-            metadata={"trace": "1"},
+            metadata={
+                "trace": "1",
+                COMPLETION_CONTINUATION_STATE_METADATA_KEY: (
+                    completion.reasoning_state.to_dict()
+                ),
+            },
         )
         descriptor = CapabilityDescriptor(
             key="cap.lookup",
@@ -570,6 +579,18 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             runtime_module._serialize_state(state)["summary"],
             "summary",
         )
+        state.metadata[COMPLETION_CONTINUATION_STATE_METADATA_KEY] = (
+            completion.reasoning_state.to_dict()
+        )
+        prompt_state = (
+            runtime_module._serialize_state_for_prompt(state)  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            prompt_state["metadata"][COMPLETION_CONTINUATION_STATE_METADATA_KEY][
+                "reasoning_item_count"
+            ],
+            1,
+        )
         self.assertEqual(  # pylint: disable=protected-access
             runtime_module._deserialize_state({"goal": "g", "status": "active"}).status,
             PlanRunStatus.ACTIVE,
@@ -578,6 +599,28 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             runtime_module._serialize_outcome(outcome)["background_run_id"],
             "run-bg",
         )
+        self.assertIn(
+            "reasoning_items",
+            runtime_module._serialize_outcome(outcome)["metadata"][  # pylint: disable=protected-access
+                COMPLETION_CONTINUATION_STATE_METADATA_KEY
+            ],
+        )
+        prompt_outcome = (
+            runtime_module._serialize_outcome_for_prompt(outcome)  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            prompt_outcome["metadata"][COMPLETION_CONTINUATION_STATE_METADATA_KEY][
+                "reasoning_item_count"
+            ],
+            1,
+        )
+        self.assertNotIn(
+            "reasoning_items",
+            prompt_outcome["metadata"][COMPLETION_CONTINUATION_STATE_METADATA_KEY],
+        )
+        self.assertIsNone(
+            runtime_module._serialize_outcome_for_prompt(None)
+        )  # pylint: disable=protected-access
         self.assertEqual(  # pylint: disable=protected-access
             runtime_module._deserialize_outcome({"status": "completed"}).status,
             PlanOutcomeStatus.COMPLETED,
@@ -650,10 +693,6 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         self.assertIn(
             '"answer": 42', runtime_module._coerce_to_text({"answer": 42})
         )  # pylint: disable=protected-access
-        self.assertEqual(  # pylint: disable=protected-access
-            runtime_module._tool_spec(descriptor)["function"]["name"],
-            "cap.lookup",
-        )
         completion_tool = runtime_module._completion_tool(
             descriptor
         )  # pylint: disable=protected-access
@@ -679,7 +718,7 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
                 capabilities=(descriptor,),
             )
         )
-        self.assertEqual(merged_tools["tool_choice"], "auto")
+        self.assertEqual(merged_tools, {"seed": "base"})
         self.assertEqual(
             runtime_module._merge_vendor_tools(  # pylint: disable=protected-access
                 vendor_params={"seed": "base"},
@@ -689,6 +728,10 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(tool_invocations), 2)
         self.assertEqual(tool_invocations[0].arguments, {"query": "abc"})
+        self.assertEqual(
+            tool_invocations[0].metadata[COMPLETION_TOOL_CALL_ID_METADATA_KEY],
+            "call-1",
+        )
         self.assertEqual(tool_invocations[1].arguments, {})
         dict_invocation = (
             runtime_module._tool_call_invocations(  # pylint: disable=protected-access
@@ -708,6 +751,28 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertEqual(normalized_invocation[0].capability_key, "cap.normalized")
+        self.assertIsNone(
+            runtime_module._completion_tool_result_from_observation(  # pylint: disable=protected-access
+                PlanObservation(kind="note", payload={"x": 1})
+            )
+        )
+        error_tool_result = (
+            runtime_module._completion_tool_result_from_observation(  # pylint: disable=protected-access
+                PlanObservation(
+                    kind="capability_result",
+                    capability_result=CapabilityResult(
+                        capability_key="cap.lookup",
+                        ok=False,
+                        error_message="bad_gateway",
+                        status_code=502,
+                        result={"detail": "failed"},
+                        metadata={COMPLETION_TOOL_CALL_ID_METADATA_KEY: "call-err"},
+                    ),
+                )
+            )
+        )
+        self.assertTrue(error_tool_result.is_error)
+        self.assertEqual(error_tool_result.content["status_code"], 502)
         self.assertNotIn(
             "capability_result",
             LLMPlannerStrategy._observation_payload(  # pylint: disable=protected-access
@@ -917,10 +982,78 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent_request.model, "test-model")
         self.assertEqual(sent_request.tools[0].name, "cap.lookup")
         self.assertEqual(sent_request.tools[0].kind, "function")
+        self.assertEqual(sent_request.vendor_params, {"seed": "base"})
         self.assertEqual(
-            sent_request.vendor_params["tools"][0]["function"]["name"], "cap.lookup"
+            decision.capability_invocations[0].metadata[
+                COMPLETION_TOOL_CALL_ID_METADATA_KEY
+            ],
+            "call-1",
         )
-        self.assertFalse(sent_request.vendor_params["parallel_tool_calls"])
+
+    async def test_llm_planner_replays_tool_results_and_continuation_state(
+        self,
+    ) -> None:
+        capability = CapabilityDescriptor(
+            key="cap.lookup",
+            title="Lookup",
+            input_schema={"type": "object"},
+        )
+        request = _request(
+            prepared_context=_prepared_context(),
+            available_capabilities=(capability,),
+        )
+        run = _run(request=request)
+        continuation_state = CompletionContinuationState(
+            provider="openai",
+            response_id="resp-1",
+            output_items=[{"type": "function_call", "call_id": "call-1"}],
+            reasoning_items=[{"encrypted_content": "secret"}],
+        )
+        run.state.metadata[COMPLETION_CONTINUATION_STATE_METADATA_KEY] = (
+            continuation_state.to_dict()
+        )
+        observation = PlanObservation(
+            kind="capability_result",
+            summary="lookup",
+            payload={"capability_key": "cap.lookup", "ok": True},
+            success=True,
+            capability_result=CapabilityResult(
+                capability_key="cap.lookup",
+                ok=True,
+                result={"answer": "42"},
+                metadata={COMPLETION_TOOL_CALL_ID_METADATA_KEY: "call-1"},
+            ),
+        )
+        completion_gateway = Mock()
+        completion_gateway.get_completion = AsyncMock(
+            return_value=CompletionResponse(content="done", tool_calls=[])
+        )
+        planner = LLMPlannerStrategy(
+            completion_gateway=completion_gateway,
+            logging_gateway=Mock(),
+        )
+
+        decision = await planner.next_decision(
+            request,
+            run,
+            (observation,),
+            policy=run.policy,
+        )
+
+        self.assertEqual(decision.kind, PlanDecisionKind.RESPOND)
+        sent_request = completion_gateway.get_completion.await_args.args[0]
+        self.assertEqual(
+            sent_request.messages,
+            request.prepared_context.completion_request.messages,
+        )
+        self.assertEqual(sent_request.tool_results[0].tool_call_id, "call-1")
+        self.assertEqual(sent_request.tool_results[0].name, "cap.lookup")
+        self.assertEqual(sent_request.tool_results[0].content, {"answer": "42"})
+        self.assertEqual(
+            sent_request.continuation_state.response_id,
+            continuation_state.response_id,
+        )
+        self.assertEqual(sent_request.vendor_params, {"seed": "base"})
 
     async def test_llm_planner_appends_observations_and_builds_fallback_requests(
         self,
