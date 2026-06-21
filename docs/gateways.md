@@ -1,7 +1,7 @@
 # Working with muGen Gateways
 
 Status: Draft  
-Last Updated: 2026-03-04  
+Last Updated: 2026-06-21
 Audience: Core and downstream plugin teams
 
 ## Purpose
@@ -68,6 +68,10 @@ that support them:
 - `[<provider>] api.<operation>.reasoning.visibility`
   - default behavior is `opaque`; raw provider reasoning remains replay state,
     not display content.
+
+Reasoning defaults are per operation, so `api.classification.reasoning.*` and
+`api.completion.reasoning.*` can differ. Keep `visibility = "opaque"` unless a
+provider adapter explicitly documents another safe display mode.
 
 Operation configs can suppress sampling controls for models that reject them:
 
@@ -173,6 +177,18 @@ Current Claude capability checks reject known unsupported combinations:
   `mode="enabled"` thinking.
 - Adaptive thinking is accepted only for known adaptive-capable model families.
 
+Direct Anthropic adaptive-thinking example:
+
+```toml
+[anthropic]
+api.completion.model = "<claude-model-with-adaptive-thinking>"
+api.completion.max_completion_tokens = 4096
+api.completion.sampling_controls = "disabled"
+api.completion.reasoning.mode = "adaptive"
+api.completion.reasoning.effort = "medium"
+api.completion.reasoning.visibility = "opaque"
+```
+
 ### AWS Bedrock
 
 Module: `mugen.core.gateway.completion.bedrock`
@@ -258,6 +274,19 @@ For Claude `InvokeModel`, normalized tools and tool results use Anthropic
 Messages content blocks, adaptive reasoning effort is placed under
 `output_config`, and `thinking`/`redacted_thinking` blocks are preserved exactly
 in `CompletionContinuationState`.
+
+Bedrock-hosted Claude adaptive-thinking example:
+
+```toml
+[aws.bedrock]
+api.region = "us-east-1"
+api.completion.model = "<anthropic-claude-model-id>"
+api.completion.max_completion_tokens = 4096
+api.completion.sampling_controls = "disabled"
+api.completion.reasoning.mode = "adaptive"
+api.completion.reasoning.effort = "medium"
+api.completion.reasoning.visibility = "opaque"
+```
 
 ### Groq
 
@@ -421,6 +450,9 @@ api.completion.model = "gpt-5.5"
 api.completion.surface = "responses"
 api.completion.sampling_controls = "disabled"
 api.completion.max_completion_tokens = 4046
+api.completion.reasoning.effort = "medium"
+api.completion.reasoning.include_encrypted_state = true
+api.completion.reasoning.visibility = "opaque"
 ```
 
 #### OpenAI Readiness Behavior

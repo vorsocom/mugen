@@ -240,6 +240,42 @@ it is stored in an env var or Secrets Manager value.
 }
 ```
 
+### OpenAI Responses Reasoning Model
+
+Use `sampling_controls = "disabled"` when the selected model rejects
+`temperature` or `top_p`. Omitting those keys from a JSON overlay is not enough
+because overlays are deep-merged with the sample config.
+
+```json
+{
+  "mugen": {
+    "modules": {
+      "core": {
+        "gateway": {
+          "completion": "openai"
+        }
+      }
+    }
+  },
+  "openai": {
+    "api": {
+      "key": "replace-with-openai-api-key",
+      "completion": {
+        "model": "gpt-5.5",
+        "surface": "responses",
+        "sampling_controls": "disabled",
+        "max_completion_tokens": 4046,
+        "reasoning": {
+          "effort": "medium",
+          "include_encrypted_state": true,
+          "visibility": "opaque"
+        }
+      }
+    }
+  }
+}
+```
+
 ### AWS Bedrock With ECS Task Role
 
 Leave explicit AWS keys blank and grant the ECS task role permission to invoke

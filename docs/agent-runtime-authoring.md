@@ -157,6 +157,23 @@ Trace-sink rules:
 - never rely on a sink to make correctness decisions;
 - prefer structured summaries over raw model reasoning text.
 
+### Reasoning Workflow Tool Loops
+
+The default LLM planner exposes available capabilities as normalized
+`CompletionTool` definitions. Model tool calls are converted to
+`CapabilityInvocation` values with the model tool call ID preserved in runtime
+metadata. When the capability result is returned to the planner, the runtime
+sends it back as a normalized `CompletionToolResult` instead of generic user
+observation text whenever that tool call ID is available.
+
+Completion gateways may return opaque `CompletionContinuationState` for
+provider-specific reasoning replay. The runtime persists the latest state in
+run-state metadata after planner decisions and copies it into terminal
+`PlanOutcome.metadata` for resumable retries/background work. Normal step,
+prompt, and completion serializers summarize continuation state by counts and
+provider-state keys; they must not render raw reasoning items, encrypted
+reasoning content, `thinking` blocks, or `redacted_thinking` blocks.
+
 ### `IAgentPolicyResolver`
 
 Use a policy resolver when you need to turn route and runtime context into one
