@@ -21,6 +21,9 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.gateway.completion.message_serialization import (
     serialize_completion_message_dict,
 )
+from mugen.core.gateway.completion.sampling_controls import (
+    resolve_sampling_parameter_kwargs,
+)
 from mugen.core.gateway.completion.timeout_config import (
     parse_bool_like,
     require_fields_in_production,
@@ -172,10 +175,6 @@ class SambaNovaCompletionGateway(ICompletionGateway):
         operation_config = self._resolve_operation_config(completion_request.operation)
         model = completion_request.model or operation_config["model"]
 
-        temperature = completion_request.inference.temperature
-        if temperature is None:
-            temperature = float(operation_config.get("temp", 0.0))
-        top_p = completion_request.inference.top_p
         max_tokens = completion_request.inference.max_completion_tokens
         if max_tokens is None and "max_completion_tokens" in operation_config:
             max_tokens = int(operation_config["max_completion_tokens"])
@@ -198,12 +197,20 @@ class SambaNovaCompletionGateway(ICompletionGateway):
             ],
             "model": model,
             "stream": stream,
-            "temperature": temperature,
         }
+        data.update(
+            resolve_sampling_parameter_kwargs(
+                request=completion_request,
+                operation_config=operation_config,
+                provider=self._provider,
+                provider_label="SambaNovaCompletionGateway",
+                timeout_applied=self._read_timeout_seconds,
+                config_top_p_key=None,
+                default_temperature=0.0,
+            )
+        )
         if stop:
             data["stop"] = stop
-        if top_p is not None:
-            data["top_p"] = top_p
         if max_tokens is not None:
             data["max_completion_tokens"] = int(max_tokens)
         if stream:

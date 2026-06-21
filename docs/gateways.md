@@ -39,6 +39,19 @@ Request and response payloads are normalized by
   - `vendor_fields` carries provider-specific usage/timing metadata.
 - `CompletionGatewayError(provider, operation, message, cause)`
 
+Operation configs can suppress sampling controls for models that reject them:
+
+- `[<provider>] api.<operation>.sampling_controls = "enabled" | "disabled"`
+- `enabled` preserves provider-specific behavior for configured or request-level
+  `temperature` and `top_p`.
+- `disabled` omits `temperature` and `top_p` from operation defaults and
+  `CompletionInferenceConfig`. OpenAI-compatible Responses requests also ignore
+  OpenAI vendor params named `temperature` and `top_p` while disabled.
+- JSON overlays are deep-merged with the sample config. When inherited
+  `temp`/`top_p` defaults must not be sent, set
+  `api.<operation>.sampling_controls = "disabled"` instead of omitting those
+  keys in the overlay.
+
 ## Email Gateway Contract
 
 Outbound email gateways implement:
@@ -300,6 +313,16 @@ OpenAI compatibility notes:
   `[openai] api.base_url` and `[openai] api.timeout_seconds`.
 - Non-stream and stream responses preserve tool calls, usage metadata, and
   structured output blocks in normalized response fields.
+
+OpenAI Responses example for a model that rejects sampling controls:
+
+```toml
+[openai]
+api.completion.model = "gpt-5.5"
+api.completion.surface = "responses"
+api.completion.sampling_controls = "disabled"
+api.completion.max_completion_tokens = 4046
+```
 
 #### OpenAI Readiness Behavior
 
@@ -763,6 +786,7 @@ api.completion.model = "amazon.nova-lite-v1:0"
 api.completion.max_tokens = 1024
 api.completion.temp = 0.2
 api.completion.top_p = 0.9
+api.completion.sampling_controls = "enabled"
 
 [twilio]
 api.account_sid = "<twilio-account-sid>"
@@ -781,11 +805,13 @@ api.classification.model = "llama-4-scout-17b-16e-instruct"
 api.classification.surface = "chat_completions"
 api.classification.temp = 0.0
 api.classification.top_p = 1.0
+api.classification.sampling_controls = "enabled"
 api.classification.max_completion_tokens = 256
 api.completion.model = "llama-4-scout-17b-16e-instruct"
 api.completion.surface = "chat_completions"
 api.completion.temp = 0.2
 api.completion.top_p = 0.9
+api.completion.sampling_controls = "enabled"
 api.completion.max_completion_tokens = 1024
 api.timeout_seconds = 30.0
 
@@ -797,11 +823,13 @@ api.classification.model = "gpt-4.1-mini"
 api.classification.surface = "chat_completions"
 api.classification.temp = 0.0
 api.classification.top_p = 1.0
+api.classification.sampling_controls = "enabled"
 api.classification.max_completion_tokens = 256
 api.completion.model = "gpt-4.1-mini"
 api.completion.surface = "chat_completions"
 api.completion.temp = 0.2
 api.completion.top_p = 0.9
+api.completion.sampling_controls = "enabled"
 api.completion.max_completion_tokens = 1024
 api.timeout_seconds = 30.0
 
@@ -812,10 +840,12 @@ api.access_token = ""
 api.classification.model = "gemini-2.0-flash-001"
 api.classification.temp = 0.0
 api.classification.top_p = 1.0
+api.classification.sampling_controls = "enabled"
 api.classification.max_completion_tokens = 256
 api.completion.model = "gemini-2.0-flash-001"
 api.completion.temp = 0.2
 api.completion.top_p = 0.9
+api.completion.sampling_controls = "enabled"
 api.completion.max_completion_tokens = 1024
 api.connect_timeout_seconds = 10.0
 api.read_timeout_seconds = 30.0

@@ -49,13 +49,17 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
 
     async def test_check_readiness_resolves_required_operation_configs(self) -> None:
         config = _make_config()
-        config.groq.api.dict["classification"] = dict(config.groq.api.dict["completion"])
+        config.groq.api.dict["classification"] = dict(
+            config.groq.api.dict["completion"]
+        )
         logging_gateway = Mock()
         api = SimpleNamespace(
-            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+            models=SimpleNamespace(
+                list=AsyncMock(return_value=SimpleNamespace(data=[]))
+            ),
             chat=SimpleNamespace(
                 completions=SimpleNamespace(create=AsyncMock()),
-            )
+            ),
         )
 
         with patch("mugen.core.gateway.completion.groqq.AsyncGroq", return_value=api):
@@ -66,7 +70,9 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
 
     async def test_check_readiness_raises_when_models_list_is_missing(self) -> None:
         config = _make_config()
-        config.groq.api.dict["classification"] = dict(config.groq.api.dict["completion"])
+        config.groq.api.dict["classification"] = dict(
+            config.groq.api.dict["completion"]
+        )
         logging_gateway = Mock()
         api = SimpleNamespace(
             models=SimpleNamespace(list=None),
@@ -83,10 +89,14 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
 
     async def test_check_readiness_wraps_probe_failures(self) -> None:
         config = _make_config()
-        config.groq.api.dict["classification"] = dict(config.groq.api.dict["completion"])
+        config.groq.api.dict["classification"] = dict(
+            config.groq.api.dict["completion"]
+        )
         logging_gateway = Mock()
         api = SimpleNamespace(
-            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+            models=SimpleNamespace(
+                list=AsyncMock(return_value=SimpleNamespace(data=[]))
+            ),
             chat=SimpleNamespace(
                 completions=SimpleNamespace(create=AsyncMock()),
             ),
@@ -99,7 +109,10 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("mugen.core.gateway.completion.groqq.AsyncGroq", return_value=api),
-            patch("mugen.core.gateway.completion.groqq.asyncio.wait_for", side_effect=_wait_for),
+            patch(
+                "mugen.core.gateway.completion.groqq.asyncio.wait_for",
+                side_effect=_wait_for,
+            ),
         ):
             gateway = GroqCompletionGateway(config, logging_gateway)
             with self.assertRaisesRegex(RuntimeError, "readiness probe failed"):
@@ -110,7 +123,9 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         config = _make_config()
         config.groq.api.timeout_seconds = 3.5
-        config.groq.api.dict["classification"] = dict(config.groq.api.dict["completion"])
+        config.groq.api.dict["classification"] = dict(
+            config.groq.api.dict["completion"]
+        )
         logging_gateway = Mock()
         calls: list[dict[str, object]] = []
 
@@ -138,7 +153,10 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("mugen.core.gateway.completion.groqq.AsyncGroq", return_value=api),
-            patch("mugen.core.gateway.completion.groqq.asyncio.wait_for", side_effect=_wait_for),
+            patch(
+                "mugen.core.gateway.completion.groqq.asyncio.wait_for",
+                side_effect=_wait_for,
+            ),
         ):
             gateway = GroqCompletionGateway(config, logging_gateway)
             await gateway.check_readiness()
@@ -148,10 +166,14 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
 
     async def test_aclose_handles_missing_sync_and_async_close(self) -> None:
         config = _make_config()
-        config.groq.api.dict["classification"] = dict(config.groq.api.dict["completion"])
+        config.groq.api.dict["classification"] = dict(
+            config.groq.api.dict["completion"]
+        )
         logging_gateway = Mock()
         api = SimpleNamespace(
-            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+            models=SimpleNamespace(
+                list=AsyncMock(return_value=SimpleNamespace(data=[]))
+            ),
             chat=SimpleNamespace(
                 completions=SimpleNamespace(create=AsyncMock()),
             ),
@@ -172,9 +194,13 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
             calls.append("async")
             return None
 
-        gateway._api = SimpleNamespace(close=_sync_close)  # pylint: disable=protected-access
+        gateway._api = SimpleNamespace(
+            close=_sync_close
+        )  # pylint: disable=protected-access
         self.assertIsNone(await gateway.aclose())
-        gateway._api = SimpleNamespace(close=_async_close)  # pylint: disable=protected-access
+        gateway._api = SimpleNamespace(
+            close=_async_close
+        )  # pylint: disable=protected-access
         self.assertIsNone(await gateway.aclose())
         self.assertEqual(calls, ["sync", "async"])
 
@@ -182,11 +208,15 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         config = _make_config()
-        config.groq.api.dict["classification"] = dict(config.groq.api.dict["completion"])
+        config.groq.api.dict["classification"] = dict(
+            config.groq.api.dict["completion"]
+        )
         config.groq.api.dict["classification"]["max_tokens"] = "10"
         logging_gateway = Mock()
         api = SimpleNamespace(
-            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+            models=SimpleNamespace(
+                list=AsyncMock(return_value=SimpleNamespace(data=[]))
+            ),
             chat=SimpleNamespace(
                 completions=SimpleNamespace(create=AsyncMock()),
             ),
@@ -299,7 +329,10 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
                 CompletionMessage(role="system", content={"policy": "strict"}),
                 CompletionMessage(
                     role="user",
-                    content={"message": "hello", "ingress_metadata": {"tenant": "global"}},
+                    content={
+                        "message": "hello",
+                        "ingress_metadata": {"tenant": "global"},
+                    },
                 ),
             ],
         )
@@ -319,7 +352,9 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-    async def test_get_completion_uses_explicit_inference_and_vendor_params(self) -> None:
+    async def test_get_completion_uses_explicit_inference_and_vendor_params(
+        self,
+    ) -> None:
         config = _make_config()
         logging_gateway = Mock()
         response_payload = SimpleNamespace(
@@ -380,6 +415,45 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
             tools=[{"type": "function"}],
             user="u-1",
         )
+
+    async def test_get_completion_disables_sampling_controls(self) -> None:
+        config = _make_config()
+        config.groq.api.dict["completion"]["sampling_controls"] = "disabled"
+        logging_gateway = Mock()
+        response_payload = SimpleNamespace(
+            model="llama-3.1-8b-instant",
+            choices=[
+                SimpleNamespace(
+                    finish_reason="stop",
+                    message=SimpleNamespace(content="ok"),
+                )
+            ],
+            usage=None,
+        )
+        api = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=AsyncMock(return_value=response_payload),
+                )
+            )
+        )
+
+        with patch(
+            "mugen.core.gateway.completion.groqq.AsyncGroq",
+            return_value=api,
+        ):
+            gateway = GroqCompletionGateway(config, logging_gateway)
+
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            inference=CompletionInferenceConfig(temperature=0.7, top_p=0.6),
+        )
+        await gateway.get_completion(request)
+
+        _, kwargs = api.chat.completions.create.await_args
+        self.assertNotIn("temperature", kwargs)
+        self.assertNotIn("top_p", kwargs)
 
     async def test_get_completion_prefers_max_completion_tokens(self) -> None:
         config = _make_config()
@@ -506,7 +580,7 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
                                     id="call_1",
                                     type="function",
                                     function=SimpleNamespace(name="weather"),
-                                )
+                                ),
                             ],
                         ),
                     )
@@ -643,7 +717,9 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
         logging_gateway = Mock()
         chunks = [
             SimpleNamespace(
-                choices=[SimpleNamespace(finish_reason="stop", delta=SimpleNamespace())],
+                choices=[
+                    SimpleNamespace(finish_reason="stop", delta=SimpleNamespace())
+                ],
                 usage=None,
             ),
         ]
@@ -727,7 +803,9 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
         ):
             await gateway.get_completion(request)
 
-    async def test_get_completion_rejects_invalid_inference_stream_boolean(self) -> None:
+    async def test_get_completion_rejects_invalid_inference_stream_boolean(
+        self,
+    ) -> None:
         config = _make_config()
         logging_gateway = Mock()
         api = SimpleNamespace(
@@ -790,9 +868,13 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
         response = await gateway.get_completion(request)
 
         self.assertEqual(response.content[0]["type"], "output_text")
-        self.assertEqual(response.vendor_fields["stream_content_deltas"][1]["type"], "reasoning")
+        self.assertEqual(
+            response.vendor_fields["stream_content_deltas"][1]["type"], "reasoning"
+        )
 
-    async def test_get_completion_stream_preserves_structured_object_delta(self) -> None:
+    async def test_get_completion_stream_preserves_structured_object_delta(
+        self,
+    ) -> None:
         config = _make_config()
         logging_gateway = Mock()
         chunks = [
@@ -828,7 +910,9 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.content[0]["text"], "hello")
 
-    async def test_get_completion_stream_ignores_unrecognized_delta_content(self) -> None:
+    async def test_get_completion_stream_ignores_unrecognized_delta_content(
+        self,
+    ) -> None:
         config = _make_config()
         logging_gateway = Mock()
         chunks = [
@@ -912,7 +996,9 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
             gateway = GroqCompletionGateway(config, logging_gateway)
 
         response = await gateway.get_completion(_simple_request())
-        self.assertEqual(response.vendor_fields["additional_choices"][0]["finish_reason"], "length")
+        self.assertEqual(
+            response.vendor_fields["additional_choices"][0]["finish_reason"], "length"
+        )
 
     async def test_get_completion_handles_response_without_payload_dict(self) -> None:
         class _CompletionNoDict:
@@ -1085,7 +1171,9 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
             GroqCompletionGateway._normalize_dict(_ModelDumpObject()),
             {"value": 1},
         )
-        self.assertEqual(GroqCompletionGateway._normalize_dict(_ModelDumpNonDictObject()), {})
+        self.assertEqual(
+            GroqCompletionGateway._normalize_dict(_ModelDumpNonDictObject()), {}
+        )
         self.assertEqual(GroqCompletionGateway._normalize_dict(1), {})
 
         normalized_list = GroqCompletionGateway._normalize_content(
@@ -1117,7 +1205,9 @@ class TestMugenGatewayCompletionGroq(unittest.IsolatedAsyncioTestCase):
         gateway._logging_gateway = Mock()  # pylint: disable=protected-access
 
         self.assertIsNone(gateway._resolve_timeout_seconds())
-        gateway._config.groq.api.timeout_seconds = "bad"  # pylint: disable=protected-access
+        gateway._config.groq.api.timeout_seconds = (
+            "bad"  # pylint: disable=protected-access
+        )
         with self.assertRaisesRegex(RuntimeError, "timeout_seconds"):
             gateway._resolve_timeout_seconds()
         gateway._config.groq.api.timeout_seconds = 0  # pylint: disable=protected-access

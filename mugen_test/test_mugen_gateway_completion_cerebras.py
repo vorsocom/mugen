@@ -66,7 +66,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
         config = _make_config(base_url="", timeout_seconds="3.5")
         logging_gateway = Mock()
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras") as async_cerebras:
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras"
+        ) as async_cerebras:
             CerebrasCompletionGateway(config, logging_gateway)
 
         async_cerebras.assert_called_once_with(
@@ -82,7 +84,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
         )
         logging_gateway = Mock()
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras") as async_cerebras:
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras"
+        ) as async_cerebras:
             CerebrasCompletionGateway(config, logging_gateway)
 
         async_cerebras.assert_called_once_with(
@@ -112,7 +116,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
         logging_gateway = Mock()
 
         with (
-            patch("mugen.core.gateway.completion.cerebras.AsyncCerebras") as async_cerebras,
+            patch(
+                "mugen.core.gateway.completion.cerebras.AsyncCerebras"
+            ) as async_cerebras,
             self.assertRaisesRegex(RuntimeError, "timeout_seconds"),
         ):
             CerebrasCompletionGateway(config, logging_gateway)
@@ -134,10 +140,14 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
         logging_gateway = Mock()
         api = SimpleNamespace(
             chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
-            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+            models=SimpleNamespace(
+                list=AsyncMock(return_value=SimpleNamespace(data=[]))
+            ),
         )
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
         await gateway.check_readiness()
@@ -151,7 +161,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             models=SimpleNamespace(list=None),
         )
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
         with self.assertRaisesRegex(RuntimeError, "readiness probe unavailable"):
@@ -177,7 +189,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             models=SimpleNamespace(list=_list_models),
         )
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
         await gateway.check_readiness()
@@ -188,7 +202,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
         logging_gateway = Mock()
         api = SimpleNamespace(
             chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
-            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+            models=SimpleNamespace(
+                list=AsyncMock(return_value=SimpleNamespace(data=[]))
+            ),
         )
         wait_for_calls: list[float] = []
 
@@ -197,8 +213,13 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             return await awaitable
 
         with (
-            patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api),
-            patch("mugen.core.gateway.completion.cerebras.asyncio.wait_for", side_effect=_wait_for),
+            patch(
+                "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+            ),
+            patch(
+                "mugen.core.gateway.completion.cerebras.asyncio.wait_for",
+                side_effect=_wait_for,
+            ),
         ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
             await gateway.check_readiness()
@@ -210,7 +231,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
         logging_gateway = Mock()
         api = SimpleNamespace(
             chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
-            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+            models=SimpleNamespace(
+                list=AsyncMock(return_value=SimpleNamespace(data=[]))
+            ),
         )
 
         async def _wait_for(awaitable, timeout):
@@ -219,8 +242,13 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             raise RuntimeError("probe down")
 
         with (
-            patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api),
-            patch("mugen.core.gateway.completion.cerebras.asyncio.wait_for", side_effect=_wait_for),
+            patch(
+                "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+            ),
+            patch(
+                "mugen.core.gateway.completion.cerebras.asyncio.wait_for",
+                side_effect=_wait_for,
+            ),
         ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
             with self.assertRaisesRegex(RuntimeError, "readiness probe failed"):
@@ -231,9 +259,13 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
         logging_gateway = Mock()
         api = SimpleNamespace(
             chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
-            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+            models=SimpleNamespace(
+                list=AsyncMock(return_value=SimpleNamespace(data=[]))
+            ),
         )
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
         gateway._api = SimpleNamespace()  # pylint: disable=protected-access
@@ -249,9 +281,13 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             calls.append("async")
             return None
 
-        gateway._api = SimpleNamespace(close=_sync_close)  # pylint: disable=protected-access
+        gateway._api = SimpleNamespace(
+            close=_sync_close
+        )  # pylint: disable=protected-access
         self.assertIsNone(await gateway.aclose())
-        gateway._api = SimpleNamespace(close=_async_close)  # pylint: disable=protected-access
+        gateway._api = SimpleNamespace(
+            close=_async_close
+        )  # pylint: disable=protected-access
         self.assertIsNone(await gateway.aclose())
         self.assertEqual(calls, ["sync", "async"])
 
@@ -291,7 +327,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
         response = await gateway.get_completion(_simple_request())
@@ -344,7 +382,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
         request = CompletionRequest(
@@ -353,7 +393,10 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
                 CompletionMessage(role="system", content={"policy": "strict"}),
                 CompletionMessage(
                     role="user",
-                    content={"message": "hello", "attachment_context": [{"kind": "image"}]},
+                    content={
+                        "message": "hello",
+                        "attachment_context": [{"kind": "image"}],
+                    },
                 ),
             ],
         )
@@ -373,7 +416,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-    async def test_get_completion_uses_explicit_inference_and_vendor_subset(self) -> None:
+    async def test_get_completion_uses_explicit_inference_and_vendor_subset(
+        self,
+    ) -> None:
         config = _make_config()
         logging_gateway = Mock()
         response_payload = SimpleNamespace(
@@ -381,7 +426,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             choices=[
                 SimpleNamespace(
                     finish_reason="length",
-                    message=SimpleNamespace(role="assistant", content="ok", tool_calls=[]),
+                    message=SimpleNamespace(
+                        role="assistant", content="ok", tool_calls=[]
+                    ),
                 )
             ],
             usage=None,
@@ -394,7 +441,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
         request = CompletionRequest(
@@ -422,6 +471,48 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["max_completion_tokens"], 42)
         self.assertEqual(kwargs["stop"], ["DONE"])
 
+    async def test_get_completion_disables_sampling_controls(self) -> None:
+        config = _make_config()
+        config.cerebras.api.dict["completion"]["sampling_controls"] = "disabled"
+        logging_gateway = Mock()
+        response_payload = SimpleNamespace(
+            model="llama-4-scout-17b-16e-instruct",
+            choices=[
+                SimpleNamespace(
+                    finish_reason="stop",
+                    message=SimpleNamespace(
+                        role="assistant",
+                        content="ok",
+                        tool_calls=[],
+                    ),
+                )
+            ],
+            usage=None,
+        )
+        api = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=AsyncMock(return_value=response_payload),
+                )
+            )
+        )
+
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
+            gateway = CerebrasCompletionGateway(config, logging_gateway)
+
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            inference=CompletionInferenceConfig(temperature=0.7, top_p=0.6),
+        )
+        await gateway.get_completion(request)
+
+        kwargs = api.chat.completions.create.await_args.kwargs
+        self.assertNotIn("temperature", kwargs)
+        self.assertNotIn("top_p", kwargs)
+
     async def test_get_completion_parses_stream_response(self) -> None:
         config = _make_config()
         logging_gateway = Mock()
@@ -440,7 +531,7 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
                                     type="function",
                                     function=SimpleNamespace(
                                         name="math",
-                                        arguments="{\"a\":",
+                                        arguments='{"a":',
                                     ),
                                 )
                             ],
@@ -488,7 +579,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             inference=CompletionInferenceConfig(stream=True),
         )
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
         response = await gateway.get_completion(request)
@@ -497,7 +590,7 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.usage.total_tokens, 3)
         self.assertEqual(response.tool_calls[0]["id"], "call_1")
         self.assertEqual(response.tool_calls[0]["function"]["name"], "math")
-        self.assertEqual(response.tool_calls[0]["function"]["arguments"], "{\"a\":1}")
+        self.assertEqual(response.tool_calls[0]["function"]["arguments"], '{"a":1}')
         self.assertEqual(response.message["role"], "assistant")
         self.assertEqual(len(response.raw), 2)
 
@@ -523,7 +616,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             inference=CompletionInferenceConfig(stream=True),
         )
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
         with self.assertRaisesRegex(CompletionGatewayError, "bad_request"):
@@ -538,7 +633,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
         request = CompletionRequest(
@@ -546,7 +643,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             messages=[CompletionMessage(role="user", content="hello")],
             vendor_params={"cerebras_api": "responses"},
         )
-        with self.assertRaisesRegex(CompletionGatewayError, "Expected 'chat_completions'"):
+        with self.assertRaisesRegex(
+            CompletionGatewayError, "Expected 'chat_completions'"
+        ):
             await gateway.get_completion(request)
 
     async def test_get_completion_rejects_openai_api_alias(self) -> None:
@@ -558,7 +657,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
         request = CompletionRequest(
@@ -578,7 +679,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
         request = CompletionRequest(
@@ -586,7 +689,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             messages=[CompletionMessage(role="user", content="hello")],
             vendor_params={"stream": True},
         )
-        with self.assertRaisesRegex(CompletionGatewayError, "Removed legacy vendor param"):
+        with self.assertRaisesRegex(
+            CompletionGatewayError, "Removed legacy vendor param"
+        ):
             await gateway.get_completion(request)
 
     async def test_get_completion_rejects_non_empty_stream_options(self) -> None:
@@ -598,7 +703,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
         request = CompletionRequest(
@@ -609,7 +716,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
                 stream_options={"include_usage": True},
             ),
         )
-        with self.assertRaisesRegex(CompletionGatewayError, "stream_options is not supported"):
+        with self.assertRaisesRegex(
+            CompletionGatewayError, "stream_options is not supported"
+        ):
             await gateway.get_completion(request)
 
     async def test_get_completion_wraps_api_error(self) -> None:
@@ -626,7 +735,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
         with self.assertRaisesRegex(CompletionGatewayError, "rate limited"):
@@ -637,14 +748,20 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
         logging_gateway = Mock()
         api = SimpleNamespace(
             chat=SimpleNamespace(
-                completions=SimpleNamespace(create=AsyncMock(side_effect=RuntimeError("boom"))),
+                completions=SimpleNamespace(
+                    create=AsyncMock(side_effect=RuntimeError("boom"))
+                ),
             )
         )
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
-        with self.assertRaisesRegex(CompletionGatewayError, "Unexpected Cerebras completion failure"):
+        with self.assertRaisesRegex(
+            CompletionGatewayError, "Unexpected Cerebras completion failure"
+        ):
             await gateway.get_completion(_simple_request())
 
     async def test_get_completion_rethrows_completion_gateway_error(self) -> None:
@@ -658,7 +775,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
         wrapped = CompletionGatewayError(
@@ -674,7 +793,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(CompletionGatewayError, "already wrapped"):
                 await gateway.get_completion(_simple_request())
 
-    async def test_get_completion_raises_when_response_contains_error_payload(self) -> None:
+    async def test_get_completion_raises_when_response_contains_error_payload(
+        self,
+    ) -> None:
         config = _make_config()
         logging_gateway = Mock()
         response_payload = SimpleNamespace(
@@ -689,7 +810,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
         with self.assertRaisesRegex(CompletionGatewayError, "bad_request"):
@@ -701,18 +824,26 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
         logging_gateway = Mock()
         api = SimpleNamespace(
             chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())),
-            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[]))),
+            models=SimpleNamespace(
+                list=AsyncMock(return_value=SimpleNamespace(data=[]))
+            ),
         )
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
-        with self.assertRaisesRegex(CompletionGatewayError, "removed legacy key 'max_tokens'"):
+        with self.assertRaisesRegex(
+            CompletionGatewayError, "removed legacy key 'max_tokens'"
+        ):
             await gateway.check_readiness()
 
     def test_constructor_defaults_base_url_when_non_string(self) -> None:
         config = _make_config(base_url=None, timeout_seconds=None)
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras") as async_cerebras:
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras"
+        ) as async_cerebras:
             CerebrasCompletionGateway(config, Mock())
         async_cerebras.assert_called_once_with(
             api_key="csk-test",
@@ -721,7 +852,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_completion_omits_optional_fields_when_unconfigured(self) -> None:
         config = _make_config()
-        config.cerebras.api.dict["completion"] = {"model": "llama-4-scout-17b-16e-instruct"}
+        config.cerebras.api.dict["completion"] = {
+            "model": "llama-4-scout-17b-16e-instruct"
+        }
         logging_gateway = Mock()
         api = SimpleNamespace(
             chat=SimpleNamespace(
@@ -732,7 +865,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
                             choices=[
                                 SimpleNamespace(
                                     finish_reason="stop",
-                                    message=SimpleNamespace(role="assistant", content="ok", tool_calls=[]),
+                                    message=SimpleNamespace(
+                                        role="assistant", content="ok", tool_calls=[]
+                                    ),
                                 )
                             ],
                             usage=None,
@@ -742,7 +877,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
         request = CompletionRequest(
@@ -761,7 +898,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("stop", kwargs)
         self.assertNotIn("max_completion_tokens", kwargs)
 
-    async def test_parse_stream_response_handles_empty_choices_and_no_message(self) -> None:
+    async def test_parse_stream_response_handles_empty_choices_and_no_message(
+        self,
+    ) -> None:
         config = _make_config()
         logging_gateway = Mock()
         api = SimpleNamespace(
@@ -770,15 +909,24 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             )
         )
         chunks = [
-            SimpleNamespace(choices=[], usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2)),
+            SimpleNamespace(
+                choices=[],
+                usage=SimpleNamespace(
+                    prompt_tokens=1, completion_tokens=1, total_tokens=2
+                ),
+            ),
         ]
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, logging_gateway)
 
-        response = await gateway._parse_stream_response(  # pylint: disable=protected-access
-            stream=_stream_chunks(chunks),
-            model="m1",
-            operation="completion",
+        response = (
+            await gateway._parse_stream_response(  # pylint: disable=protected-access
+                stream=_stream_chunks(chunks),
+                model="m1",
+                operation="completion",
+            )
         )
         self.assertEqual(response.content, "")
         self.assertIsNone(response.message)
@@ -787,7 +935,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
 
     async def test_parse_stream_response_captures_reasoning_delta(self) -> None:
         config = _make_config()
-        api = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())))
+        api = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock()))
+        )
         chunks = [
             SimpleNamespace(
                 choices=[
@@ -799,44 +949,66 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
                 usage=None,
             )
         ]
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, Mock())
 
-        response = await gateway._parse_stream_response(  # pylint: disable=protected-access
-            stream=_stream_chunks(chunks),
-            model="m1",
-            operation="completion",
+        response = (
+            await gateway._parse_stream_response(  # pylint: disable=protected-access
+                stream=_stream_chunks(chunks),
+                model="m1",
+                operation="completion",
+            )
         )
-        self.assertEqual(response.vendor_fields["stream_reasoning_deltas"], ["thinking"])
+        self.assertEqual(
+            response.vendor_fields["stream_reasoning_deltas"], ["thinking"]
+        )
 
-    async def test_parse_stream_response_handles_missing_delta_and_no_tool_calls(self) -> None:
+    async def test_parse_stream_response_handles_missing_delta_and_no_tool_calls(
+        self,
+    ) -> None:
         config = _make_config()
-        api = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())))
+        api = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock()))
+        )
         chunks = [
             SimpleNamespace(
                 choices=[SimpleNamespace(finish_reason=None, delta=None)],
                 usage=None,
             ),
             SimpleNamespace(
-                choices=[SimpleNamespace(finish_reason="stop", delta=SimpleNamespace(content="ok"))],
+                choices=[
+                    SimpleNamespace(
+                        finish_reason="stop", delta=SimpleNamespace(content="ok")
+                    )
+                ],
                 usage=None,
             ),
         ]
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, Mock())
 
-        response = await gateway._parse_stream_response(  # pylint: disable=protected-access
-            stream=_stream_chunks(chunks),
-            model="m1",
-            operation="completion",
+        response = (
+            await gateway._parse_stream_response(  # pylint: disable=protected-access
+                stream=_stream_chunks(chunks),
+                model="m1",
+                operation="completion",
+            )
         )
         self.assertEqual(response.content, "ok")
         self.assertEqual(response.tool_calls, [])
 
     async def test_parse_standard_response_handles_optional_fields(self) -> None:
         config = _make_config()
-        api = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())))
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        api = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock()))
+        )
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, Mock())
 
         response_payload = SimpleNamespace(
@@ -844,11 +1016,15 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             choices=[
                 SimpleNamespace(
                     finish_reason="stop",
-                    message=SimpleNamespace(role="assistant", content=None, reasoning="r1", tool_calls=[]),
+                    message=SimpleNamespace(
+                        role="assistant", content=None, reasoning="r1", tool_calls=[]
+                    ),
                 ),
                 SimpleNamespace(
                     finish_reason="stop",
-                    message=SimpleNamespace(role="assistant", content="alt", tool_calls=[]),
+                    message=SimpleNamespace(
+                        role="assistant", content="alt", tool_calls=[]
+                    ),
                 ),
             ],
             usage=None,
@@ -864,11 +1040,17 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
 
     async def test_parse_standard_response_raises_when_choices_missing(self) -> None:
         config = _make_config()
-        api = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())))
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        api = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock()))
+        )
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, Mock())
 
-        with self.assertRaisesRegex(CompletionGatewayError, "did not include any completion choices"):
+        with self.assertRaisesRegex(
+            CompletionGatewayError, "did not include any completion choices"
+        ):
             gateway._parse_standard_response(  # pylint: disable=protected-access
                 chat_completion=SimpleNamespace(model="m1", choices=[]),
                 model="m1",
@@ -877,39 +1059,55 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
 
     def test_resolve_choice_list_from_payload_or_empty(self) -> None:
         self.assertEqual(
-            CerebrasCompletionGateway._resolve_choice_list(SimpleNamespace(), {"choices": [1]}),  # pylint: disable=protected-access
+            CerebrasCompletionGateway._resolve_choice_list(
+                SimpleNamespace(), {"choices": [1]}
+            ),  # pylint: disable=protected-access
             [1],
         )
         self.assertEqual(
-            CerebrasCompletionGateway._resolve_choice_list(SimpleNamespace(), {}),  # pylint: disable=protected-access
+            CerebrasCompletionGateway._resolve_choice_list(
+                SimpleNamespace(), {}
+            ),  # pylint: disable=protected-access
             [],
         )
 
     def test_extract_chunk_error_variants(self) -> None:
         self.assertEqual(
-            CerebrasCompletionGateway._extract_chunk_error({"error": {"message": "m"}}),  # pylint: disable=protected-access
+            CerebrasCompletionGateway._extract_chunk_error(
+                {"error": {"message": "m"}}
+            ),  # pylint: disable=protected-access
             "m",
         )
         self.assertEqual(
-            CerebrasCompletionGateway._extract_chunk_error({"error": {"code": "c"}}),  # pylint: disable=protected-access
+            CerebrasCompletionGateway._extract_chunk_error(
+                {"error": {"code": "c"}}
+            ),  # pylint: disable=protected-access
             "c",
         )
         self.assertEqual(
-            CerebrasCompletionGateway._extract_chunk_error({"error": {"foo": "bar"}}),  # pylint: disable=protected-access
+            CerebrasCompletionGateway._extract_chunk_error(
+                {"error": {"foo": "bar"}}
+            ),  # pylint: disable=protected-access
             "Cerebras request failed.",
         )
         self.assertEqual(
-            CerebrasCompletionGateway._extract_chunk_error({"error": {}}),  # pylint: disable=protected-access
+            CerebrasCompletionGateway._extract_chunk_error(
+                {"error": {}}
+            ),  # pylint: disable=protected-access
             "Cerebras request failed.",
         )
         self.assertEqual(
-            CerebrasCompletionGateway._extract_chunk_error({"error": "bad"}),  # pylint: disable=protected-access
+            CerebrasCompletionGateway._extract_chunk_error(
+                {"error": "bad"}
+            ),  # pylint: disable=protected-access
             "bad",
         )
 
     def test_merge_stream_tool_call_branches(self) -> None:
         tool_calls: dict[str, dict[str, object]] = {}
-        CerebrasCompletionGateway._merge_stream_tool_call(tool_calls, None)  # pylint: disable=protected-access
+        CerebrasCompletionGateway._merge_stream_tool_call(
+            tool_calls, None
+        )  # pylint: disable=protected-access
         self.assertEqual(tool_calls, {})
 
         CerebrasCompletionGateway._merge_stream_tool_call(  # pylint: disable=protected-access
@@ -921,7 +1119,11 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
 
         CerebrasCompletionGateway._merge_stream_tool_call(  # pylint: disable=protected-access
             tool_calls,
-            {"index": 2, "type": "function", "function": {"name": "calc", "arguments": "1"}},
+            {
+                "index": 2,
+                "type": "function",
+                "function": {"name": "calc", "arguments": "1"},
+            },
         )
         self.assertEqual(tool_calls["index:2"]["function"]["name"], "calc")
 
@@ -955,25 +1157,43 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
 
     async def test_resolve_operation_config_error_branches(self) -> None:
         config = _make_config()
-        api = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())))
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        api = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock()))
+        )
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, Mock())
 
-        with self.assertRaisesRegex(CompletionGatewayError, "Missing Cerebras operation configuration"):
-            gateway._resolve_operation_config("missing")  # pylint: disable=protected-access
+        with self.assertRaisesRegex(
+            CompletionGatewayError, "Missing Cerebras operation configuration"
+        ):
+            gateway._resolve_operation_config(
+                "missing"
+            )  # pylint: disable=protected-access
 
         config.cerebras.api.dict["completion"] = "bad"
-        with self.assertRaisesRegex(CompletionGatewayError, "Invalid Cerebras operation configuration"):
-            gateway._resolve_operation_config("completion")  # pylint: disable=protected-access
+        with self.assertRaisesRegex(
+            CompletionGatewayError, "Invalid Cerebras operation configuration"
+        ):
+            gateway._resolve_operation_config(
+                "completion"
+            )  # pylint: disable=protected-access
 
         config.cerebras.api.dict["completion"] = {}
         with self.assertRaisesRegex(CompletionGatewayError, "is missing model"):
-            gateway._resolve_operation_config("completion")  # pylint: disable=protected-access
+            gateway._resolve_operation_config(
+                "completion"
+            )  # pylint: disable=protected-access
 
     async def test_validate_surface_aliases_rejects_non_string_surface(self) -> None:
         config = _make_config()
-        api = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())))
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        api = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock()))
+        )
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, Mock())
 
         request = CompletionRequest(
@@ -981,13 +1201,21 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             messages=[CompletionMessage(role="user", content="hello")],
             vendor_params={"cerebras_api": 1},
         )
-        with self.assertRaisesRegex(CompletionGatewayError, "Expected 'chat_completions'"):
-            gateway._validate_surface_aliases(request, {"surface": "chat_completions"})  # pylint: disable=protected-access
+        with self.assertRaisesRegex(
+            CompletionGatewayError, "Expected 'chat_completions'"
+        ):
+            gateway._validate_surface_aliases(
+                request, {"surface": "chat_completions"}
+            )  # pylint: disable=protected-access
 
     async def test_parse_bool_like_rejects_invalid_value(self) -> None:
         config = _make_config()
-        api = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock())))
-        with patch("mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api):
+        api = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock()))
+        )
+        with patch(
+            "mugen.core.gateway.completion.cerebras.AsyncCerebras", return_value=api
+        ):
             gateway = CerebrasCompletionGateway(config, Mock())
 
         request = CompletionRequest(
@@ -999,7 +1227,9 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
             gateway._resolve_stream(request)  # pylint: disable=protected-access
 
     def test_usage_from_payload_and_normalizers(self) -> None:
-        self.assertIsNone(CerebrasCompletionGateway._usage_from_payload(None))  # pylint: disable=protected-access
+        self.assertIsNone(
+            CerebrasCompletionGateway._usage_from_payload(None)
+        )  # pylint: disable=protected-access
         usage = CerebrasCompletionGateway._usage_from_payload(  # pylint: disable=protected-access
             {
                 "prompt_tokens": 1,
@@ -1029,47 +1259,69 @@ class TestMugenGatewayCompletionCerebras(unittest.IsolatedAsyncioTestCase):
                 return "bad"
 
         self.assertEqual(
-            CerebrasCompletionGateway._normalize_dict(_WithModelDump()),  # pylint: disable=protected-access
+            CerebrasCompletionGateway._normalize_dict(
+                _WithModelDump()
+            ),  # pylint: disable=protected-access
             {"a": 1},
         )
         self.assertEqual(
-            CerebrasCompletionGateway._normalize_dict(_WithToDict()),  # pylint: disable=protected-access
+            CerebrasCompletionGateway._normalize_dict(
+                _WithToDict()
+            ),  # pylint: disable=protected-access
             {"b": 2},
         )
         self.assertEqual(
-            CerebrasCompletionGateway._normalize_dict(_WithBadModelDump()),  # pylint: disable=protected-access
+            CerebrasCompletionGateway._normalize_dict(
+                _WithBadModelDump()
+            ),  # pylint: disable=protected-access
             {},
         )
         self.assertEqual(
-            CerebrasCompletionGateway._normalize_dict(_WithBadToDict()),  # pylint: disable=protected-access
+            CerebrasCompletionGateway._normalize_dict(
+                _WithBadToDict()
+            ),  # pylint: disable=protected-access
             {},
         )
 
         self.assertEqual(
-            CerebrasCompletionGateway._normalize_content([{"k": 1}, _WithToDict()]),  # pylint: disable=protected-access
+            CerebrasCompletionGateway._normalize_content(
+                [{"k": 1}, _WithToDict()]
+            ),  # pylint: disable=protected-access
             [{"k": 1}, {"b": 2}],
         )
         self.assertEqual(
-            CerebrasCompletionGateway._normalize_content([object()]),  # pylint: disable=protected-access
+            CerebrasCompletionGateway._normalize_content(
+                [object()]
+            ),  # pylint: disable=protected-access
             [],
         )
         self.assertEqual(
-            CerebrasCompletionGateway._normalize_content(_WithToDict()),  # pylint: disable=protected-access
+            CerebrasCompletionGateway._normalize_content(
+                _WithToDict()
+            ),  # pylint: disable=protected-access
             {"b": 2},
         )
         self.assertIsNone(
-            CerebrasCompletionGateway._normalize_content(object())  # pylint: disable=protected-access
+            CerebrasCompletionGateway._normalize_content(
+                object()
+            )  # pylint: disable=protected-access
         )
 
         self.assertEqual(
-            CerebrasCompletionGateway._normalize_list_of_dicts("nope"),  # pylint: disable=protected-access
+            CerebrasCompletionGateway._normalize_list_of_dicts(
+                "nope"
+            ),  # pylint: disable=protected-access
             [],
         )
         self.assertEqual(
-            CerebrasCompletionGateway._normalize_list_of_dicts([_WithToDict()]),  # pylint: disable=protected-access
+            CerebrasCompletionGateway._normalize_list_of_dicts(
+                [_WithToDict()]
+            ),  # pylint: disable=protected-access
             [{"b": 2}],
         )
         self.assertEqual(
-            CerebrasCompletionGateway._normalize_list_of_dicts([object()]),  # pylint: disable=protected-access
+            CerebrasCompletionGateway._normalize_list_of_dicts(
+                [object()]
+            ),  # pylint: disable=protected-access
             [],
         )
