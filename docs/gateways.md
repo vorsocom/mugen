@@ -31,13 +31,43 @@ Request and response payloads are normalized by
   - `content` supports string, object, list-of-objects, or null.
 - `CompletionInferenceConfig(max_completion_tokens, temperature, top_p, stop, stream, stream_options)`
   - `max_completion_tokens` is the canonical token-limit field.
-- `CompletionRequest(messages, operation, model, inference, vendor_params)`
-- `CompletionResponse(content, model, stop_reason, message, tool_calls, usage, vendor_fields, raw)`
+- `CompletionReasoningConfig(mode, effort, budget_tokens, include_encrypted_state, visibility)`
+- `CompletionTool(name, description, input_schema, strict, kind, provider_hints)`
+- `CompletionToolCall(id, name, arguments, provider_item)`
+- `CompletionToolResult(tool_call_id, name, content, is_error)`
+- `CompletionContinuationState(provider, response_id, conversation_id, output_items, reasoning_items, thinking_blocks, redacted_thinking_blocks, provider_state)`
+- `CompletionRequest(messages, operation, model, inference, reasoning, tools, tool_results, continuation_state, vendor_params)`
+- `CompletionResponse(content, model, stop_reason, message, tool_calls, output_items, reasoning_state, provider_state, usage, vendor_fields, raw)`
   - `content` may be structured (not string-only).
   - `message` and `tool_calls` preserve richer assistant outputs.
-- `CompletionUsage(input_tokens, output_tokens, total_tokens, vendor_fields)`
+- `reasoning_state` and `provider_state` are opaque provider continuation data.
+- `CompletionUsage(input_tokens, output_tokens, total_tokens, reasoning_tokens, vendor_fields)`
   - `vendor_fields` carries provider-specific usage/timing metadata.
 - `CompletionGatewayError(provider, operation, message, cause)`
+
+Reasoning-workflow fields are additive and backward-compatible with existing
+chat-shaped requests. Provider adapters that do not understand normalized
+reasoning, tools, tool results, or continuation state must either ignore absent
+fields or raise a deterministic `CompletionGatewayError` when a request asks for
+unsupported workflow features.
+
+Do not emit raw reasoning items, encrypted reasoning, `thinking` blocks,
+`redacted_thinking` blocks, or provider credentials to user-visible responses or
+normal logs. Log-safe serializers summarize counts and provider state keys
+instead.
+
+Operation configs may define provider-neutral reasoning defaults for adapters
+that support them:
+
+- `[<provider>] api.<operation>.reasoning.mode`
+  - expected values are provider-specific, but normalized adapters should use
+    `adaptive`, `enabled`, or `disabled` where possible.
+- `[<provider>] api.<operation>.reasoning.effort`
+- `[<provider>] api.<operation>.reasoning.budget_tokens`
+- `[<provider>] api.<operation>.reasoning.include_encrypted_state`
+- `[<provider>] api.<operation>.reasoning.visibility`
+  - default behavior is `opaque`; raw provider reasoning remains replay state,
+    not display content.
 
 Operation configs can suppress sampling controls for models that reject them:
 
