@@ -20,6 +20,10 @@ _PROVIDER_TOKEN_REGISTRY: dict[str, dict[str, _ProviderTokenSpec]] = {
         ),
     },
     "completion_gateway": {
+        "anthropic": _ProviderTokenSpec(
+            module_path="mugen.core.gateway.completion.anthropic",
+            class_name="AnthropicCompletionGateway",
+        ),
         "openai": _ProviderTokenSpec(
             module_path="mugen.core.gateway.completion.openai",
             class_name="OpenAICompletionGateway",

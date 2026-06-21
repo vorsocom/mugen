@@ -1,16 +1,21 @@
 """Unit tests for mugen.core.gateway.completion.bedrock.BedrockCompletionGateway."""
 
 from types import SimpleNamespace
+import json
 import unittest
 from unittest.mock import Mock, patch
 
 from botocore.exceptions import ClientError
 
 from mugen.core.contract.gateway.completion import (
+    CompletionContinuationState,
     CompletionGatewayError,
     CompletionInferenceConfig,
     CompletionMessage,
+    CompletionReasoningConfig,
     CompletionRequest,
+    CompletionTool,
+    CompletionToolResult,
 )
 from mugen.core.gateway.completion.bedrock import BedrockCompletionGateway
 
@@ -587,6 +592,131 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
         response = await gateway.get_completion(request)
         self.assertEqual(response.content, "invoke mode")
 
+    async def test_claude_workflow_auto_uses_native_invoke_model(self) -> None:
+        bedrock_client = Mock()
+        bedrock_client.invoke_model.return_value = {
+            "body": self._StreamingBody(
+                json.dumps(
+                    {
+                        "id": "msg_bedrock",
+                        "role": "assistant",
+                        "model": "claude-opus-4-6",
+                        "stop_reason": "tool_use",
+                        "content": [
+                            {"type": "thinking", "thinking": "", "signature": "sig"},
+                            {"type": "redacted_thinking", "data": "opaque"},
+                            {"type": "text", "text": "checking"},
+                            {
+                                "type": "tool_use",
+                                "id": "toolu_b",
+                                "name": "lookup",
+                                "input": {"query": "bedrock"},
+                            },
+                        ],
+                        "usage": {"input_tokens": 3, "output_tokens": 4},
+                    }
+                )
+            )
+        }
+        gateway = self._build_gateway(bedrock_client=bedrock_client)
+
+        request = CompletionRequest(
+            operation="completion",
+            model="us.anthropic.claude-opus-4-6-v1:0",
+            messages=[
+                CompletionMessage(role="system", content="policy"),
+                CompletionMessage(role="user", content="hello"),
+            ],
+            reasoning=CompletionReasoningConfig(
+                mode="adaptive",
+                effort="high",
+            ),
+            tools=[
+                CompletionTool(
+                    name="lookup",
+                    description="Lookup data",
+                    input_schema={"type": "object", "properties": {}},
+                )
+            ],
+            continuation_state=CompletionContinuationState(
+                provider="bedrock",
+                thinking_blocks=[
+                    {"type": "thinking", "thinking": "", "signature": "old"}
+                ],
+                output_items=[
+                    {
+                        "type": "tool_use",
+                        "id": "old_tool",
+                        "name": "lookup",
+                        "input": {},
+                    }
+                ],
+            ),
+            tool_results=[CompletionToolResult(tool_call_id="old_tool", content="ok")],
+        )
+
+        response = await gateway.get_completion(request)
+
+        bedrock_client.converse.assert_not_called()
+        body = json.loads(bedrock_client.invoke_model.call_args.kwargs["body"])
+        self.assertNotIn("model", body)
+        self.assertEqual(body["anthropic_version"], "bedrock-2023-05-31")
+        self.assertEqual(body["system"], "policy")
+        self.assertEqual(body["thinking"], {"type": "adaptive", "display": "omitted"})
+        self.assertEqual(body["output_config"], {"effort": "high"})
+        self.assertEqual(body["tools"][0]["name"], "lookup")
+        self.assertEqual(body["messages"][1]["role"], "assistant")
+        self.assertEqual(body["messages"][2]["content"][0]["type"], "tool_result")
+        self.assertEqual(response.content, "checking")
+        self.assertEqual(response.tool_calls[0].id, "toolu_b")
+        self.assertIsNotNone(response.reasoning_state)
+        if response.reasoning_state is not None:
+            self.assertEqual(len(response.reasoning_state.thinking_blocks), 1)
+            self.assertEqual(len(response.reasoning_state.redacted_thinking_blocks), 1)
+        self.assertIsNotNone(response.usage)
+        if response.usage is not None:
+            self.assertEqual(response.usage.total_tokens, 7)
+
+    async def test_claude_workflow_rejects_explicit_converse(self) -> None:
+        bedrock_client = Mock()
+        gateway = self._build_gateway(bedrock_client=bedrock_client)
+        request = CompletionRequest(
+            operation="completion",
+            model="anthropic.claude-opus-4-6-v1:0",
+            messages=[CompletionMessage(role="user", content="hello")],
+            tools=[CompletionTool(name="lookup")],
+            vendor_params={"bedrock_api": "converse"},
+        )
+
+        with self.assertRaisesRegex(CompletionGatewayError, "Converse Claude"):
+            await gateway.get_completion(request)
+        bedrock_client.converse.assert_not_called()
+        bedrock_client.invoke_model.assert_not_called()
+
+    async def test_operation_reasoning_defaults_route_claude_to_invoke(self) -> None:
+        config = _make_config()
+        config.aws.bedrock.api.dict["completion"]["reasoning"] = {
+            "mode": "enabled",
+            "budget_tokens": 1024,
+        }
+        bedrock_client = Mock()
+        bedrock_client.invoke_model.return_value = {
+            "body": self._StreamingBody(
+                '{"id":"msg","role":"assistant","content":[{"type":"text","text":"ok"}]}'
+            )
+        }
+        gateway = self._build_gateway(config=config, bedrock_client=bedrock_client)
+
+        response = await gateway.get_completion(_simple_request())
+
+        bedrock_client.converse.assert_not_called()
+        body = json.loads(bedrock_client.invoke_model.call_args.kwargs["body"])
+        self.assertEqual(
+            body["thinking"],
+            {"type": "enabled", "budget_tokens": 1024, "display": "omitted"},
+        )
+        self.assertEqual(response.content, "ok")
+
     async def test_get_completion_converse_without_fallback_wraps_error(self) -> None:
         bedrock_client = Mock()
         bedrock_client.converse.side_effect = ClientError(
@@ -949,8 +1079,20 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
             ),
             "anthropic",
         )
+        self.assertEqual(
+            BedrockCompletionGateway._resolve_invoke_family(
+                self._build_request(model="us.anthropic.claude-sonnet-4-6-v1:0"),
+                model="us.anthropic.claude-sonnet-4-6-v1:0",
+            ),
+            "anthropic",
+        )
         self.assertTrue(BedrockCompletionGateway._is_mistral_chat_model("ministral"))
         self.assertFalse(BedrockCompletionGateway._is_mistral_chat_model("mistral-7b"))
+        self.assertTrue(
+            BedrockCompletionGateway._is_anthropic_model_id(  # pylint: disable=protected-access
+                "us.anthropic.claude-sonnet"
+            )
+        )
 
     def test_serializer_helpers_and_inference_merging(self) -> None:
         inference = {
@@ -1200,8 +1342,13 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(usage)
         if usage is not None:
             self.assertEqual(usage.total_tokens, 3)
+        self.assertIsNone(BedrockCompletionGateway._extract_usage({"usage": "bad"}))
         self.assertIsNone(BedrockCompletionGateway._extract_usage({"usage": {}}))
 
+        self.assertEqual(
+            BedrockCompletionGateway._default_response_paths("anthropic"),
+            ["content.0.text"],
+        )
         self.assertEqual(
             BedrockCompletionGateway._default_response_paths("meta"),
             ["generation"],
@@ -1241,6 +1388,10 @@ class TestMugenGatewayCompletionBedrock(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             BedrockCompletionGateway._default_response_paths("unknown"),
             ["outputText", "completion"],
+        )
+        self.assertEqual(
+            BedrockCompletionGateway._default_stop_reason_paths("anthropic"),
+            ["stop_reason"],
         )
         self.assertEqual(
             BedrockCompletionGateway._default_stop_reason_paths("meta"),
