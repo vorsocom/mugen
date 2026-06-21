@@ -68,6 +68,7 @@ whatsapp = "default"
 # Completion gateway.
 # Available tokens:
 completion = "deterministic"
+# completion = "anthropic"
 # completion = "azure_foundry"
 # completion = "bedrock"
 # completion = "cerebras"
@@ -496,6 +497,31 @@ encryption_key = "<set-acp-managed-secret-encryption-key>"
 [acp.key_management.providers.local.keys.ops_connector_secret]
 ops_connector_default = "dev-ops-connector-secret"
 
+# === Anthropic ===
+[anthropic]
+# Direct Anthropic Messages API completion gateway.
+# Streaming is rejected until the streaming path is implemented.
+# Reasoning-workflow adapters may use these optional nested defaults:
+# api.<operation>.reasoning.mode = "adaptive" | "enabled" | "disabled"
+# api.<operation>.reasoning.effort = "low" | "medium" | "high"
+# api.<operation>.reasoning.budget_tokens = 4096
+# api.<operation>.reasoning.visibility = "opaque"
+api.classification.model = ""
+api.classification.temp = 0.0
+api.classification.top_p = 1.0
+api.classification.sampling_controls = "enabled"
+api.classification.max_completion_tokens = 1024
+api.completion.model = ""
+api.completion.temp = 0.0
+api.completion.top_p = 1.0
+api.completion.sampling_controls = "enabled"
+api.completion.max_completion_tokens = 1024
+api.base_url = "https://api.anthropic.com"
+api.version = "2023-06-01"
+api.timeout_seconds = 30.0
+# Required non-empty string when `gateway.completion = "anthropic"`.
+api.key = "<anthropic-api-key>"
+
 # === AWS Bedrock ===
 [aws.bedrock]
 # Optional explicit AWS access key passed through to boto3.
@@ -503,9 +529,17 @@ api.access_key_id = "<aws-access-key-id>"
 # Set model IDs per operation.
 # In auto mode, the Bedrock gateway tries Converse first and falls back to
 # InvokeModel when Converse is unsupported for the selected model.
+# Normalized Claude reasoning/tools/tool-result continuation requests use
+# Claude-native InvokeModel automatically for anthropic.* and regional
+# *.anthropic.* model IDs.
 # Built-in InvokeModel serializers currently cover:
-# anthropic.*, meta.*, amazon.titan-text*, amazon.nova*, ai21.j2*,
+# anthropic.*, *.anthropic.*, meta.*, amazon.titan-text*, amazon.nova*, ai21.j2*,
 # ai21.jamba*, cohere.*, mistral.*, deepseek.*, openai.*, writer.*
+# Claude reasoning defaults may be configured as:
+# api.<operation>.reasoning.mode = "adaptive" | "enabled" | "disabled"
+# api.<operation>.reasoning.effort = "low" | "medium" | "high"
+# api.<operation>.reasoning.budget_tokens = 4096
+# api.<operation>.reasoning.visibility = "opaque"
 api.classification.model = "placeholder-model"
 api.classification.max_completion_tokens = 1024
 api.classification.temp = 0.0

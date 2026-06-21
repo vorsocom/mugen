@@ -9,7 +9,7 @@ Audience: Core and downstream plugin teams
 This document explains gateway contracts and currently supported completion,
 knowledge, email, and SMS gateway implementations in muGen.
 
-Runtime configuration uses strict provider tokens (for example `bedrock`,
+Runtime configuration uses strict provider tokens (for example `anthropic`, `bedrock`,
 `cerebras`, `groq`, `openai`, `azure_foundry`, `sambanova`, `vertex`,
 `chromadb`, `milvus`, `pinecone`, `pgvector`, `qdrant`, `weaviate`, `smtp`,
 `ses`, `twilio`), not
@@ -135,6 +135,44 @@ Provider-specific search params are carried by vendor DTO types under
 
 ## Completion Provider Gateways
 
+### Anthropic
+
+Module: `mugen.core.gateway.completion.anthropic`
+
+Provider token: `anthropic`
+
+The direct Anthropic gateway uses the Messages API through `aiohttp`; no
+Anthropic SDK dependency is required. The non-stream path is implemented first.
+Requests with `CompletionInferenceConfig.stream=true` or
+`vendor_params["stream"]=true` fail with a deterministic
+`CompletionGatewayError`.
+
+The gateway maps normalized reasoning and tool workflow fields to Claude
+Messages:
+
+- `CompletionTool` serializes to `{name, description, input_schema}`.
+- `CompletionToolResult` serializes to `tool_result` user content blocks.
+- `CompletionReasoningConfig(mode="adaptive")` serializes to
+  `thinking: {type: "adaptive"}` and `output_config.effort` when effort is set.
+- `CompletionReasoningConfig(mode="enabled", budget_tokens=N)` serializes to
+  manual extended thinking.
+- `CompletionReasoningConfig(mode="disabled")` omits `thinking`, except known
+  always-on Claude reasoning models fail fast.
+- `visibility="opaque"` maps to `thinking.display="omitted"` so thinking
+  signatures remain replayable without surfacing readable thinking text.
+
+Responses expose only final text in `CompletionResponse.content`; `thinking`
+and `redacted_thinking` blocks are stored under
+`CompletionResponse.reasoning_state` as opaque replay state. Tool-use blocks
+are normalized to `CompletionToolCall`.
+
+Current Claude capability checks reject known unsupported combinations:
+
+- Fable 5, Mythos 5, and Mythos Preview reject disabled thinking.
+- Fable 5, Mythos 5, Opus 4.8, and Opus 4.7 reject manual
+  `mode="enabled"` thinking.
+- Adaptive thinking is accepted only for known adaptive-capable model families.
+
 ### AWS Bedrock
 
 Module: `mugen.core.gateway.completion.bedrock`
@@ -146,6 +184,13 @@ Runtime mode is controlled per request by
   reports the model does not support `Converse`.
 - `converse`: always use `Converse`.
 - `invoke_model`: always use `InvokeModel`.
+
+For Bedrock-hosted Claude models (`anthropic.*` and regional `*.anthropic.*`
+model IDs), normalized reasoning/tools/tool-results/continuation state or
+operation-level reasoning defaults automatically use Claude-native
+`InvokeModel` serialization in `auto` mode. Explicit `bedrock_api="converse"`
+with those normalized workflow fields fails fast until Bedrock Converse content
+block mapping is implemented.
 
 In all modes, the default model and inference values come from
 `[aws.bedrock] api.<operation>.*` in `mugen.toml` when not overridden in
@@ -166,6 +211,7 @@ multiple provider-specific bodies through a common request contract.
 Model ID prefixes mapped by default:
 
 - `anthropic.*`
+- regional `*.anthropic.*`
 - `meta.*`
 - `amazon.titan-text*`
 - `amazon.nova*`
@@ -207,6 +253,11 @@ Supported Bedrock-specific keys in `CompletionRequest.vendor_params`:
 - Invoke response parsing overrides:
   - `invoke_response_paths`
   - `invoke_stop_reason_paths`
+
+For Claude `InvokeModel`, normalized tools and tool results use Anthropic
+Messages content blocks, adaptive reasoning effort is placed under
+`output_config`, and `thinking`/`redacted_thinking` blocks are preserved exactly
+in `CompletionContinuationState`.
 
 ### Groq
 
