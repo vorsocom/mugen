@@ -68,6 +68,7 @@ whatsapp = "default"
 # Completion gateway.
 # Available tokens:
 completion = "deterministic"
+# completion = "anthropic"
 # completion = "azure_foundry"
 # completion = "bedrock"
 # completion = "cerebras"
@@ -496,6 +497,32 @@ encryption_key = "<set-acp-managed-secret-encryption-key>"
 [acp.key_management.providers.local.keys.ops_connector_secret]
 ops_connector_default = "dev-ops-connector-secret"
 
+# === Anthropic ===
+[anthropic]
+# Direct Anthropic Messages API completion gateway.
+# Streaming is rejected until the streaming path is implemented.
+# Reasoning-workflow adapters may use these optional nested defaults:
+# api.<operation>.reasoning.mode = "adaptive" | "enabled" | "disabled"
+# api.<operation>.reasoning.effort = "low" | "medium" | "high"
+# api.<operation>.reasoning.budget_tokens = 4096
+# api.<operation>.reasoning.include_encrypted_state = true
+# api.<operation>.reasoning.visibility = "opaque"
+api.classification.model = ""
+api.classification.temp = 0.0
+api.classification.top_p = 1.0
+api.classification.sampling_controls = "enabled"
+api.classification.max_completion_tokens = 1024
+api.completion.model = ""
+api.completion.temp = 0.0
+api.completion.top_p = 1.0
+api.completion.sampling_controls = "enabled"
+api.completion.max_completion_tokens = 1024
+api.base_url = "https://api.anthropic.com"
+api.version = "2023-06-01"
+api.timeout_seconds = 30.0
+# Required non-empty string when `gateway.completion = "anthropic"`.
+api.key = "<anthropic-api-key>"
+
 # === AWS Bedrock ===
 [aws.bedrock]
 # Optional explicit AWS access key passed through to boto3.
@@ -503,17 +530,28 @@ api.access_key_id = "<aws-access-key-id>"
 # Set model IDs per operation.
 # In auto mode, the Bedrock gateway tries Converse first and falls back to
 # InvokeModel when Converse is unsupported for the selected model.
+# Normalized Claude reasoning/tools/tool-result continuation requests use
+# Claude-native InvokeModel automatically for anthropic.* and regional
+# *.anthropic.* model IDs.
 # Built-in InvokeModel serializers currently cover:
-# anthropic.*, meta.*, amazon.titan-text*, amazon.nova*, ai21.j2*,
+# anthropic.*, *.anthropic.*, meta.*, amazon.titan-text*, amazon.nova*, ai21.j2*,
 # ai21.jamba*, cohere.*, mistral.*, deepseek.*, openai.*, writer.*
+# Claude reasoning defaults may be configured as:
+# api.<operation>.reasoning.mode = "adaptive" | "enabled" | "disabled"
+# api.<operation>.reasoning.effort = "low" | "medium" | "high"
+# api.<operation>.reasoning.budget_tokens = 4096
+# api.<operation>.reasoning.include_encrypted_state = true
+# api.<operation>.reasoning.visibility = "opaque"
 api.classification.model = "placeholder-model"
 api.classification.max_completion_tokens = 1024
 api.classification.temp = 0.0
 api.classification.top_p = 0.9
+api.classification.sampling_controls = "enabled"
 api.completion.model = "placeholder-model"
 api.completion.max_completion_tokens = 1024
 api.completion.temp = 0.0
 api.completion.top_p = 0.9
+api.completion.sampling_controls = "enabled"
 api.region = ""
 # Pair with api.access_key_id when using explicit AWS credentials.
 api.secret_access_key = "<aws-secret-access-key>"
@@ -549,11 +587,13 @@ api.classification.model = ""
 api.classification.surface = "chat_completions"
 api.classification.temp = 0.0
 api.classification.top_p = 1.0
+api.classification.sampling_controls = "enabled"
 api.classification.max_completion_tokens = 1024
 api.completion.model = ""
 api.completion.surface = "chat_completions"
 api.completion.temp = 0.0
 api.completion.top_p = 1.0
+api.completion.sampling_controls = "enabled"
 api.completion.max_completion_tokens = 1024
 api.base_url = ""
 # Optional query parameter sent as `api-version=<value>`.
@@ -574,11 +614,13 @@ api.classification.model = ""
 api.classification.surface = "chat_completions"
 api.classification.temp = 0.0
 api.classification.top_p = 1.0
+api.classification.sampling_controls = "enabled"
 api.classification.max_completion_tokens = 1024
 api.completion.model = ""
 api.completion.surface = "chat_completions"
 api.completion.temp = 0.0
 api.completion.top_p = 1.0
+api.completion.sampling_controls = "enabled"
 api.completion.max_completion_tokens = 1024
 api.base_url = "https://api.cerebras.ai/v1"
 api.timeout_seconds = 30.0
@@ -616,10 +658,12 @@ api.access_token = ""
 api.classification.model = ""
 api.classification.temp = 0.0
 api.classification.top_p = 1.0
+api.classification.sampling_controls = "enabled"
 api.classification.max_completion_tokens = 1024
 api.completion.model = ""
 api.completion.temp = 0.0
 api.completion.top_p = 1.0
+api.completion.sampling_controls = "enabled"
 api.completion.max_completion_tokens = 1024
 api.connect_timeout_seconds = 10.0
 api.read_timeout_seconds = 30.0
@@ -631,9 +675,11 @@ api.read_timeout_seconds = 30.0
 api.classification.model = ""
 api.classification.temp = 0.0
 api.classification.top_p = 1.0
+api.classification.sampling_controls = "enabled"
 api.completion.model = ""
 api.completion.temp = 0.0
 api.completion.top_p = 1.0
+api.completion.sampling_controls = "enabled"
 api.timeout_seconds = 30.0
 # Provider auth key used for Groq requests.
 api.key = "<groq-api-key>"
@@ -726,17 +772,28 @@ encoder.max_concurrency = 4
 # Per-request override remains available through
 # CompletionRequest.vendor_params["openai_api"].
 # max_completion_tokens is the canonical token-limit field.
+# sampling_controls controls whether temperature/top_p are sent:
+# - "enabled" (default) preserves existing behavior.
+# - "disabled" omits temperature/top_p for models that reject sampling controls.
+# Reasoning-workflow adapters may use these optional nested defaults:
+# api.<operation>.reasoning.mode = "adaptive" | "enabled" | "disabled"
+# api.<operation>.reasoning.effort = "low" | "medium" | "high"
+# api.<operation>.reasoning.budget_tokens = 4096
+# api.<operation>.reasoning.include_encrypted_state = true
+# api.<operation>.reasoning.visibility = "opaque"
 # stream behavior and provider-specific extras can be overridden per request
 # through CompletionRequest vendor_params.
 api.classification.model = ""
 api.classification.surface = "chat_completions"
 api.classification.temp = 0.0
 api.classification.top_p = 1.0
+api.classification.sampling_controls = "enabled"
 api.classification.max_completion_tokens = 1024
 api.completion.model = ""
 api.completion.surface = "chat_completions"
 api.completion.temp = 0.0
 api.completion.top_p = 1.0
+api.completion.sampling_controls = "enabled"
 api.completion.max_completion_tokens = 1024
 api.base_url = ""
 api.timeout_seconds = 30.0
@@ -863,10 +920,12 @@ version_table_schema = "mugen"
 api.classification.model = ""
 api.classification.max_completion_tokens = 1024
 api.classification.temp = 0.0
+api.classification.sampling_controls = "enabled"
 api.classification.stop = []
 api.completion.model = ""
 api.completion.max_completion_tokens = 1024
 api.completion.temp = 0.0
+api.completion.sampling_controls = "enabled"
 api.completion.stop = []
 api.endpoint = ""
 api.connect_timeout_seconds = 10.0

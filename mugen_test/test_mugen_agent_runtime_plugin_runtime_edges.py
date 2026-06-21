@@ -41,10 +41,16 @@ from mugen.core.contract.context import (
     PreparedContextTurn,
 )
 from mugen.core.contract.gateway.completion import (
+    CompletionContinuationState,
     CompletionMessage,
     CompletionRequest,
     CompletionResponse,
+    CompletionToolCall,
     CompletionUsage,
+)
+from mugen.core.contract.gateway.completion_workflow import (
+    COMPLETION_CONTINUATION_STATE_METADATA_KEY,
+    COMPLETION_TOOL_CALL_ID_METADATA_KEY,
 )
 from mugen.core.plugin.agent_runtime.service.registry import AgentComponentRegistry
 import mugen.core.plugin.agent_runtime.service.runtime as runtime_module
@@ -61,7 +67,9 @@ from mugen.core.plugin.agent_runtime.service.runtime import (
 )
 
 
-def _scope(*, sender_id: str | None = "22222222-2222-2222-2222-222222222222") -> ContextScope:
+def _scope(
+    *, sender_id: str | None = "22222222-2222-2222-2222-222222222222"
+) -> ContextScope:
     return ContextScope(
         tenant_id="11111111-1111-1111-1111-111111111111",
         platform="matrix",
@@ -118,9 +126,11 @@ def _request(
         prepared_context=prepared_context,
         available_capabilities=available_capabilities,
         metadata=dict(metadata or {}),
-        ingress_metadata={"service_route_key": service_route_key}
-        if service_route_key is not None
-        else {},
+        ingress_metadata=(
+            {"service_route_key": service_route_key}
+            if service_route_key is not None
+            else {}
+        ),
     )
 
 
@@ -146,7 +156,9 @@ def _run(
             current_turn_enabled=True,
             background_enabled=True,
         ),
-        request_snapshot=runtime_module._request_snapshot(resolved_request),  # pylint: disable=protected-access
+        request_snapshot=runtime_module._request_snapshot(
+            resolved_request
+        ),  # pylint: disable=protected-access
         cursor=PlanRunCursor(run_id=run_id, status=status),
         service_route_key=resolved_request.service_route_key,
         lease=lease,
@@ -361,7 +373,9 @@ class _ACPService:
 
 
 class _AdminRegistry:
-    def __init__(self, *, resources: dict[str, SimpleNamespace], services: dict[str, object]) -> None:
+    def __init__(
+        self, *, resources: dict[str, SimpleNamespace], services: dict[str, object]
+    ) -> None:
         self.resources = resources
         self._services = services
 
@@ -387,9 +401,13 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(registry.policy_resolver, policy_resolver)
         self.assertIs(registry.scheduler, scheduler)
-        self.assertIn("object", registry._single_slot_owners["policy_resolver"])  # pylint: disable=protected-access
+        self.assertIn(
+            "object", registry._single_slot_owners["policy_resolver"]
+        )  # pylint: disable=protected-access
         self.assertEqual(
-            registry._single_slot_owners["scheduler"],  # pylint: disable=protected-access
+            registry._single_slot_owners[
+                "scheduler"
+            ],  # pylint: disable=protected-access
             "plugin.scheduler",
         )
 
@@ -398,15 +416,30 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             content={"answer": 42},
             model="gpt-test",
             stop_reason="done",
-            message={"role": "assistant"},
-            tool_calls=[{"id": "call-1"}],
+            message={"role": "assistant", "reasoning": "secret"},
+            tool_calls=[
+                CompletionToolCall(
+                    id="call-1",
+                    name="cap.lookup",
+                    arguments={"query": "abc"},
+                    provider_item={"signature": "secret"},
+                )
+            ],
+            output_items=[{"type": "message"}],
+            reasoning_state=CompletionContinuationState(
+                provider="openai",
+                response_id="resp-1",
+                reasoning_items=[{"encrypted_content": "secret"}],
+            ),
+            provider_state={"api_key": "secret"},
             usage=CompletionUsage(
                 input_tokens=1,
                 output_tokens=2,
                 total_tokens=3,
+                reasoning_tokens=4,
                 vendor_fields={"cost": 0.1},
             ),
-            vendor_fields={"trace": "1"},
+            vendor_fields={"trace": "1", "encrypted_content": "secret"},
         )
         policy = AgentRuntimePolicy(
             enabled=True,
@@ -429,7 +462,12 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             completion=completion,
             background_run_id="run-bg",
             error_message="temporary",
-            metadata={"trace": "1"},
+            metadata={
+                "trace": "1",
+                COMPLETION_CONTINUATION_STATE_METADATA_KEY: (
+                    completion.reasoning_state.to_dict()
+                ),
+            },
         )
         descriptor = CapabilityDescriptor(
             key="cap.lookup",
@@ -457,25 +495,29 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             policy=join_policy,
             metadata={"trace": "1"},
         )
-        tool_invocations = runtime_module._tool_call_invocations(  # pylint: disable=protected-access
-            [
-                {
-                    "id": "call-1",
-                    "function": {
-                        "name": "cap.lookup",
-                        "arguments": '{"query": "abc"}',
+        tool_invocations = (
+            runtime_module._tool_call_invocations(  # pylint: disable=protected-access
+                [
+                    {
+                        "id": "call-1",
+                        "function": {
+                            "name": "cap.lookup",
+                            "arguments": '{"query": "abc"}',
+                        },
                     },
-                },
-                {
-                    "id": "call-2",
-                    "name": "cap.other",
-                    "arguments": "not-json",
-                },
-                {"id": "call-3", "name": " ", "arguments": {"ignored": True}},
-            ]
+                    {
+                        "id": "call-2",
+                        "name": "cap.other",
+                        "arguments": "not-json",
+                    },
+                    {"id": "call-3", "name": " ", "arguments": {"ignored": True}},
+                ]
+            )
         )
 
-        self.assertIn("*", runtime_module._scope_key(_scope(sender_id=None)))  # pylint: disable=protected-access
+        self.assertIn(
+            "*", runtime_module._scope_key(_scope(sender_id=None))
+        )  # pylint: disable=protected-access
         self.assertEqual(  # pylint: disable=protected-access
             runtime_module._scope_to_dict(_scope())["tenant_id"],
             _scope().tenant_id,
@@ -484,31 +526,51 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             runtime_module._request_snapshot(request)["service_route_key"],
             "support.primary",
         )
-        self.assertIsNone(runtime_module._serialize_lineage(None))  # pylint: disable=protected-access
-        self.assertIsNone(runtime_module._deserialize_lineage(None))  # pylint: disable=protected-access
+        self.assertIsNone(
+            runtime_module._serialize_lineage(None)
+        )  # pylint: disable=protected-access
+        self.assertIsNone(
+            runtime_module._deserialize_lineage(None)
+        )  # pylint: disable=protected-access
         self.assertEqual(  # pylint: disable=protected-access
             runtime_module._deserialize_lineage(
-                runtime_module._serialize_lineage(lineage)  # pylint: disable=protected-access
+                runtime_module._serialize_lineage(
+                    lineage
+                )  # pylint: disable=protected-access
             ).agent_key,
             "specialist.lookup",
         )
-        self.assertIsNone(runtime_module._serialize_join_policy(None))  # pylint: disable=protected-access
-        self.assertIsNone(runtime_module._deserialize_join_policy(None))  # pylint: disable=protected-access
+        self.assertIsNone(
+            runtime_module._serialize_join_policy(None)
+        )  # pylint: disable=protected-access
+        self.assertIsNone(
+            runtime_module._deserialize_join_policy(None)
+        )  # pylint: disable=protected-access
         self.assertEqual(  # pylint: disable=protected-access
             runtime_module._deserialize_join_policy(
-                runtime_module._serialize_join_policy(join_policy)  # pylint: disable=protected-access
+                runtime_module._serialize_join_policy(
+                    join_policy
+                )  # pylint: disable=protected-access
             ).on_required_child_failed,
             PlanOutcomeStatus.FAILED,
         )
-        self.assertIsNone(runtime_module._serialize_join_state(None))  # pylint: disable=protected-access
-        self.assertIsNone(runtime_module._deserialize_join_state(None))  # pylint: disable=protected-access
+        self.assertIsNone(
+            runtime_module._serialize_join_state(None)
+        )  # pylint: disable=protected-access
+        self.assertIsNone(
+            runtime_module._deserialize_join_state(None)
+        )  # pylint: disable=protected-access
         self.assertEqual(  # pylint: disable=protected-access
             runtime_module._deserialize_join_state(
-                runtime_module._serialize_join_state(join_state)  # pylint: disable=protected-access
+                runtime_module._serialize_join_state(
+                    join_state
+                )  # pylint: disable=protected-access
             ).last_joined_sequence_no,
             2,
         )
-        self.assertTrue(runtime_module._serialize_policy(policy)["enabled"])  # pylint: disable=protected-access
+        self.assertTrue(
+            runtime_module._serialize_policy(policy)["enabled"]
+        )  # pylint: disable=protected-access
         self.assertEqual(  # pylint: disable=protected-access
             runtime_module._deserialize_policy({"planner_key": "x"}).planner_key,
             "x",
@@ -516,6 +578,18 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(  # pylint: disable=protected-access
             runtime_module._serialize_state(state)["summary"],
             "summary",
+        )
+        state.metadata[COMPLETION_CONTINUATION_STATE_METADATA_KEY] = (
+            completion.reasoning_state.to_dict()
+        )
+        prompt_state = (
+            runtime_module._serialize_state_for_prompt(state)  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            prompt_state["metadata"][COMPLETION_CONTINUATION_STATE_METADATA_KEY][
+                "reasoning_item_count"
+            ],
+            1,
         )
         self.assertEqual(  # pylint: disable=protected-access
             runtime_module._deserialize_state({"goal": "g", "status": "active"}).status,
@@ -525,43 +599,126 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             runtime_module._serialize_outcome(outcome)["background_run_id"],
             "run-bg",
         )
+        self.assertIn(
+            "reasoning_items",
+            runtime_module._serialize_outcome(outcome)["metadata"][  # pylint: disable=protected-access
+                COMPLETION_CONTINUATION_STATE_METADATA_KEY
+            ],
+        )
+        prompt_outcome = (
+            runtime_module._serialize_outcome_for_prompt(outcome)  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            prompt_outcome["metadata"][COMPLETION_CONTINUATION_STATE_METADATA_KEY][
+                "reasoning_item_count"
+            ],
+            1,
+        )
+        self.assertNotIn(
+            "reasoning_items",
+            prompt_outcome["metadata"][COMPLETION_CONTINUATION_STATE_METADATA_KEY],
+        )
+        self.assertIsNone(
+            runtime_module._serialize_outcome_for_prompt(None)
+        )  # pylint: disable=protected-access
         self.assertEqual(  # pylint: disable=protected-access
             runtime_module._deserialize_outcome({"status": "completed"}).status,
             PlanOutcomeStatus.COMPLETED,
         )
-        serialized_completion = runtime_module._serialize_completion(completion)  # pylint: disable=protected-access
+        serialized_completion = runtime_module._serialize_completion(
+            completion
+        )  # pylint: disable=protected-access
         self.assertEqual(serialized_completion["usage"]["total_tokens"], 3)
-        self.assertIsNone(runtime_module._serialize_completion(None))  # pylint: disable=protected-access
+        self.assertEqual(serialized_completion["usage"]["reasoning_tokens"], 4)
+        self.assertEqual(serialized_completion["output_item_count"], 1)
+        self.assertEqual(
+            serialized_completion["reasoning_state"]["reasoning_item_count"],
+            1,
+        )
+        self.assertEqual(
+            serialized_completion["message"]["reasoning"],
+            "<redacted>",
+        )
+        self.assertEqual(
+            serialized_completion["provider_state"]["api_key"],
+            "<redacted>",
+        )
         self.assertIsNone(
-            runtime_module._serialize_completion(CompletionResponse(content="hello"))["usage"]  # pylint: disable=protected-access
+            runtime_module._serialize_completion(None)
+        )  # pylint: disable=protected-access
+        self.assertIsNone(
+            runtime_module._serialize_completion(CompletionResponse(content="hello"))[
+                "usage"
+            ]  # pylint: disable=protected-access
         )
         self.assertEqual(  # pylint: disable=protected-access
-            runtime_module._deserialize_completion(serialized_completion).usage.total_tokens,
+            runtime_module._deserialize_completion(
+                serialized_completion
+            ).usage.total_tokens,
             3,
         )
-        self.assertIsNone(runtime_module._deserialize_completion(None))  # pylint: disable=protected-access
+        self.assertIsNone(
+            runtime_module._deserialize_completion(None)
+        )  # pylint: disable=protected-access
         self.assertIsNone(  # pylint: disable=protected-access
-            runtime_module._deserialize_completion({"content": "hello", "usage": "oops"}).usage
+            runtime_module._deserialize_completion(
+                {"content": "hello", "usage": "oops"}
+            ).usage
+        )
+        self.assertEqual(  # pylint: disable=protected-access
+            runtime_module._deserialize_completion(
+                {"content": "hello", "tool_calls": [{"arguments": {}}, "ignored"]}
+            ).tool_calls,
+            [{"arguments": {}}],
         )
         self.assertEqual(  # pylint: disable=protected-access
             runtime_module._parse_json_object('{"ok": true}')["ok"],
             True,
         )
-        self.assertIsNone(runtime_module._parse_json_object("[1]"))  # pylint: disable=protected-access
-        self.assertIsNone(runtime_module._parse_json_object(""))  # pylint: disable=protected-access
-        self.assertIsNone(runtime_module._parse_json_object(None))  # pylint: disable=protected-access
-        self.assertEqual(runtime_module._coerce_to_text("hi"), "hi")  # pylint: disable=protected-access
-        self.assertEqual(runtime_module._coerce_to_text(None), "")  # pylint: disable=protected-access
-        self.assertIn('"answer": 42', runtime_module._coerce_to_text({"answer": 42}))  # pylint: disable=protected-access
+        self.assertIsNone(
+            runtime_module._parse_json_object("[1]")
+        )  # pylint: disable=protected-access
+        self.assertIsNone(
+            runtime_module._parse_json_object("")
+        )  # pylint: disable=protected-access
+        self.assertIsNone(
+            runtime_module._parse_json_object(None)
+        )  # pylint: disable=protected-access
+        self.assertEqual(
+            runtime_module._coerce_to_text("hi"), "hi"
+        )  # pylint: disable=protected-access
+        self.assertEqual(
+            runtime_module._coerce_to_text(None), ""
+        )  # pylint: disable=protected-access
+        self.assertIn(
+            '"answer": 42', runtime_module._coerce_to_text({"answer": 42})
+        )  # pylint: disable=protected-access
+        completion_tool = runtime_module._completion_tool(
+            descriptor
+        )  # pylint: disable=protected-access
+        self.assertEqual(completion_tool.name, "cap.lookup")
+        self.assertEqual(completion_tool.input_schema, {"type": "object"})
         self.assertEqual(  # pylint: disable=protected-access
-            runtime_module._tool_spec(descriptor)["function"]["name"],
+            runtime_module._merge_completion_tools(
+                base_tools=[completion_tool],
+                capabilities=(),
+            ),
+            [completion_tool],
+        )
+        self.assertEqual(  # pylint: disable=protected-access
+            runtime_module._merge_completion_tools(
+                base_tools=[],
+                capabilities=(descriptor,),
+            )[0].name,
             "cap.lookup",
         )
-        merged_tools = runtime_module._merge_vendor_tools(  # pylint: disable=protected-access
-            vendor_params={"seed": "base"},
-            capabilities=(descriptor,),
+        merged_tools = (
+            runtime_module._merge_vendor_tools(  # pylint: disable=protected-access
+                vendor_params={"seed": "base"},
+                capabilities=(descriptor,),
+            )
         )
-        self.assertEqual(merged_tools["tool_choice"], "auto")
+        self.assertEqual(merged_tools, {"seed": "base"})
         self.assertEqual(
             runtime_module._merge_vendor_tools(  # pylint: disable=protected-access
                 vendor_params={"seed": "base"},
@@ -571,23 +728,67 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(tool_invocations), 2)
         self.assertEqual(tool_invocations[0].arguments, {"query": "abc"})
+        self.assertEqual(
+            tool_invocations[0].metadata[COMPLETION_TOOL_CALL_ID_METADATA_KEY],
+            "call-1",
+        )
         self.assertEqual(tool_invocations[1].arguments, {})
-        dict_invocation = runtime_module._tool_call_invocations(  # pylint: disable=protected-access
-            [{"id": "call-4", "name": "cap.dict", "arguments": {"count": 1}}]
+        dict_invocation = (
+            runtime_module._tool_call_invocations(  # pylint: disable=protected-access
+                [{"id": "call-4", "name": "cap.dict", "arguments": {"count": 1}}]
+            )
         )
         self.assertEqual(dict_invocation[0].arguments, {"count": 1})
+        normalized_invocation = (
+            runtime_module._tool_call_invocations(  # pylint: disable=protected-access
+                [
+                    CompletionToolCall(
+                        id="call-5",
+                        name="cap.normalized",
+                        arguments={"ok": True},
+                    )
+                ]
+            )
+        )
+        self.assertEqual(normalized_invocation[0].capability_key, "cap.normalized")
+        self.assertIsNone(
+            runtime_module._completion_tool_result_from_observation(  # pylint: disable=protected-access
+                PlanObservation(kind="note", payload={"x": 1})
+            )
+        )
+        error_tool_result = (
+            runtime_module._completion_tool_result_from_observation(  # pylint: disable=protected-access
+                PlanObservation(
+                    kind="capability_result",
+                    capability_result=CapabilityResult(
+                        capability_key="cap.lookup",
+                        ok=False,
+                        error_message="bad_gateway",
+                        status_code=502,
+                        result={"detail": "failed"},
+                        metadata={COMPLETION_TOOL_CALL_ID_METADATA_KEY: "call-err"},
+                    ),
+                )
+            )
+        )
+        self.assertTrue(error_tool_result.is_error)
+        self.assertEqual(error_tool_result.content["status_code"], 502)
         self.assertNotIn(
             "capability_result",
             LLMPlannerStrategy._observation_payload(  # pylint: disable=protected-access
                 PlanObservation(kind="note", payload={"x": 1})
             ),
         )
-        self.assertIsNone(runtime_module._cfg_section(None, "agent_runtime"))  # pylint: disable=protected-access
+        self.assertIsNone(
+            runtime_module._cfg_section(None, "agent_runtime")
+        )  # pylint: disable=protected-access
         self.assertIsNone(  # pylint: disable=protected-access
             runtime_module._cfg_section({"agent_runtime": ""}, "agent_runtime")
         )
         self.assertEqual(  # pylint: disable=protected-access
-            runtime_module._cfg_section({"agent_runtime": {"enabled": True}}, "agent_runtime"),
+            runtime_module._cfg_section(
+                {"agent_runtime": {"enabled": True}}, "agent_runtime"
+            ),
             {"enabled": True},
         )
         self.assertEqual(  # pylint: disable=protected-access
@@ -602,21 +803,27 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             runtime_module._cfg_list({"routes": [1, 2]}, "routes"),
             [1, 2],
         )
-        self.assertEqual(runtime_module._cfg_list({"routes": "nope"}, "routes"), [])  # pylint: disable=protected-access
+        self.assertEqual(
+            runtime_module._cfg_list({"routes": "nope"}, "routes"), []
+        )  # pylint: disable=protected-access
         for status in PlanOutcomeStatus:
             mapped = runtime_module._outcome_status_to_run_status(  # pylint: disable=protected-access
                 PlanOutcome(status=status)
             )
             self.assertIsInstance(mapped, PlanRunStatus)
 
-    async def test_relational_service_wrappers_construct_with_runtime_tables(self) -> None:
+    async def test_relational_service_wrappers_construct_with_runtime_tables(
+        self,
+    ) -> None:
         run_service = AgentPlanRunService(table="agent_runtime_plan_run", rsg=Mock())
         step_service = AgentPlanStepService(table="agent_runtime_plan_step", rsg=Mock())
 
         self.assertEqual(run_service.table, "agent_runtime_plan_run")
         self.assertEqual(step_service.table, "agent_runtime_plan_step")
 
-    async def test_policy_resolver_supports_missing_and_dict_backed_config(self) -> None:
+    async def test_policy_resolver_supports_missing_and_dict_backed_config(
+        self,
+    ) -> None:
         resolver = CodeConfiguredAgentPolicyResolver(config=SimpleNamespace())
         default_policy = await resolver.resolve_policy(_request())
         self.assertFalse(default_policy.enabled)
@@ -650,7 +857,11 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
                 mugen=SimpleNamespace(
                     agent_runtime=SimpleNamespace(
                         enabled=True,
-                        routes=[SimpleNamespace(service_route_key=None, background_enabled=True)],
+                        routes=[
+                            SimpleNamespace(
+                                service_route_key=None, background_enabled=True
+                            )
+                        ],
                     )
                 )
             )
@@ -681,7 +892,9 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             "missing.agent",
         )
 
-    async def test_relational_plan_run_store_row_to_run_handles_rows_without_lineage(self) -> None:
+    async def test_relational_plan_run_store_row_to_run_handles_rows_without_lineage(
+        self,
+    ) -> None:
         store = RelationalPlanRunStore(
             run_service=_FakeRunService(),
             step_service=_FakeStepService(),
@@ -697,7 +910,10 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             run_state_json=runtime_module._serialize_state(  # pylint: disable=protected-access
                 PlanRunState(goal="hello")
             ),
-            request_json={"mode": "background", "scope": runtime_module._scope_to_dict(_scope())},  # pylint: disable=protected-access
+            request_json={
+                "mode": "background",
+                "scope": runtime_module._scope_to_dict(_scope()),
+            },  # pylint: disable=protected-access
             service_route_key="support.primary",
             parent_run_id=None,
             root_run_id=None,
@@ -723,7 +939,10 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         capability = CapabilityDescriptor(
             key="cap.lookup",
             title="Lookup",
-            input_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+            input_schema={
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+            },
         )
         request = _request(
             prepared_context=_prepared_context(),
@@ -761,10 +980,84 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.capability_invocations[0].arguments, {"query": "abc"})
         sent_request = completion_gateway.get_completion.await_args.args[0]
         self.assertEqual(sent_request.model, "test-model")
-        self.assertEqual(sent_request.vendor_params["tools"][0]["function"]["name"], "cap.lookup")
-        self.assertFalse(sent_request.vendor_params["parallel_tool_calls"])
+        self.assertEqual(sent_request.tools[0].name, "cap.lookup")
+        self.assertEqual(sent_request.tools[0].kind, "function")
+        self.assertEqual(sent_request.vendor_params, {"seed": "base"})
+        self.assertEqual(
+            decision.capability_invocations[0].metadata[
+                COMPLETION_TOOL_CALL_ID_METADATA_KEY
+            ],
+            "call-1",
+        )
 
-    async def test_llm_planner_appends_observations_and_builds_fallback_requests(self) -> None:
+    async def test_llm_planner_replays_tool_results_and_continuation_state(
+        self,
+    ) -> None:
+        capability = CapabilityDescriptor(
+            key="cap.lookup",
+            title="Lookup",
+            input_schema={"type": "object"},
+        )
+        request = _request(
+            prepared_context=_prepared_context(),
+            available_capabilities=(capability,),
+        )
+        run = _run(request=request)
+        continuation_state = CompletionContinuationState(
+            provider="openai",
+            response_id="resp-1",
+            output_items=[{"type": "function_call", "call_id": "call-1"}],
+            reasoning_items=[{"encrypted_content": "secret"}],
+        )
+        run.state.metadata[COMPLETION_CONTINUATION_STATE_METADATA_KEY] = (
+            continuation_state.to_dict()
+        )
+        observation = PlanObservation(
+            kind="capability_result",
+            summary="lookup",
+            payload={"capability_key": "cap.lookup", "ok": True},
+            success=True,
+            capability_result=CapabilityResult(
+                capability_key="cap.lookup",
+                ok=True,
+                result={"answer": "42"},
+                metadata={COMPLETION_TOOL_CALL_ID_METADATA_KEY: "call-1"},
+            ),
+        )
+        completion_gateway = Mock()
+        completion_gateway.get_completion = AsyncMock(
+            return_value=CompletionResponse(content="done", tool_calls=[])
+        )
+        planner = LLMPlannerStrategy(
+            completion_gateway=completion_gateway,
+            logging_gateway=Mock(),
+        )
+
+        decision = await planner.next_decision(
+            request,
+            run,
+            (observation,),
+            policy=run.policy,
+        )
+
+        self.assertEqual(decision.kind, PlanDecisionKind.RESPOND)
+        sent_request = completion_gateway.get_completion.await_args.args[0]
+        self.assertEqual(
+            sent_request.messages,
+            request.prepared_context.completion_request.messages,
+        )
+        self.assertEqual(sent_request.tool_results[0].tool_call_id, "call-1")
+        self.assertEqual(sent_request.tool_results[0].name, "cap.lookup")
+        self.assertEqual(sent_request.tool_results[0].content, {"answer": "42"})
+        self.assertEqual(
+            sent_request.continuation_state.response_id,
+            continuation_state.response_id,
+        )
+        self.assertEqual(sent_request.vendor_params, {"seed": "base"})
+
+    async def test_llm_planner_appends_observations_and_builds_fallback_requests(
+        self,
+    ) -> None:
         capability = CapabilityDescriptor(key="cap.lookup", title="Lookup")
         observation = PlanObservation(
             kind="tool",
@@ -782,8 +1075,12 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         completion_gateway = Mock()
         completion_gateway.get_completion = AsyncMock(
             side_effect=[
-                CompletionResponse(content={"answer": "after observation"}, tool_calls=[]),
-                CompletionResponse(content={"answer": "without context"}, tool_calls=[]),
+                CompletionResponse(
+                    content={"answer": "after observation"}, tool_calls=[]
+                ),
+                CompletionResponse(
+                    content={"answer": "without context"}, tool_calls=[]
+                ),
             ]
         )
         planner = LLMPlannerStrategy(
@@ -825,16 +1122,26 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"after observation"', context_decision.response_text)
         self.assertIn('"without context"', fallback_decision.response_text)
         first_request = completion_gateway.get_completion.await_args_list[0].args[0]
-        self.assertEqual(first_request.messages[-1].content["instruction"], "Continue using tools if needed, otherwise respond to the user.")
         self.assertEqual(
-            first_request.messages[-1].content["agent_observations"][0]["capability_result"]["status_code"],
+            first_request.messages[-1].content["instruction"],
+            "Continue using tools if needed, otherwise respond to the user.",
+        )
+        self.assertEqual(
+            first_request.messages[-1].content["agent_observations"][0][
+                "capability_result"
+            ]["status_code"],
             502,
         )
         second_request = completion_gateway.get_completion.await_args_list[1].args[0]
         self.assertEqual(second_request.messages[0].role, "system")
-        self.assertEqual(second_request.messages[1].content["goal"], "Handle the request")
+        self.assertEqual(
+            second_request.messages[1].content["goal"], "Handle the request"
+        )
+        self.assertEqual(second_request.tools[0].name, "cap.lookup")
 
-    async def test_llm_evaluator_covers_pass_retry_escalate_and_prompt_parsing(self) -> None:
+    async def test_llm_evaluator_covers_pass_retry_escalate_and_prompt_parsing(
+        self,
+    ) -> None:
         request = _request()
         run = _run(request=request)
         failure_observation = PlanObservation(
@@ -857,7 +1164,9 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             logging_gateway=Mock(),
         )
         fallback_step = await evaluator.evaluate_step(
-            EvaluationRequest(request=request, run=run, observations=(failure_observation,)),
+            EvaluationRequest(
+                request=request, run=run, observations=(failure_observation,)
+            ),
             policy=run.policy,
         )
         pass_step = await evaluator.evaluate_step(
@@ -898,7 +1207,9 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNone(
-            await prompted_evaluator._prompt_evaluator({"stage": "invalid"})  # pylint: disable=protected-access
+            await prompted_evaluator._prompt_evaluator(
+                {"stage": "invalid"}
+            )  # pylint: disable=protected-access
         )
         prompted_result = await prompted_evaluator._prompt_evaluator(  # pylint: disable=protected-access
             {"stage": "valid"}
@@ -920,7 +1231,9 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         logging_gateway.warning.assert_not_called()
         fallback_run_result = await LLMEvaluationStrategy(
             completion_gateway=SimpleNamespace(
-                get_completion=AsyncMock(return_value=CompletionResponse(content="not-json"))
+                get_completion=AsyncMock(
+                    return_value=CompletionResponse(content="not-json")
+                )
             ),
             logging_gateway=Mock(),
         ).evaluate_run(
@@ -934,7 +1247,9 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             get_completion=AsyncMock(
                 side_effect=[
                     CompletionResponse(content='{"status":"pass","reasons":"ignored"}'),
-                    CompletionResponse(content='{"status":"retry","reasons":["retry"]}'),
+                    CompletionResponse(
+                        content='{"status":"retry","reasons":["retry"]}'
+                    ),
                     CompletionResponse(content='{"status":"fail","reasons":["bad"]}'),
                 ]
             )
@@ -944,7 +1259,9 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             logging_gateway=Mock(),
         )
         prompted_step = await prompted_public.evaluate_step(
-            EvaluationRequest(request=request, run=run, observations=(failure_observation,)),
+            EvaluationRequest(
+                request=request, run=run, observations=(failure_observation,)
+            ),
             policy=run.policy,
         )
         prompted_response = await prompted_public.evaluate_response(
@@ -961,8 +1278,12 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(prompted_response.status, EvaluationStatus.RETRY)
         self.assertEqual(prompted_run.status, EvaluationStatus.FAIL)
 
-    async def test_acp_capability_provider_lists_descriptors_and_supports_prefix(self) -> None:
-        provider = ACPActionCapabilityProvider(admin_registry=None, logging_gateway=Mock())
+    async def test_acp_capability_provider_lists_descriptors_and_supports_prefix(
+        self,
+    ) -> None:
+        provider = ACPActionCapabilityProvider(
+            admin_registry=None, logging_gateway=Mock()
+        )
         request = _request()
         run = _run(request=request)
 
@@ -997,26 +1318,35 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         )
 
         descriptors = await provider.list_capabilities(request, run, policy=run.policy)
-        fallback_descriptor = provider._descriptor_from_action(  # pylint: disable=protected-access
-            resource=resource,
-            service=service,
-            action_name="status",
-            schema=_FallbackSchema,
+        fallback_descriptor = (
+            provider._descriptor_from_action(  # pylint: disable=protected-access
+                resource=resource,
+                service=service,
+                action_name="status",
+                schema=_FallbackSchema,
+            )
         )
-        pre_required_descriptor = provider._descriptor_from_action(  # pylint: disable=protected-access
-            resource=resource,
-            service=service,
-            action_name="update",
-            schema=_SchemaWithEntityRequired,
+        pre_required_descriptor = (
+            provider._descriptor_from_action(  # pylint: disable=protected-access
+                resource=resource,
+                service=service,
+                action_name="update",
+                schema=_SchemaWithEntityRequired,
+            )
         )
-        missing_descriptor = provider._descriptor_from_action(  # pylint: disable=protected-access
-            resource=resource,
-            service=SimpleNamespace(),
-            action_name="missing",
-            schema=_ActionSchema,
+        missing_descriptor = (
+            provider._descriptor_from_action(  # pylint: disable=protected-access
+                resource=resource,
+                service=SimpleNamespace(),
+                action_name="missing",
+                schema=_ActionSchema,
+            )
         )
 
-        self.assertEqual([item.key for item in descriptors], ["acp__ticket__update", "acp__ticket__status"])
+        self.assertEqual(
+            [item.key for item in descriptors],
+            ["acp__ticket__update", "acp__ticket__status"],
+        )
         self.assertIn("entity_id", descriptors[0].input_schema["required"])
         self.assertEqual(fallback_descriptor.input_schema["type"], "object")
         self.assertEqual(
@@ -1025,10 +1355,16 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(missing_descriptor)
 
-    async def test_acp_capability_provider_execute_covers_success_and_failures(self) -> None:
+    async def test_acp_capability_provider_execute_covers_success_and_failures(
+        self,
+    ) -> None:
         logging_gateway = Mock()
-        provider = ACPActionCapabilityProvider(admin_registry=None, logging_gateway=logging_gateway)
-        request = _request(metadata={"auth_user_id": "33333333-3333-3333-3333-333333333333"})
+        provider = ACPActionCapabilityProvider(
+            admin_registry=None, logging_gateway=logging_gateway
+        )
+        request = _request(
+            metadata={"auth_user_id": "33333333-3333-3333-3333-333333333333"}
+        )
         run = _run(request=request)
 
         unavailable = await provider.execute(
@@ -1084,7 +1420,9 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         validation_failed = await provider.execute(
             request,
             run,
-            CapabilityInvocation(capability_key="acp__ticket__update", arguments={"note": "x"}),
+            CapabilityInvocation(
+                capability_key="acp__ticket__update", arguments={"note": "x"}
+            ),
             CapabilityDescriptor(
                 key="acp__ticket__update",
                 title="Update",
@@ -1099,7 +1437,9 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         entity_required = await provider.execute(
             request,
             run,
-            CapabilityInvocation(capability_key="acp__ticket__update", arguments={"note": "x"}),
+            CapabilityInvocation(
+                capability_key="acp__ticket__update", arguments={"note": "x"}
+            ),
             CapabilityDescriptor(
                 key="acp__ticket__update",
                 title="Update",
@@ -1125,7 +1465,9 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         auth_required = await provider.execute(
             no_auth_request,
             _run(request=no_auth_request),
-            CapabilityInvocation(capability_key="acp__ticket__auth_only", arguments={"note": "x"}),
+            CapabilityInvocation(
+                capability_key="acp__ticket__auth_only", arguments={"note": "x"}
+            ),
             auth_only_descriptor,
             policy=run.policy,
         )
@@ -1142,7 +1484,9 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         raised = await provider.execute(
             request,
             run,
-            CapabilityInvocation(capability_key="acp__ticket__raise", arguments={"note": "x"}),
+            CapabilityInvocation(
+                capability_key="acp__ticket__raise", arguments={"note": "x"}
+            ),
             raise_descriptor,
             policy=run.policy,
         )
@@ -1159,7 +1503,9 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         status_result = await provider.execute(
             request,
             run,
-            CapabilityInvocation(capability_key="acp__ticket__status", arguments={"note": "x"}),
+            CapabilityInvocation(
+                capability_key="acp__ticket__status", arguments={"note": "x"}
+            ),
             status_descriptor,
             policy=run.policy,
         )
@@ -1314,7 +1660,9 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-    async def test_allowlist_guard_and_response_synthesizer_cover_all_paths(self) -> None:
+    async def test_allowlist_guard_and_response_synthesizer_cover_all_paths(
+        self,
+    ) -> None:
         request = _request()
         run = _run(request=request)
         descriptor = CapabilityDescriptor(key="cap.lookup", title="Lookup")
@@ -1374,7 +1722,9 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         run_service = _FakeRunService()
         step_service = _FakeStepService()
-        store = RelationalPlanRunStore(run_service=run_service, step_service=step_service)
+        store = RelationalPlanRunStore(
+            run_service=run_service, step_service=step_service
+        )
         missing_run_id = "99999999-9999-9999-9999-999999999999"
 
         self.assertIsNone(await store.load_run(" "))
@@ -1449,7 +1799,9 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(renewed.owner, "worker-1")
 
         await store.release_lease(run_id=active_lease.run_id, owner="worker-2")
-        self.assertEqual(run_service.rows[uuid.UUID(active_lease.run_id)].lease_owner, "worker-1")
+        self.assertEqual(
+            run_service.rows[uuid.UUID(active_lease.run_id)].lease_owner, "worker-1"
+        )
         await store.release_lease(run_id=active_lease.run_id, owner="worker-1")
         self.assertIsNone(run_service.rows[uuid.UUID(active_lease.run_id)].lease_owner)
 
@@ -1500,7 +1852,9 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         run_service = _FakeRunService()
         step_service = _FakeStepService()
-        store = RelationalPlanRunStore(run_service=run_service, step_service=step_service)
+        store = RelationalPlanRunStore(
+            run_service=run_service, step_service=step_service
+        )
         base_policy = AgentRuntimePolicy(enabled=True, background_enabled=True)
 
         saved_run = await store.create_run(

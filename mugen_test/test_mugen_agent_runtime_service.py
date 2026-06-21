@@ -41,8 +41,14 @@ from mugen.core.contract.context import (
     PreparedContextTurn,
 )
 from mugen.core.contract.gateway.completion import (
+    CompletionContinuationState,
     CompletionMessage,
     CompletionRequest,
+    CompletionResponse,
+)
+from mugen.core.contract.gateway.completion_workflow import (
+    COMPLETION_CONTINUATION_STATE_METADATA_KEY,
+    COMPLETION_TOOL_CALL_ID_METADATA_KEY,
 )
 import mugen.core.service.agent_runtime as agent_runtime_module
 from mugen.core.plugin.agent_runtime.service.runtime import RelationalPlanRunStore
@@ -275,12 +281,24 @@ class TestMugenAgentRuntimeService(unittest.IsolatedAsyncioTestCase):
         run = _run(request=request)
         planning_engine = Mock()
         planning_engine.prepare_run = AsyncMock(return_value=run)
+        continuation_state = CompletionContinuationState(
+            provider="openai",
+            response_id="resp-1",
+            reasoning_items=[{"encrypted_content": "secret"}],
+        )
         planning_engine.next_decision = AsyncMock(
             side_effect=[
                 PlanDecision(
                     kind=PlanDecisionKind.EXECUTE_ACTION,
                     capability_invocations=(
-                        CapabilityInvocation(capability_key="cap.lookup"),
+                        CapabilityInvocation(
+                            capability_key="cap.lookup",
+                            idempotency_key="call-1",
+                        ),
+                    ),
+                    completion=CompletionResponse(
+                        content="tool requested",
+                        reasoning_state=continuation_state,
                     ),
                 ),
                 PlanDecision(
@@ -331,9 +349,32 @@ class TestMugenAgentRuntimeService(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(outcome.status, PlanOutcomeStatus.COMPLETED)
         self.assertEqual(outcome.assistant_response, "final answer")
+        self.assertEqual(
+            outcome.metadata[COMPLETION_CONTINUATION_STATE_METADATA_KEY][
+                "response_id"
+            ],
+            "resp-1",
+        )
         executor.execute_capability.assert_awaited_once()
+        next_observations = planning_engine.next_decision.await_args_list[1].args[2]
+        self.assertEqual(
+            next_observations[0].capability_result.metadata[
+                COMPLETION_TOOL_CALL_ID_METADATA_KEY
+            ],
+            "call-1",
+        )
         self.assertGreaterEqual(plan_run_store.append_step.await_count, 5)
         planning_engine.finalize_run.assert_awaited_once()
+        save_count = plan_run_store.save_run.await_count
+        same_run = await runtime._persist_completion_continuation_state(  # pylint: disable=protected-access
+            run=run,
+            completion=CompletionResponse(
+                content="tool requested",
+                reasoning_state=continuation_state,
+            ),
+        )
+        self.assertIs(same_run, run)
+        self.assertEqual(plan_run_store.save_run.await_count, save_count)
 
     async def test_run_current_turn_retries_after_step_evaluation_retry(self) -> None:
         request = _request(prepared_context=_prepared_context())

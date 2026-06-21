@@ -43,10 +43,15 @@ from mugen.core.contract.context import (
     PreparedContextTurn,
 )
 from mugen.core.contract.gateway.completion import (
+    CompletionContinuationState,
     CompletionMessage,
     CompletionRequest,
     CompletionResponse,
     CompletionUsage,
+)
+from mugen.core.contract.gateway.completion_workflow import (
+    COMPLETION_CONTINUATION_STATE_METADATA_KEY,
+    COMPLETION_TOOL_CALL_ID_METADATA_KEY,
 )
 import mugen.core.service.agent_runtime as svc_module
 from mugen.core.service.agent_runtime import (
@@ -197,12 +202,19 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
         self._container_patch.stop()
 
     async def test_helper_serializers_and_snapshot_helpers(self) -> None:
+        continuation_state = CompletionContinuationState(
+            provider="openai",
+            response_id="resp-1",
+            reasoning_items=[{"encrypted_content": "secret"}],
+            provider_state={"api_key": "secret"},
+        )
         completion = CompletionResponse(
             content="hello",
             model="gpt-test",
             stop_reason="done",
             message={"role": "assistant"},
             tool_calls=[{"id": "tool-1"}],
+            reasoning_state=continuation_state,
             usage=CompletionUsage(
                 input_tokens=1,
                 output_tokens=2,
@@ -216,7 +228,10 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
             ok=True,
             result={"value": 1},
             status_code=200,
-            metadata={"m": "v"},
+            metadata={
+                "m": "v",
+                COMPLETION_TOOL_CALL_ID_METADATA_KEY: "call-1",
+            },
         )
         observation = PlanObservation(
             kind="tool",
@@ -225,7 +240,12 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
             success=True,
             capability_result=capability_result,
             completion=completion,
-            metadata={"k": "v"},
+            metadata={
+                "k": "v",
+                COMPLETION_CONTINUATION_STATE_METADATA_KEY: (
+                    continuation_state.to_dict()
+                ),
+            },
         )
         decision = PlanDecision(
             kind=PlanDecisionKind.RESPOND,
@@ -236,7 +256,10 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
                     capability_key="cap.lookup",
                     arguments={"x": 1},
                     idempotency_key="idem-1",
-                    metadata={"m": "v"},
+                    metadata={
+                        "m": "v",
+                        COMPLETION_TOOL_CALL_ID_METADATA_KEY: "call-1",
+                    },
                 ),
             ),
             wait_until=datetime.now(timezone.utc),
@@ -244,7 +267,12 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
             background_payload={"priority": "high"},
             completion=completion,
             rationale_summary="done",
-            metadata={"trace": "1"},
+            metadata={
+                "trace": "1",
+                COMPLETION_CONTINUATION_STATE_METADATA_KEY: (
+                    continuation_state.to_dict()
+                ),
+            },
         )
         evaluation = EvaluationResult(
             status=EvaluationStatus.REPLAN,
@@ -260,7 +288,12 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
             completion=completion,
             background_run_id="run-bg",
             error_message="none",
-            metadata={"trace": "1"},
+            metadata={
+                "trace": "1",
+                COMPLETION_CONTINUATION_STATE_METADATA_KEY: (
+                    continuation_state.to_dict()
+                ),
+            },
         )
 
         self.assertIsNone(svc_module._serialize_capability_result(None))  # pylint: disable=protected-access
@@ -316,17 +349,45 @@ class TestMugenAgentRuntimeServiceEdges(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(serialized_completion["usage"]["total_tokens"], 3)
+        self.assertEqual(
+            serialized_completion["reasoning_state"]["reasoning_item_count"],
+            1,
+        )
         self.assertIsNone(serialized_completion_no_usage["usage"])
         self.assertEqual(serialized_observation["capability_result"]["status_code"], 200)
         self.assertEqual(
+            serialized_observation["metadata"][
+                COMPLETION_CONTINUATION_STATE_METADATA_KEY
+            ]["reasoning_item_count"],
+            1,
+        )
+        self.assertNotIn(
+            "reasoning_items",
+            serialized_observation["metadata"][
+                COMPLETION_CONTINUATION_STATE_METADATA_KEY
+            ],
+        )
+        self.assertEqual(
             serialized_decision["capability_invocations"][0]["idempotency_key"],
             "idem-1",
+        )
+        self.assertEqual(
+            serialized_decision["capability_invocations"][0]["metadata"][
+                COMPLETION_TOOL_CALL_ID_METADATA_KEY
+            ],
+            "call-1",
         )
         self.assertEqual(
             serialized_evaluation["recommended_decision"],
             PlanDecisionKind.RESPOND.value,
         )
         self.assertEqual(serialized_outcome["background_run_id"], "run-bg")
+        self.assertEqual(
+            serialized_outcome["metadata"][COMPLETION_CONTINUATION_STATE_METADATA_KEY][
+                "reasoning_item_count"
+            ],
+            1,
+        )
         self.assertEqual(
             svc_module._first_text_response(  # pylint: disable=protected-access
                 [

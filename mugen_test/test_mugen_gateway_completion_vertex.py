@@ -177,7 +177,9 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
         _FakeCurl.reset()
         with (
             patch.object(vertex_mod.pycurl, "Curl", _FakeCurl),
-            patch.object(vertex_mod.importlib, "import_module", side_effect=_import_module),
+            patch.object(
+                vertex_mod.importlib, "import_module", side_effect=_import_module
+            ),
         ):
             status_code, _ = gateway._perform_request(
                 model="gemini-2.0-flash-001",
@@ -214,12 +216,17 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
         ):
             await gateway.check_readiness()
 
-    async def test_check_readiness_accepts_validation_style_probe_response(self) -> None:
+    async def test_check_readiness_accepts_validation_style_probe_response(
+        self,
+    ) -> None:
         gateway = VertexCompletionGateway(_make_config(), Mock())
         with patch.object(
             VertexCompletionGateway,
             "_perform_request",
-            return_value=(400, '{"error":{"message":"invalid request: contents is required"}}'),
+            return_value=(
+                400,
+                '{"error":{"message":"invalid request: contents is required"}}',
+            ),
         ):
             await gateway.check_readiness()
 
@@ -260,7 +267,9 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
             messages=[CompletionMessage(role="user", content="hello")],
             inference=CompletionInferenceConfig(stream=True),
         )
-        with self.assertRaisesRegex(CompletionGatewayError, "stream mode is not yet supported"):
+        with self.assertRaisesRegex(
+            CompletionGatewayError, "stream mode is not yet supported"
+        ):
             await gateway.get_completion(request)
 
     async def test_get_completion_rejects_removed_legacy_vendor_param(self) -> None:
@@ -316,7 +325,9 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
             captured["body"] = body
             return 200, response_payload
 
-        with patch.object(VertexCompletionGateway, "_perform_request", side_effect=_perform_request):
+        with patch.object(
+            VertexCompletionGateway, "_perform_request", side_effect=_perform_request
+        ):
             response = await gateway.get_completion(request)
 
         self.assertEqual(captured["model"], "gemini-2.0-flash-001")
@@ -330,7 +341,9 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["generationConfig"]["temperature"], 0.3)
         self.assertEqual(body["generationConfig"]["topP"], 0.2)
         self.assertEqual(body["generationConfig"]["stopSequences"], ["<END>"])
-        self.assertEqual(body["generationConfig"]["responseMimeType"], "application/json")
+        self.assertEqual(
+            body["generationConfig"]["responseMimeType"], "application/json"
+        )
         self.assertEqual(body["generationConfig"]["responseSchema"], {"type": "object"})
         self.assertEqual(body["generationConfig"]["candidateCount"], 2)
         self.assertIn("safetySettings", body)
@@ -344,6 +357,36 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.usage.output_tokens, 7)
         self.assertEqual(response.usage.total_tokens, 18)
         self.assertEqual(response.model, "gemini-2.0-flash-001")
+
+    async def test_get_completion_disables_sampling_controls(self) -> None:
+        config = _make_config()
+        config.gcp.vertex.api.dict["completion"]["sampling_controls"] = "disabled"
+        gateway = VertexCompletionGateway(config, Mock())
+        captured: dict[str, object] = {}
+        response_payload = (
+            '{"candidates":[{"content":{"parts":[{"text":"ok"}]},'
+            '"finishReason":"STOP"}]}'
+        )
+        request = CompletionRequest(
+            operation="completion",
+            messages=[CompletionMessage(role="user", content="hello")],
+            inference=CompletionInferenceConfig(temperature=0.3, top_p=0.2),
+        )
+
+        def _perform_request(*, model: str, body: dict) -> tuple[int, str]:
+            captured["model"] = model
+            captured["body"] = body
+            return 200, response_payload
+
+        with patch.object(
+            VertexCompletionGateway, "_perform_request", side_effect=_perform_request
+        ):
+            await gateway.get_completion(request)
+
+        body = captured["body"]
+        assert isinstance(body, dict)
+        self.assertNotIn("temperature", body["generationConfig"])
+        self.assertNotIn("topP", body["generationConfig"])
 
     async def test_get_completion_parses_structured_tool_call_response(self) -> None:
         gateway = VertexCompletionGateway(_make_config(), Mock())
@@ -376,7 +419,9 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
             messages=[CompletionMessage(role="user", content="hello")],
             vendor_params={"candidate_count": 0},
         )
-        with self.assertRaisesRegex(CompletionGatewayError, "candidate_count must be greater than 0"):
+        with self.assertRaisesRegex(
+            CompletionGatewayError, "candidate_count must be greater than 0"
+        ):
             await gateway.get_completion(request)
 
     async def test_get_completion_raises_gateway_error_on_http_error(self) -> None:
@@ -396,7 +441,9 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
             "_perform_request",
             side_effect=RuntimeError("boom"),
         ):
-            with self.assertRaisesRegex(CompletionGatewayError, "Failed to execute Vertex request"):
+            with self.assertRaisesRegex(
+                CompletionGatewayError, "Failed to execute Vertex request"
+            ):
                 await gateway.get_completion(_simple_request())
 
     async def test_get_completion_wraps_invalid_json_payload(self) -> None:
@@ -406,7 +453,9 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
             "_perform_request",
             return_value=(200, "not-json"),
         ):
-            with self.assertRaisesRegex(CompletionGatewayError, "Failed to parse Vertex response payload"):
+            with self.assertRaisesRegex(
+                CompletionGatewayError, "Failed to parse Vertex response payload"
+            ):
                 await gateway.get_completion(_simple_request())
 
     async def test_get_completion_uses_operation_defaults(self) -> None:
@@ -420,7 +469,9 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
             captured_body.update(body)
             return 200, '{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}'
 
-        with patch.object(VertexCompletionGateway, "_perform_request", side_effect=_perform_request):
+        with patch.object(
+            VertexCompletionGateway, "_perform_request", side_effect=_perform_request
+        ):
             await gateway.get_completion(_simple_request())
 
         self.assertEqual(captured_body["generationConfig"]["maxOutputTokens"], 128)
@@ -432,7 +483,9 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
         config = _make_config()
         config.gcp.vertex.api.project = 123
         gateway = VertexCompletionGateway(config, Mock())
-        self.assertIsNone(gateway._resolve_optional_api_string("project"))  # pylint: disable=protected-access
+        self.assertIsNone(
+            gateway._resolve_optional_api_string("project")
+        )  # pylint: disable=protected-access
 
     async def test_check_readiness_raises_when_operation_model_is_missing(self) -> None:
         config = _make_config()
@@ -442,7 +495,9 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(CompletionGatewayError, "is missing model"):
             await gateway.check_readiness()
 
-    async def test_check_readiness_uses_default_timeout_when_read_timeout_missing(self) -> None:
+    async def test_check_readiness_uses_default_timeout_when_read_timeout_missing(
+        self,
+    ) -> None:
         config = _make_config()
         config.gcp.vertex.api.read_timeout_seconds = None
         gateway = VertexCompletionGateway(config, Mock())
@@ -453,8 +508,13 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
             return await awaitable
 
         with (
-            patch.object(VertexCompletionGateway, "_perform_request", return_value=(200, "{}")),
-            patch("mugen.core.gateway.completion.vertex.asyncio.wait_for", side_effect=_wait_for),
+            patch.object(
+                VertexCompletionGateway, "_perform_request", return_value=(200, "{}")
+            ),
+            patch(
+                "mugen.core.gateway.completion.vertex.asyncio.wait_for",
+                side_effect=_wait_for,
+            ),
         ):
             await gateway.check_readiness()
 
@@ -487,27 +547,41 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
             operation="completion",
             message="wrapped",
         )
-        with patch.object(VertexCompletionGateway, "_perform_request", side_effect=wrapped):
+        with patch.object(
+            VertexCompletionGateway, "_perform_request", side_effect=wrapped
+        ):
             with self.assertRaises(CompletionGatewayError) as raised:
                 await gateway.get_completion(_simple_request())
         self.assertIs(raised.exception, wrapped)
 
-    def test_resolve_operation_config_handles_missing_invalid_and_missing_model(self) -> None:
+    def test_resolve_operation_config_handles_missing_invalid_and_missing_model(
+        self,
+    ) -> None:
         gateway = VertexCompletionGateway(_make_config(), Mock())
-        with self.assertRaisesRegex(CompletionGatewayError, "Missing Vertex operation configuration"):
-            gateway._resolve_operation_config("unknown")  # pylint: disable=protected-access
+        with self.assertRaisesRegex(
+            CompletionGatewayError, "Missing Vertex operation configuration"
+        ):
+            gateway._resolve_operation_config(
+                "unknown"
+            )  # pylint: disable=protected-access
 
         config = _make_config()
         config.gcp.vertex.api.dict["completion"] = "bad"
         gateway = VertexCompletionGateway(config, Mock())
-        with self.assertRaisesRegex(CompletionGatewayError, "Invalid Vertex operation configuration"):
-            gateway._resolve_operation_config("completion")  # pylint: disable=protected-access
+        with self.assertRaisesRegex(
+            CompletionGatewayError, "Invalid Vertex operation configuration"
+        ):
+            gateway._resolve_operation_config(
+                "completion"
+            )  # pylint: disable=protected-access
 
         config = _make_config()
         config.gcp.vertex.api.dict["completion"]["model"] = ""
         gateway = VertexCompletionGateway(config, Mock())
         with self.assertRaisesRegex(CompletionGatewayError, "is missing model"):
-            gateway._resolve_operation_config("completion")  # pylint: disable=protected-access
+            gateway._resolve_operation_config(
+                "completion"
+            )  # pylint: disable=protected-access
 
     async def test_get_completion_rejects_invalid_bool_like_stream_value(self) -> None:
         gateway = VertexCompletionGateway(_make_config(), Mock())
@@ -516,10 +590,14 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
             messages=[CompletionMessage(role="user", content="hello")],
             inference=CompletionInferenceConfig(stream="maybe"),  # type: ignore[arg-type]
         )
-        with self.assertRaisesRegex(CompletionGatewayError, "Invalid boolean value for inference.stream"):
+        with self.assertRaisesRegex(
+            CompletionGatewayError, "Invalid boolean value for inference.stream"
+        ):
             await gateway.get_completion(request)
 
-    async def test_serialize_request_body_adds_default_contents_when_only_system_message(self) -> None:
+    async def test_serialize_request_body_adds_default_contents_when_only_system_message(
+        self,
+    ) -> None:
         gateway = VertexCompletionGateway(_make_config(), Mock())
         captured_body: dict[str, Any] = {}
         request = CompletionRequest(
@@ -532,10 +610,14 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
             captured_body.update(body)
             return 200, '{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}'
 
-        with patch.object(VertexCompletionGateway, "_perform_request", side_effect=_perform_request):
+        with patch.object(
+            VertexCompletionGateway, "_perform_request", side_effect=_perform_request
+        ):
             await gateway.get_completion(request)
 
-        self.assertEqual(captured_body["contents"], [{"role": "user", "parts": [{"text": ""}]}])
+        self.assertEqual(
+            captured_body["contents"], [{"role": "user", "parts": [{"text": ""}]}]
+        )
         self.assertIn("systemInstruction", captured_body)
 
     async def test_serialize_request_body_omits_empty_generation_config(self) -> None:
@@ -549,7 +631,9 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
             captured_body.update(body)
             return 200, '{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}'
 
-        with patch.object(VertexCompletionGateway, "_perform_request", side_effect=_perform_request):
+        with patch.object(
+            VertexCompletionGateway, "_perform_request", side_effect=_perform_request
+        ):
             await gateway.get_completion(_simple_request())
 
         self.assertNotIn("generationConfig", captured_body)
@@ -561,7 +645,9 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
             messages=[CompletionMessage(role="user", content="hello")],
             vendor_params={"candidate_count": "bad"},
         )
-        with self.assertRaisesRegex(CompletionGatewayError, "candidate_count must be a positive integer"):
+        with self.assertRaisesRegex(
+            CompletionGatewayError, "candidate_count must be a positive integer"
+        ):
             await gateway.get_completion(request)
 
     def test_resolve_stop_sequences_supports_configured_string(self) -> None:
@@ -613,11 +699,21 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "model must be non-empty"):
             gateway._build_endpoint(model="  ")  # pylint: disable=protected-access
 
-        endpoint = gateway._build_endpoint(model="projects/p/locations/l/publishers/google/models/m")  # pylint: disable=protected-access
-        self.assertIn("/v1/projects/p/locations/l/publishers/google/models/m:generateContent", endpoint)
+        endpoint = gateway._build_endpoint(
+            model="projects/p/locations/l/publishers/google/models/m"
+        )  # pylint: disable=protected-access
+        self.assertIn(
+            "/v1/projects/p/locations/l/publishers/google/models/m:generateContent",
+            endpoint,
+        )
 
-        endpoint = gateway._build_endpoint(model="publishers/google/models/gemini-2.0-flash-001")  # pylint: disable=protected-access
-        self.assertIn("/v1/projects/proj-1/locations/us-central1/publishers/google/models/gemini-2.0-flash-001:generateContent", endpoint)
+        endpoint = gateway._build_endpoint(
+            model="publishers/google/models/gemini-2.0-flash-001"
+        )  # pylint: disable=protected-access
+        self.assertIn(
+            "/v1/projects/proj-1/locations/us-central1/publishers/google/models/gemini-2.0-flash-001:generateContent",
+            endpoint,
+        )
 
     def test_resolve_project_for_request_sync_raises_when_unavailable(self) -> None:
         config = _make_config()
@@ -633,7 +729,9 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
         gateway._ensure_adc_loaded_sync = lambda: None  # type: ignore[method-assign]  # pylint: disable=protected-access
         gateway._adc_credentials = None  # pylint: disable=protected-access
         gateway._adc_request_class = None  # pylint: disable=protected-access
-        with self.assertRaisesRegex(RuntimeError, "failed to initialize ADC credentials"):
+        with self.assertRaisesRegex(
+            RuntimeError, "failed to initialize ADC credentials"
+        ):
             gateway._resolve_access_token_sync()  # pylint: disable=protected-access
 
         class _RefreshBoom:  # pylint: disable=too-few-public-methods
@@ -645,7 +743,9 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
                 raise RuntimeError("boom")
 
         gateway._adc_credentials = _RefreshBoom()  # pylint: disable=protected-access
-        gateway._adc_request_class = lambda: object()  # pylint: disable=protected-access
+        gateway._adc_request_class = (
+            lambda: object()
+        )  # pylint: disable=protected-access
         with self.assertRaisesRegex(RuntimeError, "failed to refresh ADC access token"):
             gateway._resolve_access_token_sync()  # pylint: disable=protected-access
 
@@ -658,7 +758,9 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
                 self.token = ""
 
         gateway._adc_credentials = _RefreshEmpty()  # pylint: disable=protected-access
-        with self.assertRaisesRegex(RuntimeError, "could not resolve a non-empty access token"):
+        with self.assertRaisesRegex(
+            RuntimeError, "could not resolve a non-empty access token"
+        ):
             gateway._resolve_access_token_sync()  # pylint: disable=protected-access
 
     def test_ensure_adc_loaded_sync_error_paths(self) -> None:
@@ -669,8 +771,12 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
                 self._target = target
 
             def __enter__(self):
-                self._target._adc_credentials = object()  # pylint: disable=protected-access
-                self._target._adc_request_class = object()  # pylint: disable=protected-access
+                self._target._adc_credentials = (
+                    object()
+                )  # pylint: disable=protected-access
+                self._target._adc_request_class = (
+                    object()
+                )  # pylint: disable=protected-access
                 return self
 
             def __exit__(self, exc_type, exc, tb):
@@ -688,16 +794,24 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             VertexCompletionGateway,
             "_import_google_auth_modules",
-            return_value=(SimpleNamespace(default=lambda scopes: (object(), "proj")), SimpleNamespace(Request=None)),
+            return_value=(
+                SimpleNamespace(default=lambda scopes: (object(), "proj")),
+                SimpleNamespace(Request=None),
+            ),
         ):
-            with self.assertRaisesRegex(RuntimeError, "failed to load google-auth request transport"):
+            with self.assertRaisesRegex(
+                RuntimeError, "failed to load google-auth request transport"
+            ):
                 gateway._ensure_adc_loaded_sync()  # pylint: disable=protected-access
 
         gateway = VertexCompletionGateway(_make_config(), Mock())
         with patch.object(
             VertexCompletionGateway,
             "_import_google_auth_modules",
-            return_value=(SimpleNamespace(default=Mock(side_effect=RuntimeError("boom"))), SimpleNamespace(Request=lambda: object())),
+            return_value=(
+                SimpleNamespace(default=Mock(side_effect=RuntimeError("boom"))),
+                SimpleNamespace(Request=lambda: object()),
+            ),
         ):
             with self.assertRaisesRegex(RuntimeError, "failed to load ADC credentials"):
                 gateway._ensure_adc_loaded_sync()  # pylint: disable=protected-access
@@ -706,20 +820,36 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             VertexCompletionGateway,
             "_import_google_auth_modules",
-            return_value=(SimpleNamespace(default=lambda scopes: (object(), None)), SimpleNamespace(Request=lambda: object())),
+            return_value=(
+                SimpleNamespace(default=lambda scopes: (object(), None)),
+                SimpleNamespace(Request=lambda: object()),
+            ),
         ):
             gateway._ensure_adc_loaded_sync()  # pylint: disable=protected-access
         self.assertIsNone(gateway._adc_project_id)  # pylint: disable=protected-access
 
     def test_extract_http_error_additional_branches(self) -> None:
-        self.assertEqual(VertexCompletionGateway._extract_http_error("not-json"), "not-json")
+        self.assertEqual(
+            VertexCompletionGateway._extract_http_error("not-json"), "not-json"
+        )
         self.assertEqual(VertexCompletionGateway._extract_http_error('"x"'), "x")
-        self.assertEqual(VertexCompletionGateway._extract_http_error('{"error":"bad"}'), "{'error': 'bad'}")
+        self.assertEqual(
+            VertexCompletionGateway._extract_http_error('{"error":"bad"}'),
+            "{'error': 'bad'}",
+        )
 
     def test_is_expected_probe_validation_response_additional_branches(self) -> None:
-        self.assertFalse(VertexCompletionGateway._is_expected_probe_validation_response(200, "{}"))
-        with patch.object(VertexCompletionGateway, "_extract_http_error", return_value=""):
-            self.assertFalse(VertexCompletionGateway._is_expected_probe_validation_response(400, "{}"))
+        self.assertFalse(
+            VertexCompletionGateway._is_expected_probe_validation_response(200, "{}")
+        )
+        with patch.object(
+            VertexCompletionGateway, "_extract_http_error", return_value=""
+        ):
+            self.assertFalse(
+                VertexCompletionGateway._is_expected_probe_validation_response(
+                    400, "{}"
+                )
+            )
         self.assertFalse(
             VertexCompletionGateway._is_expected_probe_validation_response(
                 400,
@@ -735,8 +865,12 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
 
     def test_parse_json_response_additional_branches(self) -> None:
         gateway = VertexCompletionGateway(_make_config(), Mock())
-        with self.assertRaisesRegex(CompletionGatewayError, "did not include any completion candidates"):
-            gateway._parse_json_response(model="m", operation="completion", payload={})  # pylint: disable=protected-access
+        with self.assertRaisesRegex(
+            CompletionGatewayError, "did not include any completion candidates"
+        ):
+            gateway._parse_json_response(
+                model="m", operation="completion", payload={}
+            )  # pylint: disable=protected-access
 
         payload = {
             "candidates": [
@@ -781,9 +915,13 @@ class TestMugenGatewayCompletionVertex(unittest.IsolatedAsyncioTestCase):
 
     def test_normalize_helpers_additional_branches(self) -> None:
         self.assertEqual(VertexCompletionGateway._normalize_dict(1), {})
-        self.assertEqual(VertexCompletionGateway._normalize_list_of_dicts("bad"), [])  # pylint: disable=protected-access
         self.assertEqual(
-            VertexCompletionGateway._normalize_list_of_dicts([{"a": 1}, 1]),  # pylint: disable=protected-access
+            VertexCompletionGateway._normalize_list_of_dicts("bad"), []
+        )  # pylint: disable=protected-access
+        self.assertEqual(
+            VertexCompletionGateway._normalize_list_of_dicts(
+                [{"a": 1}, 1]
+            ),  # pylint: disable=protected-access
             [{"a": 1}],
         )
 

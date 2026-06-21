@@ -1,7 +1,7 @@
 # Working with muGen Gateways
 
 Status: Draft  
-Last Updated: 2026-03-04  
+Last Updated: 2026-06-21
 Audience: Core and downstream plugin teams
 
 ## Purpose
@@ -9,7 +9,7 @@ Audience: Core and downstream plugin teams
 This document explains gateway contracts and currently supported completion,
 knowledge, email, and SMS gateway implementations in muGen.
 
-Runtime configuration uses strict provider tokens (for example `bedrock`,
+Runtime configuration uses strict provider tokens (for example `anthropic`, `bedrock`,
 `cerebras`, `groq`, `openai`, `azure_foundry`, `sambanova`, `vertex`,
 `chromadb`, `milvus`, `pinecone`, `pgvector`, `qdrant`, `weaviate`, `smtp`,
 `ses`, `twilio`), not
@@ -31,13 +31,60 @@ Request and response payloads are normalized by
   - `content` supports string, object, list-of-objects, or null.
 - `CompletionInferenceConfig(max_completion_tokens, temperature, top_p, stop, stream, stream_options)`
   - `max_completion_tokens` is the canonical token-limit field.
-- `CompletionRequest(messages, operation, model, inference, vendor_params)`
-- `CompletionResponse(content, model, stop_reason, message, tool_calls, usage, vendor_fields, raw)`
+- `CompletionReasoningConfig(mode, effort, budget_tokens, include_encrypted_state, visibility)`
+- `CompletionTool(name, description, input_schema, strict, kind, provider_hints)`
+- `CompletionToolCall(id, name, arguments, provider_item)`
+- `CompletionToolResult(tool_call_id, name, content, is_error)`
+- `CompletionContinuationState(provider, response_id, conversation_id, output_items, reasoning_items, thinking_blocks, redacted_thinking_blocks, provider_state)`
+- `CompletionRequest(messages, operation, model, inference, reasoning, tools, tool_results, continuation_state, vendor_params)`
+- `CompletionResponse(content, model, stop_reason, message, tool_calls, output_items, reasoning_state, provider_state, usage, vendor_fields, raw)`
   - `content` may be structured (not string-only).
   - `message` and `tool_calls` preserve richer assistant outputs.
-- `CompletionUsage(input_tokens, output_tokens, total_tokens, vendor_fields)`
+- `reasoning_state` and `provider_state` are opaque provider continuation data.
+- `CompletionUsage(input_tokens, output_tokens, total_tokens, reasoning_tokens, vendor_fields)`
   - `vendor_fields` carries provider-specific usage/timing metadata.
 - `CompletionGatewayError(provider, operation, message, cause)`
+
+Reasoning-workflow fields are additive and backward-compatible with existing
+chat-shaped requests. Provider adapters that do not understand normalized
+reasoning, tools, tool results, or continuation state must either ignore absent
+fields or raise a deterministic `CompletionGatewayError` when a request asks for
+unsupported workflow features.
+
+Do not emit raw reasoning items, encrypted reasoning, `thinking` blocks,
+`redacted_thinking` blocks, or provider credentials to user-visible responses or
+normal logs. Log-safe serializers summarize counts and provider state keys
+instead.
+
+Operation configs may define provider-neutral reasoning defaults for adapters
+that support them:
+
+- `[<provider>] api.<operation>.reasoning.mode`
+  - expected values are provider-specific, but normalized adapters should use
+    `adaptive`, `enabled`, or `disabled` where possible.
+- `[<provider>] api.<operation>.reasoning.effort`
+- `[<provider>] api.<operation>.reasoning.budget_tokens`
+- `[<provider>] api.<operation>.reasoning.include_encrypted_state`
+- `[<provider>] api.<operation>.reasoning.visibility`
+  - default behavior is `opaque`; raw provider reasoning remains replay state,
+    not display content.
+
+Reasoning defaults are per operation, so `api.classification.reasoning.*` and
+`api.completion.reasoning.*` can differ. Keep `visibility = "opaque"` unless a
+provider adapter explicitly documents another safe display mode.
+
+Operation configs can suppress sampling controls for models that reject them:
+
+- `[<provider>] api.<operation>.sampling_controls = "enabled" | "disabled"`
+- `enabled` preserves provider-specific behavior for configured or request-level
+  `temperature` and `top_p`.
+- `disabled` omits `temperature` and `top_p` from operation defaults and
+  `CompletionInferenceConfig`. OpenAI-compatible Responses requests also ignore
+  OpenAI vendor params named `temperature` and `top_p` while disabled.
+- JSON overlays are deep-merged with the sample config. When inherited
+  `temp`/`top_p` defaults must not be sent, set
+  `api.<operation>.sampling_controls = "disabled"` instead of omitting those
+  keys in the overlay.
 
 ## Email Gateway Contract
 
@@ -92,6 +139,56 @@ Provider-specific search params are carried by vendor DTO types under
 
 ## Completion Provider Gateways
 
+### Anthropic
+
+Module: `mugen.core.gateway.completion.anthropic`
+
+Provider token: `anthropic`
+
+The direct Anthropic gateway uses the Messages API through `aiohttp`; no
+Anthropic SDK dependency is required. The non-stream path is implemented first.
+Requests with `CompletionInferenceConfig.stream=true` or
+`vendor_params["stream"]=true` fail with a deterministic
+`CompletionGatewayError`.
+
+The gateway maps normalized reasoning and tool workflow fields to Claude
+Messages:
+
+- `CompletionTool` serializes to `{name, description, input_schema}`.
+- `CompletionToolResult` serializes to `tool_result` user content blocks.
+- `CompletionReasoningConfig(mode="adaptive")` serializes to
+  `thinking: {type: "adaptive"}` and `output_config.effort` when effort is set.
+- `CompletionReasoningConfig(mode="enabled", budget_tokens=N)` serializes to
+  manual extended thinking.
+- `CompletionReasoningConfig(mode="disabled")` omits `thinking`, except known
+  always-on Claude reasoning models fail fast.
+- `visibility="opaque"` maps to `thinking.display="omitted"` so thinking
+  signatures remain replayable without surfacing readable thinking text.
+
+Responses expose only final text in `CompletionResponse.content`; `thinking`
+and `redacted_thinking` blocks are stored under
+`CompletionResponse.reasoning_state` as opaque replay state. Tool-use blocks
+are normalized to `CompletionToolCall`.
+
+Current Claude capability checks reject known unsupported combinations:
+
+- Fable 5, Mythos 5, and Mythos Preview reject disabled thinking.
+- Fable 5, Mythos 5, Opus 4.8, and Opus 4.7 reject manual
+  `mode="enabled"` thinking.
+- Adaptive thinking is accepted only for known adaptive-capable model families.
+
+Direct Anthropic adaptive-thinking example:
+
+```toml
+[anthropic]
+api.completion.model = "<claude-model-with-adaptive-thinking>"
+api.completion.max_completion_tokens = 4096
+api.completion.sampling_controls = "disabled"
+api.completion.reasoning.mode = "adaptive"
+api.completion.reasoning.effort = "medium"
+api.completion.reasoning.visibility = "opaque"
+```
+
 ### AWS Bedrock
 
 Module: `mugen.core.gateway.completion.bedrock`
@@ -103,6 +200,13 @@ Runtime mode is controlled per request by
   reports the model does not support `Converse`.
 - `converse`: always use `Converse`.
 - `invoke_model`: always use `InvokeModel`.
+
+For Bedrock-hosted Claude models (`anthropic.*` and regional `*.anthropic.*`
+model IDs), normalized reasoning/tools/tool-results/continuation state or
+operation-level reasoning defaults automatically use Claude-native
+`InvokeModel` serialization in `auto` mode. Explicit `bedrock_api="converse"`
+with those normalized workflow fields fails fast until Bedrock Converse content
+block mapping is implemented.
 
 In all modes, the default model and inference values come from
 `[aws.bedrock] api.<operation>.*` in `mugen.toml` when not overridden in
@@ -123,6 +227,7 @@ multiple provider-specific bodies through a common request contract.
 Model ID prefixes mapped by default:
 
 - `anthropic.*`
+- regional `*.anthropic.*`
 - `meta.*`
 - `amazon.titan-text*`
 - `amazon.nova*`
@@ -164,6 +269,24 @@ Supported Bedrock-specific keys in `CompletionRequest.vendor_params`:
 - Invoke response parsing overrides:
   - `invoke_response_paths`
   - `invoke_stop_reason_paths`
+
+For Claude `InvokeModel`, normalized tools and tool results use Anthropic
+Messages content blocks, adaptive reasoning effort is placed under
+`output_config`, and `thinking`/`redacted_thinking` blocks are preserved exactly
+in `CompletionContinuationState`.
+
+Bedrock-hosted Claude adaptive-thinking example:
+
+```toml
+[aws.bedrock]
+api.region = "us-east-1"
+api.completion.model = "<anthropic-claude-model-id>"
+api.completion.max_completion_tokens = 4096
+api.completion.sampling_controls = "disabled"
+api.completion.reasoning.mode = "adaptive"
+api.completion.reasoning.effort = "medium"
+api.completion.reasoning.visibility = "opaque"
+```
 
 ### Groq
 
@@ -227,6 +350,11 @@ OpenAI surface routing:
 - Per-request override:
   - `CompletionRequest.vendor_params["openai_api"]`
   - allowed values: `chat_completions`, `responses`
+- Requests with normalized `reasoning`, `tools`, `tool_results`, or
+  `continuation_state` automatically use Responses unless the request explicitly
+  sets `openai_api = "chat_completions"`.
+- Explicit Chat Completions requests that include normalized reasoning workflow
+  fields fail fast with `CompletionGatewayError`.
 
 Supports normalized inference fields:
 
@@ -292,6 +420,19 @@ OpenAI compatibility notes:
 - In Responses mode, system-role messages are joined into `instructions`; other
   messages are sent as `input`.
 - In Responses mode, token limit is sent as `max_output_tokens`.
+- In Responses mode, normalized `CompletionTool` values are serialized as flat
+  function tools (`type`, `name`, `description`, `parameters`, `strict`).
+- In Responses mode, normalized `CompletionToolResult` values are serialized as
+  `function_call_output` input items.
+- OpenAI continuation uses `previous_response_id` when available. Without a
+  response id, preserved reasoning/output items are replayed before new input
+  for stateless continuation.
+- `CompletionReasoningConfig.effort` maps to OpenAI `reasoning.effort`.
+  `include_encrypted_state = true` adds
+  `reasoning.encrypted_content` to `include`.
+- Responses output items are copied to `CompletionResponse.output_items`;
+  reasoning items and non-reasoning output items are retained in opaque
+  `CompletionContinuationState` for replay.
 - In Chat Completions mode, token limit defaults to `max_completion_tokens`.
 - Responses-mode validation/API failures are fail-fast; there is no implicit
   fallback to Chat Completions.
@@ -300,6 +441,19 @@ OpenAI compatibility notes:
   `[openai] api.base_url` and `[openai] api.timeout_seconds`.
 - Non-stream and stream responses preserve tool calls, usage metadata, and
   structured output blocks in normalized response fields.
+
+OpenAI Responses example for a model that rejects sampling controls:
+
+```toml
+[openai]
+api.completion.model = "gpt-5.5"
+api.completion.surface = "responses"
+api.completion.sampling_controls = "disabled"
+api.completion.max_completion_tokens = 4046
+api.completion.reasoning.effort = "medium"
+api.completion.reasoning.include_encrypted_state = true
+api.completion.reasoning.visibility = "opaque"
+```
 
 #### OpenAI Readiness Behavior
 
@@ -763,6 +917,7 @@ api.completion.model = "amazon.nova-lite-v1:0"
 api.completion.max_tokens = 1024
 api.completion.temp = 0.2
 api.completion.top_p = 0.9
+api.completion.sampling_controls = "enabled"
 
 [twilio]
 api.account_sid = "<twilio-account-sid>"
@@ -781,11 +936,13 @@ api.classification.model = "llama-4-scout-17b-16e-instruct"
 api.classification.surface = "chat_completions"
 api.classification.temp = 0.0
 api.classification.top_p = 1.0
+api.classification.sampling_controls = "enabled"
 api.classification.max_completion_tokens = 256
 api.completion.model = "llama-4-scout-17b-16e-instruct"
 api.completion.surface = "chat_completions"
 api.completion.temp = 0.2
 api.completion.top_p = 0.9
+api.completion.sampling_controls = "enabled"
 api.completion.max_completion_tokens = 1024
 api.timeout_seconds = 30.0
 
@@ -797,11 +954,13 @@ api.classification.model = "gpt-4.1-mini"
 api.classification.surface = "chat_completions"
 api.classification.temp = 0.0
 api.classification.top_p = 1.0
+api.classification.sampling_controls = "enabled"
 api.classification.max_completion_tokens = 256
 api.completion.model = "gpt-4.1-mini"
 api.completion.surface = "chat_completions"
 api.completion.temp = 0.2
 api.completion.top_p = 0.9
+api.completion.sampling_controls = "enabled"
 api.completion.max_completion_tokens = 1024
 api.timeout_seconds = 30.0
 
@@ -812,10 +971,12 @@ api.access_token = ""
 api.classification.model = "gemini-2.0-flash-001"
 api.classification.temp = 0.0
 api.classification.top_p = 1.0
+api.classification.sampling_controls = "enabled"
 api.classification.max_completion_tokens = 256
 api.completion.model = "gemini-2.0-flash-001"
 api.completion.temp = 0.2
 api.completion.top_p = 0.9
+api.completion.sampling_controls = "enabled"
 api.completion.max_completion_tokens = 1024
 api.connect_timeout_seconds = 10.0
 api.read_timeout_seconds = 30.0

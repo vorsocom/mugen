@@ -9,9 +9,14 @@ from typing import Any
 from openai import AsyncOpenAI, OpenAIError
 
 from mugen.core.contract.gateway.completion import (
+    CompletionContinuationState,
     CompletionGatewayError,
+    CompletionReasoningConfig,
     CompletionRequest,
     CompletionResponse,
+    CompletionTool,
+    CompletionToolCall,
+    CompletionToolResult,
     CompletionUsage,
     ICompletionGateway,
 )
@@ -19,6 +24,10 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.gateway.completion.message_serialization import (
     serialize_completion_message_content,
     serialize_completion_message_dict,
+)
+from mugen.core.gateway.completion.sampling_controls import (
+    resolve_sampling_controls_enabled,
+    resolve_sampling_parameter_kwargs,
 )
 from mugen.core.gateway.completion.timeout_config import (
     parse_bool_like,
@@ -232,6 +241,7 @@ class OpenAICompletionGateway(ICompletionGateway):
                     operation=completion_request.operation,
                 )
 
+            self._validate_chat_workflow_request(completion_request)
             model, kwargs = self._serialize_chat_kwargs(
                 completion_request,
                 operation_config,
@@ -283,9 +293,6 @@ class OpenAICompletionGateway(ICompletionGateway):
     ) -> tuple[str, dict[str, Any]]:
         model = request.model or operation_config["model"]
 
-        temperature = self._resolve_temperature(request, operation_config=operation_config)
-        top_p = self._resolve_top_p(request, operation_config=operation_config)
-
         stream = self._resolve_stream(request)
 
         kwargs: dict[str, Any] = {
@@ -296,10 +303,15 @@ class OpenAICompletionGateway(ICompletionGateway):
             "model": model,
             "stream": stream,
         }
-        if temperature is not None:
-            kwargs["temperature"] = temperature
-        if top_p is not None:
-            kwargs["top_p"] = top_p
+        kwargs.update(
+            resolve_sampling_parameter_kwargs(
+                request=request,
+                operation_config=operation_config,
+                provider=self._provider,
+                provider_label=f"{self.__class__.__name__}",
+                timeout_applied=self._timeout_seconds,
+            )
+        )
         if request.inference.stop:
             kwargs["stop"] = request.inference.stop
 
@@ -343,13 +355,23 @@ class OpenAICompletionGateway(ICompletionGateway):
         elif not instructions:
             kwargs["input"] = []
 
-        temperature = self._resolve_temperature(request, operation_config=operation_config)
-        if temperature is not None:
-            kwargs["temperature"] = temperature
-
-        top_p = self._resolve_top_p(request, operation_config=operation_config)
-        if top_p is not None:
-            kwargs["top_p"] = top_p
+        sampling_controls_enabled = resolve_sampling_controls_enabled(
+            request=request,
+            operation_config=operation_config,
+            provider=self._provider,
+            provider_label=f"{self.__class__.__name__}",
+            timeout_applied=self._timeout_seconds,
+        )
+        if sampling_controls_enabled is True:
+            kwargs.update(
+                resolve_sampling_parameter_kwargs(
+                    request=request,
+                    operation_config=operation_config,
+                    provider=self._provider,
+                    provider_label=f"{self.__class__.__name__}",
+                    timeout_applied=self._timeout_seconds,
+                )
+            )
 
         max_tokens = self._resolve_responses_max_tokens(
             request,
@@ -361,11 +383,58 @@ class OpenAICompletionGateway(ICompletionGateway):
         if stream and stream_options is not None:
             kwargs["stream_options"] = stream_options
 
+        reasoning = self._resolve_responses_reasoning(
+            request=request,
+            operation_config=operation_config,
+        )
+        if reasoning is not None:
+            kwargs["reasoning"] = reasoning
+
+        include_values = self._resolve_responses_include(
+            request=request,
+            operation_config=operation_config,
+        )
+        if include_values:
+            kwargs["include"] = include_values
+
+        previous_response_id = self._resolve_previous_response_id(request)
+        if previous_response_id is not None:
+            kwargs["previous_response_id"] = previous_response_id
+
+        serialized_tools = self._serialize_responses_tools(request.tools)
+        if serialized_tools:
+            kwargs["tools"] = serialized_tools
+
         for key in self._responses_vendor_passthrough_keys:
             if key not in request.vendor_params:
                 continue
             if key in {"temperature", "top_p"}:
-                kwargs.setdefault(key, request.vendor_params[key])
+                if sampling_controls_enabled:
+                    kwargs.setdefault(key, request.vendor_params[key])
+                continue
+            if key == "include":
+                kwargs["include"] = self._merge_responses_include_values(
+                    kwargs.get("include"),
+                    request.vendor_params[key],
+                )
+                continue
+            if key == "tools":
+                kwargs["tools"] = self._merge_responses_tools(
+                    kwargs.get("tools"),
+                    request.vendor_params[key],
+                )
+                continue
+            if key == "reasoning":
+                if reasoning is None:
+                    kwargs[key] = request.vendor_params[key]
+                else:
+                    kwargs[key] = self._merge_dict_values(
+                        reasoning,
+                        request.vendor_params[key],
+                    )
+                continue
+            if key == "previous_response_id" and previous_response_id is not None:
+                kwargs.setdefault(key, previous_response_id)
                 continue
             kwargs[key] = request.vendor_params[key]
 
@@ -603,7 +672,9 @@ class OpenAICompletionGateway(ICompletionGateway):
 
         stream_tool_calls = self._extract_responses_tool_calls(output_items)
         merged_tool_calls = self._merge_responses_tool_calls(
-            parsed_tool_calls=parsed_response.tool_calls,
+            parsed_tool_calls=self._extract_responses_tool_calls(
+                parsed_response.output_items
+            ),
             stream_tool_calls=stream_tool_calls,
             stream_tool_call_arguments=tool_call_arguments_by_item_id,
         )
@@ -625,7 +696,10 @@ class OpenAICompletionGateway(ICompletionGateway):
             model=parsed_response.model,
             stop_reason=parsed_response.stop_reason,
             message=parsed_response.message,
-            tool_calls=merged_tool_calls,
+            tool_calls=self._normalize_responses_tool_calls(merged_tool_calls),
+            output_items=parsed_response.output_items,
+            reasoning_state=parsed_response.reasoning_state,
+            provider_state=parsed_response.provider_state,
             usage=parsed_response.usage,
             vendor_fields=vendor_fields,
             raw=raw_events,
@@ -641,10 +715,12 @@ class OpenAICompletionGateway(ICompletionGateway):
         response_payload = self._normalize_dict(response)
         output_items = self._normalize_list_of_dicts(response_payload.get("output"))
 
-        message_payload, content, structured_content_blocks = self._extract_responses_content(
-            output_items
+        message_payload, content, structured_content_blocks = (
+            self._extract_responses_content(output_items)
         )
-        tool_calls = self._extract_responses_tool_calls(output_items)
+        tool_call_items = self._extract_responses_tool_calls(output_items)
+        tool_calls = self._normalize_responses_tool_calls(tool_call_items)
+        reasoning_items = self._extract_responses_reasoning_items(output_items)
 
         if content is None:
             content = self._extract_responses_output_text(response, response_payload)
@@ -663,12 +739,23 @@ class OpenAICompletionGateway(ICompletionGateway):
         if structured_content_blocks:
             vendor_fields["structured_content_blocks"] = structured_content_blocks
 
+        provider_state = self._responses_provider_state(response_payload)
+        reasoning_state = self._responses_reasoning_state(
+            response_payload=response_payload,
+            output_items=output_items,
+            reasoning_items=reasoning_items,
+            provider_state=provider_state,
+        )
+
         return CompletionResponse(
             content=content,
             model=response_payload.get("model", model),
             stop_reason=self._extract_responses_stop_reason(response_payload),
             message=message_payload,
             tool_calls=tool_calls,
+            output_items=output_items,
+            reasoning_state=reasoning_state,
+            provider_state=provider_state,
             usage=usage,
             vendor_fields=vendor_fields,
             raw=response,
@@ -715,10 +802,15 @@ class OpenAICompletionGateway(ICompletionGateway):
         request: CompletionRequest,
         operation_config: dict[str, Any],
     ) -> str:
-        raw_surface = request.vendor_params.get(
-            self._surface_vendor_param,
-            operation_config.get("surface", self._chat_surface),
-        )
+        explicit_request_surface = self._surface_vendor_param in request.vendor_params
+        raw_surface = request.vendor_params.get(self._surface_vendor_param)
+        if raw_surface is None:
+            if self._request_requires_responses_surface(
+                request
+            ) or self._operation_config_requires_responses_surface(operation_config):
+                raw_surface = self._responses_surface
+            else:
+                raw_surface = operation_config.get("surface", self._chat_surface)
 
         if not isinstance(raw_surface, str):
             raise CompletionGatewayError(
@@ -732,6 +824,12 @@ class OpenAICompletionGateway(ICompletionGateway):
 
         normalized_surface = raw_surface.strip().lower().replace("-", "_")
         if normalized_surface in {self._chat_surface, self._responses_surface}:
+            if (
+                explicit_request_surface
+                and normalized_surface == self._chat_surface
+                and self._request_requires_responses_surface(request)
+            ):
+                self._validate_chat_workflow_request(request)
             return normalized_surface
 
         raise CompletionGatewayError(
@@ -744,26 +842,45 @@ class OpenAICompletionGateway(ICompletionGateway):
         )
 
     @staticmethod
-    def _resolve_temperature(
-        request: CompletionRequest,
-        *,
-        operation_config: dict[str, Any],
-    ) -> float | None:
-        temperature = request.inference.temperature
-        if temperature is None and "temp" in operation_config:
-            temperature = float(operation_config["temp"])
-        return temperature
+    def _request_requires_responses_surface(request: CompletionRequest) -> bool:
+        reasoning = request.reasoning
+        if reasoning is not None and reasoning.is_configured():
+            return True
+        return bool(request.tools or request.tool_results or request.continuation_state)
 
     @staticmethod
-    def _resolve_top_p(
-        request: CompletionRequest,
-        *,
+    def _operation_config_requires_responses_surface(
         operation_config: dict[str, Any],
-    ) -> float | None:
-        top_p = request.inference.top_p
-        if top_p is None and "top_p" in operation_config:
-            top_p = float(operation_config["top_p"])
-        return top_p
+    ) -> bool:
+        reasoning_payload = operation_config.get("reasoning")
+        if not isinstance(reasoning_payload, dict):
+            return False
+        reasoning = CompletionReasoningConfig.from_dict(reasoning_payload)
+        return reasoning.mode != "disabled" and reasoning.is_configured()
+
+    def _validate_chat_workflow_request(self, request: CompletionRequest) -> None:
+        unsupported_features: list[str] = []
+        if request.reasoning is not None and request.reasoning.is_configured():
+            unsupported_features.append("reasoning")
+        if request.tools:
+            unsupported_features.append("tools")
+        if request.tool_results:
+            unsupported_features.append("tool_results")
+        if request.continuation_state is not None:
+            unsupported_features.append("continuation_state")
+        if not unsupported_features:
+            return
+
+        raise CompletionGatewayError(
+            provider=self._provider,
+            operation=request.operation,
+            message=(
+                "OpenAI Chat Completions does not support normalized reasoning "
+                "workflow fields: "
+                f"{', '.join(unsupported_features)}. Use the Responses API."
+            ),
+            timeout_applied=self._timeout_seconds,
+        )
 
     def _resolve_stream(self, request: CompletionRequest) -> bool:
         return self._parse_bool_like(
@@ -844,12 +961,220 @@ class OpenAICompletionGateway(ICompletionGateway):
             )
 
     @classmethod
+    def _resolve_responses_reasoning(
+        cls,
+        *,
+        request: CompletionRequest,
+        operation_config: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        reasoning_config = request.reasoning
+        if reasoning_config is None and isinstance(
+            operation_config.get("reasoning"), dict
+        ):
+            reasoning_config = CompletionReasoningConfig.from_dict(
+                operation_config.get("reasoning")
+            )
+        if reasoning_config is None or not reasoning_config.is_configured():
+            return None
+        if reasoning_config.mode == "disabled":
+            return None
+
+        reasoning: dict[str, Any] = {}
+        if reasoning_config.effort is not None:
+            reasoning["effort"] = reasoning_config.effort
+        return reasoning
+
+    @classmethod
+    def _resolve_responses_include(
+        cls,
+        *,
+        request: CompletionRequest,
+        operation_config: dict[str, Any],
+    ) -> list[str]:
+        include_values: list[str] = []
+        reasoning_config = request.reasoning
+        if reasoning_config is None and isinstance(
+            operation_config.get("reasoning"), dict
+        ):
+            reasoning_config = CompletionReasoningConfig.from_dict(
+                operation_config.get("reasoning")
+            )
+        if reasoning_config is not None and reasoning_config.include_encrypted_state:
+            include_values.append("reasoning.encrypted_content")
+        return include_values
+
+    @staticmethod
+    def _resolve_previous_response_id(request: CompletionRequest) -> str | None:
+        state = request.continuation_state
+        if state is None:
+            return None
+        if state.response_id is not None:
+            return state.response_id
+
+        previous_response_id = state.provider_state.get("previous_response_id")
+        if isinstance(previous_response_id, str) and previous_response_id.strip():
+            return previous_response_id.strip()
+        return None
+
+    @classmethod
+    def _merge_responses_include_values(
+        cls,
+        base_values: Any,
+        extra_values: Any,
+    ) -> list[str]:
+        merged: list[str] = []
+        for value in cls._iter_string_values(base_values):
+            if value not in merged:
+                merged.append(value)
+        for value in cls._iter_string_values(extra_values):
+            if value not in merged:
+                merged.append(value)
+        return merged
+
+    @staticmethod
+    def _iter_string_values(value: Any) -> list[str]:
+        if isinstance(value, str):
+            return [value]
+        if not isinstance(value, list):
+            return []
+        return [item for item in value if isinstance(item, str)]
+
+    @staticmethod
+    def _merge_dict_values(
+        base_value: dict[str, Any],
+        extra_value: Any,
+    ) -> dict[str, Any]:
+        merged = dict(base_value)
+        if isinstance(extra_value, dict):
+            merged.update(extra_value)
+        return merged
+
+    @classmethod
+    def _serialize_responses_tools(
+        cls,
+        tools: list[CompletionTool],
+    ) -> list[dict[str, Any]]:
+        serialized: list[dict[str, Any]] = []
+        for tool in tools:
+            serialized.append(cls._serialize_responses_contract_tool(tool))
+        return serialized
+
+    @classmethod
+    def _serialize_responses_contract_tool(
+        cls,
+        tool: CompletionTool,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "type": tool.kind,
+            "name": tool.name,
+            "parameters": dict(tool.input_schema),
+        }
+        if tool.description is not None:
+            payload["description"] = tool.description
+        if tool.strict is not None:
+            payload["strict"] = tool.strict
+
+        provider_hints = tool.provider_hints.get("openai")
+        if isinstance(provider_hints, dict):
+            payload.update(provider_hints)
+        return payload
+
+    @classmethod
+    def _merge_responses_tools(
+        cls,
+        base_tools: Any,
+        extra_tools: Any,
+    ) -> list[dict[str, Any]]:
+        merged: list[dict[str, Any]] = []
+        seen_names: set[str] = set()
+        for tool in cls._iter_responses_tool_payloads(base_tools):
+            cls._append_responses_tool(merged, seen_names, tool)
+        for tool in cls._iter_responses_tool_payloads(extra_tools):
+            cls._append_responses_tool(merged, seen_names, tool)
+        return merged
+
+    @staticmethod
+    def _append_responses_tool(
+        merged: list[dict[str, Any]],
+        seen_names: set[str],
+        tool: dict[str, Any],
+    ) -> None:
+        name = tool.get("name")
+        if isinstance(name, str) and name in seen_names:
+            return
+        merged.append(tool)
+        if isinstance(name, str):
+            seen_names.add(name)
+
+    @classmethod
+    def _iter_responses_tool_payloads(cls, value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        payloads: list[dict[str, Any]] = []
+        for item in value:
+            payload = cls._serialize_responses_vendor_tool(item)
+            if payload:
+                payloads.append(payload)
+        return payloads
+
+    @classmethod
+    def _serialize_responses_vendor_tool(cls, item: Any) -> dict[str, Any]:
+        payload = cls._normalize_dict(item)
+        if not payload:
+            return {}
+
+        function_payload = cls._normalize_dict(payload.get("function"))
+        if function_payload:
+            flattened: dict[str, Any] = {
+                "type": payload.get("type", "function"),
+            }
+            for key in ("name", "description", "parameters", "strict"):
+                if key in function_payload:
+                    flattened[key] = function_payload[key]
+            for key, value in payload.items():
+                if key != "function" and key not in flattened:
+                    flattened[key] = value
+            return flattened
+
+        return dict(payload)
+
+    @classmethod
+    def _serialize_responses_tool_result(
+        cls,
+        result: CompletionToolResult,
+    ) -> dict[str, Any]:
+        return {
+            "type": "function_call_output",
+            "call_id": result.tool_call_id,
+            "output": cls._serialize_tool_result_output(result),
+        }
+
+    @staticmethod
+    def _serialize_tool_result_output(result: CompletionToolResult) -> str:
+        content = result.content
+        if isinstance(content, str):
+            if result.is_error:
+                return json.dumps(
+                    {"error": content},
+                    ensure_ascii=True,
+                    sort_keys=True,
+                )
+            return content
+        if result.is_error:
+            content = {"error": content}
+        return json.dumps(content, ensure_ascii=True, sort_keys=True)
+
+    @classmethod
     def _serialize_responses_input(
         cls,
         request: CompletionRequest,
     ) -> tuple[str | None, list[dict[str, Any]]]:
         instructions_parts: list[str] = []
         input_items: list[dict[str, Any]] = []
+        state = request.continuation_state
+        if state is not None and cls._resolve_previous_response_id(request) is None:
+            input_items.extend([dict(item) for item in state.reasoning_items])
+            input_items.extend([dict(item) for item in state.output_items])
 
         for message in request.messages:
             if message.role == "system":
@@ -859,6 +1184,11 @@ class OpenAICompletionGateway(ICompletionGateway):
                 continue
 
             input_items.append(serialize_completion_message_dict(message))
+
+        input_items.extend(
+            cls._serialize_responses_tool_result(result)
+            for result in request.tool_results
+        )
 
         instructions = "\n\n".join(instructions_parts) if instructions_parts else None
         return instructions, input_items
@@ -891,9 +1221,8 @@ class OpenAICompletionGateway(ICompletionGateway):
                 content_blocks.extend(normalized_message_content)
 
         for content_block in content_blocks:
-            if (
-                content_block.get("type") == "output_text"
-                and isinstance(content_block.get("text"), str)
+            if content_block.get("type") == "output_text" and isinstance(
+                content_block.get("text"), str
             ):
                 text_parts.append(content_block["text"])
             else:
@@ -944,6 +1273,74 @@ class OpenAICompletionGateway(ICompletionGateway):
         return tool_calls
 
     @classmethod
+    def _normalize_responses_tool_calls(
+        cls,
+        tool_call_items: list[dict[str, Any]],
+    ) -> list[CompletionToolCall]:
+        tool_calls: list[CompletionToolCall] = []
+        for item in tool_call_items:
+            try:
+                tool_calls.append(CompletionToolCall.from_dict(item))
+            except ValueError:
+                continue
+        return tool_calls
+
+    @staticmethod
+    def _extract_responses_reasoning_items(
+        output_items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        return [dict(item) for item in output_items if item.get("type") == "reasoning"]
+
+    @staticmethod
+    def _responses_provider_state(
+        response_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        provider_state: dict[str, Any] = {}
+        for key in (
+            "id",
+            "previous_response_id",
+            "conversation",
+            "status",
+            "service_tier",
+        ):
+            if key in response_payload:
+                provider_state[key] = response_payload[key]
+        return provider_state
+
+    @classmethod
+    def _responses_reasoning_state(
+        cls,
+        *,
+        response_payload: dict[str, Any],
+        output_items: list[dict[str, Any]],
+        reasoning_items: list[dict[str, Any]],
+        provider_state: dict[str, Any],
+    ) -> CompletionContinuationState:
+        response_id = response_payload.get("id")
+        if response_id is not None and not isinstance(response_id, str):
+            response_id = str(response_id)
+
+        conversation = response_payload.get("conversation")
+        conversation_payload = cls._normalize_dict(conversation)
+        conversation_id = conversation_payload.get("id")
+        if conversation_id is None and isinstance(conversation, str):
+            conversation_id = conversation
+        if conversation_id is not None and not isinstance(conversation_id, str):
+            conversation_id = str(conversation_id)
+
+        replay_output_items = [
+            dict(item) for item in output_items if item.get("type") != "reasoning"
+        ]
+        return CompletionContinuationState(
+            provider=cls._provider,
+            response_id=response_id,
+            conversation_id=conversation_id,
+            output_items=replay_output_items,
+            reasoning_items=[dict(item) for item in reasoning_items],
+            provider_state=dict(provider_state),
+        )
+
+    @classmethod
     def _merge_responses_tool_calls(
         cls,
         *,
@@ -951,7 +1348,9 @@ class OpenAICompletionGateway(ICompletionGateway):
         stream_tool_calls: list[dict[str, Any]],
         stream_tool_call_arguments: dict[str, str],
     ) -> list[dict[str, Any]]:
-        merged_tool_calls: list[dict[str, Any]] = [dict(item) for item in parsed_tool_calls]
+        merged_tool_calls: list[dict[str, Any]] = [
+            dict(item) for item in parsed_tool_calls
+        ]
 
         seen_item_ids: set[str] = set()
         for tool_call in merged_tool_calls:
@@ -1025,7 +1424,9 @@ class OpenAICompletionGateway(ICompletionGateway):
         if isinstance(error_message, str) and error_message:
             return error_message
 
-        incomplete_details = cls._normalize_dict(response_payload.get("incomplete_details"))
+        incomplete_details = cls._normalize_dict(
+            response_payload.get("incomplete_details")
+        )
         reason = incomplete_details.get("reason")
         if isinstance(reason, str) and reason:
             return f"{fallback} ({reason})"
@@ -1075,10 +1476,22 @@ class OpenAICompletionGateway(ICompletionGateway):
             if key not in token_keys:
                 usage_vendor_fields[key] = value
 
+        reasoning_tokens = None
+        output_details = cls._normalize_dict(usage_payload.get("output_tokens_details"))
+        if "reasoning_tokens" in output_details:
+            reasoning_tokens = output_details["reasoning_tokens"]
+        if reasoning_tokens is None:
+            completion_details = cls._normalize_dict(
+                usage_payload.get("completion_tokens_details")
+            )
+            if "reasoning_tokens" in completion_details:
+                reasoning_tokens = completion_details["reasoning_tokens"]
+
         return CompletionUsage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
+            reasoning_tokens=reasoning_tokens,
             vendor_fields=usage_vendor_fields,
         )
 

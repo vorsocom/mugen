@@ -20,8 +20,17 @@ from mugen.core.contract.gateway.completion import (
     ICompletionGateway,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.gateway.completion.anthropic_messages import (
+    build_claude_messages_body,
+    operation_config_uses_reasoning,
+    parse_claude_messages_response,
+    request_uses_claude_workflow_fields,
+)
 from mugen.core.gateway.completion.message_serialization import (
     serialize_completion_message_content,
+)
+from mugen.core.gateway.completion.sampling_controls import (
+    resolve_sampling_parameter_kwargs,
 )
 from mugen.core.gateway.completion.timeout_config import (
     require_fields_in_production,
@@ -132,7 +141,9 @@ class BedrockCompletionGateway(ICompletionGateway):
         completion_cfg = self._resolve_operation_config("completion")
         probe_model = completion_cfg.get("model") or classification_cfg.get("model")
         if not isinstance(probe_model, str) or probe_model.strip() == "":
-            raise RuntimeError("Bedrock completion gateway readiness probe model is missing.")
+            raise RuntimeError(
+                "Bedrock completion gateway readiness probe model is missing."
+            )
 
         timeout_seconds = self._read_timeout_seconds
         if timeout_seconds is None:
@@ -151,9 +162,13 @@ class BedrockCompletionGateway(ICompletionGateway):
         except ClientError as exc:
             if self._is_expected_probe_validation_error(exc):
                 return
-            raise RuntimeError("Bedrock completion gateway readiness probe failed.") from exc
+            raise RuntimeError(
+                "Bedrock completion gateway readiness probe failed."
+            ) from exc
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            raise RuntimeError("Bedrock completion gateway readiness probe failed.") from exc
+            raise RuntimeError(
+                "Bedrock completion gateway readiness probe failed."
+            ) from exc
 
     async def aclose(self) -> None:
         close = getattr(self._client, "close", None)
@@ -168,7 +183,9 @@ class BedrockCompletionGateway(ICompletionGateway):
     @staticmethod
     def _is_expected_probe_validation_error(error: ClientError) -> bool:
         error_payload = getattr(error, "response", {}) or {}
-        error_data = error_payload.get("Error", {}) if isinstance(error_payload, dict) else {}
+        error_data = (
+            error_payload.get("Error", {}) if isinstance(error_payload, dict) else {}
+        )
         code = str(error_data.get("Code", "")).strip().lower()
         message = str(error_data.get("Message", "")).strip().lower()
         validation_codes = {"validationexception", "serializationexception"}
@@ -184,6 +201,12 @@ class BedrockCompletionGateway(ICompletionGateway):
         operation_config = self._resolve_operation_config(completion_request.operation)
         model = completion_request.model or operation_config["model"]
         mode = self._resolve_bedrock_mode(completion_request)
+        mode = self._resolve_effective_bedrock_mode(
+            completion_request,
+            model=model,
+            operation_config=operation_config,
+            requested_mode=mode,
+        )
 
         conversation, system_prompts = self._split_messages(completion_request)
         inference_config = self._build_inference_config(
@@ -313,6 +336,31 @@ class BedrockCompletionGateway(ICompletionGateway):
             return lowered
         return "auto"
 
+    def _resolve_effective_bedrock_mode(
+        self,
+        request: CompletionRequest,
+        *,
+        model: str,
+        operation_config: dict[str, Any],
+        requested_mode: str,
+    ) -> str:
+        requires_claude_workflow = request_uses_claude_workflow_fields(
+            request
+        ) or operation_config_uses_reasoning(operation_config)
+        if not requires_claude_workflow or not self._is_anthropic_model_id(model):
+            return requested_mode
+        if requested_mode == "converse":
+            raise CompletionGatewayError(
+                provider=self._provider,
+                operation=request.operation,
+                message=(
+                    "Bedrock Converse Claude reasoning/tool continuation is not "
+                    "implemented. Use bedrock_api='auto' or 'invoke_model'."
+                ),
+                timeout_applied=self._read_timeout_seconds,
+            )
+        return "invoke_model"
+
     def _build_inference_config(
         self,
         request: CompletionRequest,
@@ -326,17 +374,16 @@ class BedrockCompletionGateway(ICompletionGateway):
         if max_tokens is not None:
             inference_config["maxTokens"] = int(max_tokens)
 
-        temperature = request.inference.temperature
-        if temperature is None and "temp" in operation_config:
-            temperature = float(operation_config["temp"])
-        if temperature is not None:
-            inference_config["temperature"] = float(temperature)
-
-        top_p = request.inference.top_p
-        if top_p is None and "top_p" in operation_config:
-            top_p = float(operation_config["top_p"])
-        if top_p is not None:
-            inference_config["topP"] = float(top_p)
+        inference_config.update(
+            resolve_sampling_parameter_kwargs(
+                request=request,
+                operation_config=operation_config,
+                provider=self._provider,
+                provider_label="BedrockCompletionGateway",
+                timeout_applied=self._read_timeout_seconds,
+                top_p_key="topP",
+            )
+        )
 
         if request.inference.stop:
             inference_config["stopSequences"] = request.inference.stop
@@ -464,8 +511,11 @@ class BedrockCompletionGateway(ICompletionGateway):
         chat_messages = self._to_chat_messages(conversation, system_prompts)
 
         if family == "anthropic":
+            operation_config = self._resolve_operation_config(request.operation)
             body = self._serialize_anthropic_invoke(
                 request=request,
+                model=model,
+                operation_config=operation_config,
                 conversation=conversation,
                 system_prompts=system_prompts,
                 inference_config=inference_config,
@@ -579,7 +629,7 @@ class BedrockCompletionGateway(ICompletionGateway):
                 return aliases[normalised]
 
         model_lower = model.lower()
-        if model_lower.startswith("anthropic."):
+        if BedrockCompletionGateway._is_anthropic_model_id(model_lower):
             return "anthropic"
         if model_lower.startswith("meta."):
             return "meta"
@@ -619,6 +669,11 @@ class BedrockCompletionGateway(ICompletionGateway):
         )
 
     @staticmethod
+    def _is_anthropic_model_id(model: str) -> bool:
+        model_lower = model.lower()
+        return model_lower.startswith("anthropic.") or ".anthropic." in model_lower
+
+    @staticmethod
     def _to_chat_messages(
         conversation: list[dict],
         system_prompts: list[dict],
@@ -639,39 +694,58 @@ class BedrockCompletionGateway(ICompletionGateway):
     def _serialize_anthropic_invoke(
         *,
         request: CompletionRequest,
+        model: str | None = None,
+        operation_config: dict[str, Any] | None = None,
         conversation: list[dict],
         system_prompts: list[dict],
         inference_config: dict[str, Any],
     ) -> dict[str, Any]:
-        messages = []
-        for item in conversation:
-            messages.append(
-                {
-                    "role": item["role"],
-                    "content": [
-                        {"type": "text", "text": item["content"][0]["text"]}
-                    ],
-                }
-            )
+        if operation_config is None:
+            messages = []
+            for item in conversation:
+                messages.append(
+                    {
+                        "role": item["role"],
+                        "content": [
+                            {"type": "text", "text": item["content"][0]["text"]}
+                        ],
+                    }
+                )
 
-        body: dict[str, Any] = {
-            "anthropic_version": request.vendor_params.get(
+            body: dict[str, Any] = {
+                "anthropic_version": request.vendor_params.get(
+                    "anthropic_version",
+                    "bedrock-2023-05-31",
+                ),
+                "messages": messages,
+            }
+            if system_prompts:
+                body["system"] = "\n\n".join(
+                    prompt["text"] for prompt in system_prompts
+                )
+            if "maxTokens" in inference_config:
+                body["max_tokens"] = inference_config["maxTokens"]
+            if "temperature" in inference_config:
+                body["temperature"] = inference_config["temperature"]
+            if "topP" in inference_config:
+                body["top_p"] = inference_config["topP"]
+            if "stopSequences" in inference_config:
+                body["stop_sequences"] = inference_config["stopSequences"]
+            return body
+
+        operation_defaults = operation_config if operation_config is not None else {}
+        return build_claude_messages_body(
+            request=request,
+            operation_config=operation_defaults,
+            model=model or request.model or "",
+            provider=BedrockCompletionGateway._provider,
+            provider_label="BedrockCompletionGateway",
+            timeout_applied=None,
+            anthropic_version=request.vendor_params.get(
                 "anthropic_version",
                 "bedrock-2023-05-31",
             ),
-            "messages": messages,
-        }
-        if system_prompts:
-            body["system"] = "\n\n".join(prompt["text"] for prompt in system_prompts)
-        if "maxTokens" in inference_config:
-            body["max_tokens"] = inference_config["maxTokens"]
-        if "temperature" in inference_config:
-            body["temperature"] = inference_config["temperature"]
-        if "topP" in inference_config:
-            body["top_p"] = inference_config["topP"]
-        if "stopSequences" in inference_config:
-            body["stop_sequences"] = inference_config["stopSequences"]
-        return body
+        )
 
     @staticmethod
     def _serialize_meta_invoke(
@@ -1009,6 +1083,14 @@ class BedrockCompletionGateway(ICompletionGateway):
         raw: dict[str, Any],
     ) -> CompletionResponse:
         family = self._resolve_invoke_family(request, model=model)
+        if family == "anthropic":
+            return parse_claude_messages_response(
+                payload=payload,
+                model=model,
+                provider=self._provider,
+                raw={"invoke_model_response": raw, "payload": payload},
+            )
+
         response_paths = request.vendor_params.get("invoke_response_paths")
         if not isinstance(response_paths, list):
             response_paths = self._default_response_paths(family)
@@ -1114,11 +1196,7 @@ class BedrockCompletionGateway(ICompletionGateway):
         ):
             total_tokens = input_tokens + output_tokens
 
-        if (
-            input_tokens is None
-            and output_tokens is None
-            and total_tokens is None
-        ):
+        if input_tokens is None and output_tokens is None and total_tokens is None:
             return None
 
         return CompletionUsage(

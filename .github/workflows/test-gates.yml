@@ -12,6 +12,8 @@ concurrency:
 
 jobs:
   unit-coverage:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -81,6 +83,8 @@ jobs:
             --check
 
   e2e-full:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -139,6 +143,8 @@ jobs:
             --no-ephemeral-db
 
   migration-roundtrip:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -212,6 +218,7 @@ jobs:
 
   test-gates:
     if: ${{ always() }}
+    permissions: {}
     needs:
       - unit-coverage
       - e2e-full

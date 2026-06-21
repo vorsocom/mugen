@@ -51,7 +51,18 @@ from mugen.core.contract.agent import (
     PreparedPlanRun,
 )
 from mugen.core.contract.context import ContextScope
-from mugen.core.contract.gateway.completion import CompletionResponse
+from mugen.core.contract.gateway.completion import (
+    CompletionContinuationState,
+    CompletionResponse,
+)
+from mugen.core.contract.gateway.completion_workflow import (
+    COMPLETION_TOOL_CALL_ID_METADATA_KEY,
+    completion_continuation_state_from_metadata,
+    metadata_with_completion_continuation_state,
+    redact_provider_payload,
+    serialize_completion_metadata_for_log,
+    serialize_completion_response_for_log,
+)
 from mugen.core.contract.gateway.logging import ILoggingGateway
 
 _EMPTY_AGENT_REGISTRY = SimpleNamespace(
@@ -85,38 +96,24 @@ def _normalize_optional_text(value: object) -> str | None:
     return normalized or None
 
 
-def _serialize_completion(completion: CompletionResponse | None) -> dict[str, Any] | None:
-    if completion is None:
-        return None
-    usage = None
-    if completion.usage is not None:
-        usage = {
-            "input_tokens": completion.usage.input_tokens,
-            "output_tokens": completion.usage.output_tokens,
-            "total_tokens": completion.usage.total_tokens,
-            "vendor_fields": dict(completion.usage.vendor_fields),
-        }
-    return {
-        "content": completion.content,
-        "model": completion.model,
-        "stop_reason": completion.stop_reason,
-        "message": dict(completion.message or {}) if completion.message else None,
-        "tool_calls": [dict(item) for item in completion.tool_calls],
-        "usage": usage,
-        "vendor_fields": dict(completion.vendor_fields),
-    }
+def _serialize_completion(
+    completion: CompletionResponse | None,
+) -> dict[str, Any] | None:
+    return serialize_completion_response_for_log(completion)
 
 
-def _serialize_capability_result(result: CapabilityResult | None) -> dict[str, Any] | None:
+def _serialize_capability_result(
+    result: CapabilityResult | None,
+) -> dict[str, Any] | None:
     if result is None:
         return None
     return {
         "capability_key": result.capability_key,
         "ok": result.ok,
-        "result": result.result,
+        "result": redact_provider_payload(result.result),
         "status_code": result.status_code,
         "error_message": result.error_message,
-        "metadata": dict(result.metadata),
+        "metadata": serialize_completion_metadata_for_log(result.metadata),
     }
 
 
@@ -148,8 +145,8 @@ def _serialize_artifact_ref(artifact: DelegationArtifactRef) -> dict[str, Any]:
         "source_run_id": artifact.source_run_id,
         "source_step_sequence_no": artifact.source_step_sequence_no,
         "summary": artifact.summary,
-        "payload": dict(artifact.payload),
-        "metadata": dict(artifact.metadata),
+        "payload": redact_provider_payload(dict(artifact.payload)),
+        "metadata": serialize_completion_metadata_for_log(artifact.metadata),
     }
 
 
@@ -164,14 +161,16 @@ def _deserialize_artifact_ref(payload: dict[str, Any]) -> DelegationArtifactRef:
     )
 
 
-def _serialize_delegation_instruction(delegation: DelegationInstruction) -> dict[str, Any]:
+def _serialize_delegation_instruction(
+    delegation: DelegationInstruction,
+) -> dict[str, Any]:
     return {
         "agent_key": delegation.agent_key,
         "task_brief": delegation.task_brief,
         "service_route_key": delegation.service_route_key,
         "artifacts": [_serialize_artifact_ref(item) for item in delegation.artifacts],
         "required": delegation.required,
-        "metadata": dict(delegation.metadata),
+        "metadata": serialize_completion_metadata_for_log(delegation.metadata),
     }
 
 
@@ -183,7 +182,7 @@ def _serialize_join_policy(policy: JoinPolicy | None) -> dict[str, Any] | None:
         "on_required_child_failed": policy.on_required_child_failed.value,
         "on_required_child_handoff": policy.on_required_child_handoff.value,
         "on_required_child_stopped": policy.on_required_child_stopped.value,
-        "metadata": dict(policy.metadata),
+        "metadata": serialize_completion_metadata_for_log(policy.metadata),
     }
 
 
@@ -213,9 +212,11 @@ def _serialize_join_state(join_state: JoinState | None) -> dict[str, Any] | None
         "required_child_run_ids": list(join_state.required_child_run_ids),
         "completed_child_run_ids": list(join_state.completed_child_run_ids),
         "last_joined_sequence_no": join_state.last_joined_sequence_no,
-        "timeout_at": None if join_state.timeout_at is None else join_state.timeout_at.isoformat(),
+        "timeout_at": (
+            None if join_state.timeout_at is None else join_state.timeout_at.isoformat()
+        ),
         "policy": _serialize_join_policy(join_state.policy),
-        "metadata": dict(join_state.metadata),
+        "metadata": serialize_completion_metadata_for_log(join_state.metadata),
     }
 
 
@@ -260,11 +261,13 @@ def _serialize_observation(observation: PlanObservation) -> dict[str, Any]:
     return {
         "kind": observation.kind,
         "summary": observation.summary,
-        "payload": dict(observation.payload),
+        "payload": redact_provider_payload(dict(observation.payload)),
         "success": observation.success,
-        "capability_result": _serialize_capability_result(observation.capability_result),
+        "capability_result": _serialize_capability_result(
+            observation.capability_result
+        ),
         "completion": _serialize_completion(observation.completion),
-        "metadata": dict(observation.metadata),
+        "metadata": serialize_completion_metadata_for_log(observation.metadata),
     }
 
 
@@ -276,9 +279,9 @@ def _serialize_decision(decision: PlanDecision) -> dict[str, Any]:
         "capability_invocations": [
             {
                 "capability_key": item.capability_key,
-                "arguments": dict(item.arguments),
+                "arguments": redact_provider_payload(dict(item.arguments)),
                 "idempotency_key": item.idempotency_key,
-                "metadata": dict(item.metadata),
+                "metadata": serialize_completion_metadata_for_log(item.metadata),
             }
             for item in decision.capability_invocations
         ],
@@ -286,16 +289,18 @@ def _serialize_decision(decision: PlanDecision) -> dict[str, Any]:
             _serialize_delegation_instruction(item) for item in decision.delegations
         ],
         "join_policy": _serialize_join_policy(decision.join_policy),
-        "wait_until": None
-        if decision.wait_until is None
-        else decision.wait_until.isoformat(),
+        "wait_until": (
+            None if decision.wait_until is None else decision.wait_until.isoformat()
+        ),
         "handoff_reason": decision.handoff_reason,
         "background_payload": (
-            None if decision.background_payload is None else dict(decision.background_payload)
+            None
+            if decision.background_payload is None
+            else redact_provider_payload(dict(decision.background_payload))
         ),
         "completion": _serialize_completion(decision.completion),
         "rationale_summary": decision.rationale_summary,
-        "metadata": dict(decision.metadata),
+        "metadata": serialize_completion_metadata_for_log(decision.metadata),
     }
 
 
@@ -309,7 +314,7 @@ def _serialize_evaluation(result: EvaluationResult) -> dict[str, Any]:
             if result.recommended_decision is None
             else result.recommended_decision.value
         ),
-        "metadata": dict(result.metadata),
+        "metadata": serialize_completion_metadata_for_log(result.metadata),
     }
 
 
@@ -321,11 +326,37 @@ def _serialize_outcome(outcome: PlanOutcome) -> dict[str, Any]:
         "completion": _serialize_completion(outcome.completion),
         "background_run_id": outcome.background_run_id,
         "error_message": outcome.error_message,
-        "metadata": dict(outcome.metadata),
+        "metadata": serialize_completion_metadata_for_log(outcome.metadata),
     }
 
 
-def _first_text_response(responses: tuple[dict[str, Any], ...] | list[dict[str, Any]]) -> str:
+def _completion_continuation_state_from_completion(
+    completion: CompletionResponse | None,
+) -> CompletionContinuationState | None:
+    if completion is None:
+        return None
+    return completion.reasoning_state
+
+
+def _latest_completion_continuation_state(
+    run: PreparedPlanRun,
+    *,
+    completion: CompletionResponse | None = None,
+) -> CompletionContinuationState | None:
+    return (
+        _completion_continuation_state_from_completion(completion)
+        or completion_continuation_state_from_metadata(run.state.metadata)
+    )
+
+
+def _tool_call_id_for_invocation(invocation: CapabilityInvocation) -> str | None:
+    metadata_value = invocation.metadata.get(COMPLETION_TOOL_CALL_ID_METADATA_KEY)
+    return _normalize_optional_text(metadata_value) or invocation.idempotency_key
+
+
+def _first_text_response(
+    responses: tuple[dict[str, Any], ...] | list[dict[str, Any]],
+) -> str:
     for response in responses:
         if response.get("type") != "text":
             continue
@@ -378,7 +409,9 @@ def _request_from_snapshot(snapshot: dict[str, Any], *, run_id: str) -> PlanRunR
 
 
 class _AgentServiceBase:
-    def __init__(self, config: SimpleNamespace, logging_gateway: ILoggingGateway) -> None:
+    def __init__(
+        self, config: SimpleNamespace, logging_gateway: ILoggingGateway
+    ) -> None:
         self._config = config
         self._logging_gateway = logging_gateway
 
@@ -410,12 +443,16 @@ class DefaultPlanningEngine(_AgentServiceBase, IPlanningEngine):
             raise TypeError("DefaultPlanningEngine requires PlanRunRequest.")
 
         policy = await self._resolve_policy(request)
-        resolved_route_key = _normalize_optional_text(policy.metadata.get("service_route_key"))
+        resolved_route_key = _normalize_optional_text(
+            policy.metadata.get("service_route_key")
+        )
         if request.service_route_key is None and resolved_route_key is not None:
             request.service_route_key = resolved_route_key
         if request.agent_key is None and policy.agent_key is not None:
             request.agent_key = policy.agent_key
-        missing_agent_key = _normalize_optional_text(policy.metadata.get("agent_definition_missing"))
+        missing_agent_key = _normalize_optional_text(
+            policy.metadata.get("agent_definition_missing")
+        )
         if missing_agent_key is not None:
             raise RuntimeError(f"Unknown agent definition: {missing_agent_key}.")
         run_store = self._require_run_store()
@@ -494,7 +531,10 @@ class DefaultPlanningEngine(_AgentServiceBase, IPlanningEngine):
         preferred = _normalize_optional_text(policy.planner_key)
         if preferred is not None:
             for planner in planners:
-                if _normalize_optional_text(getattr(planner, "name", None)) == preferred:
+                if (
+                    _normalize_optional_text(getattr(planner, "name", None))
+                    == preferred
+                ):
                     return planner
         return planners[0]
 
@@ -548,7 +588,10 @@ class DefaultEvaluationEngine(_AgentServiceBase, IEvaluationEngine):
         preferred = _normalize_optional_text(policy.evaluator_key)
         if preferred is not None:
             for evaluator in evaluators:
-                if _normalize_optional_text(getattr(evaluator, "name", None)) == preferred:
+                if (
+                    _normalize_optional_text(getattr(evaluator, "name", None))
+                    == preferred
+                ):
                     return evaluator
         return evaluators[0]
 
@@ -563,7 +606,9 @@ class DefaultAgentExecutor(_AgentServiceBase, IAgentExecutor):
     ) -> list[CapabilityDescriptor]:
         seen: dict[str, CapabilityDescriptor] = {}
         allowed = set(run.policy.capability_allow)
-        for provider in list(getattr(self._registry(), "capability_providers", []) or []):
+        for provider in list(
+            getattr(self._registry(), "capability_providers", []) or []
+        ):
             descriptors = await provider.list_capabilities(
                 request,
                 run,
@@ -601,7 +646,9 @@ class DefaultAgentExecutor(_AgentServiceBase, IAgentExecutor):
                 policy=run.policy,
             )
 
-        for provider in list(getattr(self._registry(), "capability_providers", []) or []):
+        for provider in list(
+            getattr(self._registry(), "capability_providers", []) or []
+        ):
             if provider.supports(invocation.capability_key):
                 try:
                     return await provider.execute(
@@ -694,9 +741,13 @@ class DefaultPlanRunStore(_AgentServiceBase, IPlanRunStore):
         run_id: str,
         outcome: PlanOutcome,
     ) -> PlanOutcome:
-        return await self._require_run_store().finalize_run(run_id=run_id, outcome=outcome)
+        return await self._require_run_store().finalize_run(
+            run_id=run_id, outcome=outcome
+        )
 
-    async def list_steps(self, *, run_id: str, limit: int | None = None) -> list[PlanRunStep]:
+    async def list_steps(
+        self, *, run_id: str, limit: int | None = None
+    ) -> list[PlanRunStep]:
         return await self._require_run_store().list_steps(run_id=run_id, limit=limit)
 
     async def list_child_runs(
@@ -807,7 +858,9 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                     owner=normalized_owner,
                 )
                 raise
-            request = _request_from_snapshot(due_run.request_snapshot, run_id=due_run.run_id)
+            request = _request_from_snapshot(
+                due_run.request_snapshot, run_id=due_run.run_id
+            )
             request.mode = PlanRunMode.BACKGROUND
             request.available_capabilities = tuple(
                 await self._agent_executor_service.list_capabilities(request, due_run)
@@ -816,7 +869,9 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                 outcome = await self._run_loop(
                     request=request,
                     run=due_run,
-                    max_iterations=max(1, int(due_run.policy.max_background_iterations)),
+                    max_iterations=max(
+                        1, int(due_run.policy.max_background_iterations)
+                    ),
                     allow_wait=True,
                 )
             finally:
@@ -835,9 +890,11 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
         max_iterations: int,
         allow_wait: bool,
     ) -> PlanOutcome:
-        observations, pending_outcome, finalize_pending = await self._bootstrap_observations(
-            request=request,
-            run=run,
+        observations, pending_outcome, finalize_pending = (
+            await self._bootstrap_observations(
+                request=request,
+                run=run,
+            )
         )
         if pending_outcome is not None and finalize_pending is False:
             return pending_outcome
@@ -867,6 +924,10 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                 request,
                 run,
                 observations,
+            )
+            run = await self._persist_completion_continuation_state(
+                run=run,
+                completion=decision.completion,
             )
             run = await self._append_step(
                 request=request,
@@ -914,9 +975,11 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                     request=request,
                     run=run,
                     outcome=PlanOutcome(
-                        status=PlanOutcomeStatus.HANDOFF
-                        if evaluation.status == EvaluationStatus.ESCALATE
-                        else PlanOutcomeStatus.FAILED,
+                        status=(
+                            PlanOutcomeStatus.HANDOFF
+                            if evaluation.status == EvaluationStatus.ESCALATE
+                            else PlanOutcomeStatus.FAILED
+                        ),
                         error_message="step_evaluation_blocked",
                         metadata={"evaluation": _serialize_evaluation(evaluation)},
                     ),
@@ -978,9 +1041,11 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                     request=request,
                     run=run,
                     outcome=PlanOutcome(
-                        status=PlanOutcomeStatus.HANDOFF
-                        if evaluation.status == EvaluationStatus.ESCALATE
-                        else PlanOutcomeStatus.FAILED,
+                        status=(
+                            PlanOutcomeStatus.HANDOFF
+                            if evaluation.status == EvaluationStatus.ESCALATE
+                            else PlanOutcomeStatus.FAILED
+                        ),
                         assistant_response=assistant_response,
                         completion=decision.completion,
                         error_message="response_evaluation_blocked",
@@ -1101,13 +1166,17 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
         request: PlanRunRequest,
         run: PreparedPlanRun,
     ) -> tuple[tuple[PlanObservation, ...], PlanOutcome | None, bool]:
-        observations = tuple(await self._initial_request_observations(request=request, run=run))
+        observations = tuple(
+            await self._initial_request_observations(request=request, run=run)
+        )
         if request.mode != PlanRunMode.BACKGROUND or run.join_state is None:
             return observations, None, False
 
-        join_observations, join_outcome, finalize_pending = await self._resume_join_state(
-            request=request,
-            run=run,
+        join_observations, join_outcome, finalize_pending = (
+            await self._resume_join_state(
+                request=request,
+                run=run,
+            )
         )
         return observations + join_observations, join_outcome, finalize_pending
 
@@ -1224,19 +1293,29 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
         outcome = child_run.final_outcome
         return PlanObservation(
             kind="child_run_result",
-            summary=outcome.assistant_response if outcome is not None else child_run.status.value,
+            summary=(
+                outcome.assistant_response
+                if outcome is not None
+                else child_run.status.value
+            ),
             payload={
                 "child_run_id": child_run.run_id,
-                "agent_key": None if child_run.lineage is None else child_run.lineage.agent_key,
+                "agent_key": (
+                    None if child_run.lineage is None else child_run.lineage.agent_key
+                ),
                 "status": child_run.status.value,
-                "assistant_response": None if outcome is None else outcome.assistant_response,
+                "assistant_response": (
+                    None if outcome is None else outcome.assistant_response
+                ),
                 "error_message": None if outcome is None else outcome.error_message,
                 "metadata": {} if outcome is None else dict(outcome.metadata),
             },
             success=child_run.status == PlanRunStatus.COMPLETED,
             metadata={
                 "lineage": _serialize_lineage(child_run.lineage),
-                "final_outcome": None if outcome is None else _serialize_outcome(outcome),
+                "final_outcome": (
+                    None if outcome is None else _serialize_outcome(outcome)
+                ),
             },
         )
 
@@ -1332,7 +1411,8 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
             policy=decision.join_policy or JoinPolicy(),
             metadata={
                 "delegations": [
-                    _serialize_delegation_instruction(item) for item in decision.delegations
+                    _serialize_delegation_instruction(item)
+                    for item in decision.delegations
                 ],
             },
         )
@@ -1414,7 +1494,9 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
             "spawned_from_run_id",
         }
         base_metadata = {
-            key: value for key, value in dict(request.metadata).items() if key not in reserved_keys
+            key: value
+            for key, value in dict(request.metadata).items()
+            if key not in reserved_keys
         }
         lineage = PlanRunLineage(
             parent_run_id=run.run_id,
@@ -1450,6 +1532,18 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                 run,
                 invocation,
             )
+            tool_call_id = _tool_call_id_for_invocation(invocation)
+            result_metadata = dict(result.metadata)
+            observation_metadata: dict[str, Any] = {}
+            if tool_call_id is not None:
+                result_metadata.setdefault(
+                    COMPLETION_TOOL_CALL_ID_METADATA_KEY,
+                    tool_call_id,
+                )
+                result.metadata = result_metadata
+                observation_metadata[COMPLETION_TOOL_CALL_ID_METADATA_KEY] = (
+                    tool_call_id
+                )
             observation = PlanObservation(
                 kind="capability_result",
                 summary=result.error_message or invocation.capability_key,
@@ -1460,6 +1554,7 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                 },
                 success=result.ok,
                 capability_result=result,
+                metadata=observation_metadata,
             )
             observations.append(observation)
             run = await self._append_step(
@@ -1502,13 +1597,18 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
         )
 
     def _select_response_synthesizer(self, policy: AgentRuntimePolicy):
-        synthesizers = list(getattr(self._registry(), "response_synthesizers", []) or [])
+        synthesizers = list(
+            getattr(self._registry(), "response_synthesizers", []) or []
+        )
         if not synthesizers:
             return None
         preferred = _normalize_optional_text(policy.response_synthesizer_key)
         if preferred is not None:
             for synthesizer in synthesizers:
-                if _normalize_optional_text(getattr(synthesizer, "name", None)) == preferred:
+                if (
+                    _normalize_optional_text(getattr(synthesizer, "name", None))
+                    == preferred
+                ):
                     return synthesizer
         return synthesizers[0]
 
@@ -1527,7 +1627,9 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
         background_request = PlanRunRequest(
             mode=PlanRunMode.BACKGROUND,
             scope=request.scope,
-            user_message=str(background_payload.get("user_message") or request.user_message),
+            user_message=str(
+                background_payload.get("user_message") or request.user_message
+            ),
             message_id=request.message_id,
             trace_id=request.trace_id,
             service_route_key=request.service_route_key,
@@ -1539,7 +1641,9 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
                 "background_payload": background_payload,
             },
         )
-        background_run = await self._planning_engine_service.prepare_run(background_request)
+        background_run = await self._planning_engine_service.prepare_run(
+            background_request
+        )
         return background_run.run_id
 
     async def _mark_waiting(
@@ -1552,7 +1656,9 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
         scheduler = getattr(self._registry(), "scheduler", None)
         wake_at = decision.wait_until
         if wake_at is None:
-            wake_at = _utc_now() + timedelta(seconds=max(1, int(run.policy.wait_seconds_default)))
+            wake_at = _utc_now() + timedelta(
+                seconds=max(1, int(run.policy.wait_seconds_default))
+            )
         if scheduler is not None:
             wake_at = await scheduler.schedule_wait(run=run, wake_at=wake_at)
         run.status = PlanRunStatus.WAITING
@@ -1576,6 +1682,10 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
         run: PreparedPlanRun,
         outcome: PlanOutcome,
     ) -> PlanOutcome:
+        outcome = self._outcome_with_completion_continuation_state(
+            run=run,
+            outcome=outcome,
+        )
         finalized_outcome = await self._plan_run_store_service.finalize_run(
             run_id=run.run_id,
             outcome=outcome,
@@ -1598,6 +1708,42 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
         )
         return finalized_outcome
 
+    async def _persist_completion_continuation_state(
+        self,
+        *,
+        run: PreparedPlanRun,
+        completion: CompletionResponse | None,
+    ) -> PreparedPlanRun:
+        state = _completion_continuation_state_from_completion(completion)
+        if state is None:
+            return run
+        metadata = metadata_with_completion_continuation_state(
+            run.state.metadata,
+            state,
+        )
+        if metadata == run.state.metadata:
+            return run
+        run.state.metadata = metadata
+        return await self._plan_run_store_service.save_run(run)
+
+    @staticmethod
+    def _outcome_with_completion_continuation_state(
+        *,
+        run: PreparedPlanRun,
+        outcome: PlanOutcome,
+    ) -> PlanOutcome:
+        state = _latest_completion_continuation_state(
+            run,
+            completion=outcome.completion,
+        )
+        if state is None:
+            return outcome
+        outcome.metadata = metadata_with_completion_continuation_state(
+            outcome.metadata,
+            state,
+        )
+        return outcome
+
     async def _append_step(
         self,
         *,
@@ -1613,9 +1759,13 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
             payload=payload,
             occurred_at=_utc_now(),
         )
-        cursor = await self._plan_run_store_service.append_step(run_id=run.run_id, step=step)
+        cursor = await self._plan_run_store_service.append_step(
+            run_id=run.run_id, step=step
+        )
         run.cursor = cursor
-        run = await self._reload_run_handle(run, operation=f"{step_kind.value} step append")
+        run = await self._reload_run_handle(
+            run, operation=f"{step_kind.value} step append"
+        )
         for trace_sink in list(getattr(self._registry(), "trace_sinks", []) or []):
             try:
                 await trace_sink.record_step(request=request, run=run, step=step)
@@ -1664,7 +1814,9 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
     ) -> None:
         for trace_sink in list(getattr(self._registry(), "trace_sinks", []) or []):
             try:
-                await trace_sink.record_outcome(request=request, run=run, outcome=outcome)
+                await trace_sink.record_outcome(
+                    request=request, run=run, outcome=outcome
+                )
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 self._logging_gateway.warning(
                     "Agent trace sink failed during outcome recording "
@@ -1679,7 +1831,9 @@ class DefaultAgentRuntime(_AgentServiceBase, IAgentRuntime):
     ) -> list[PreparedPlanRun]:
         scheduler = getattr(self._registry(), "scheduler", None)
         if scheduler is None:
-            return await self._plan_run_store_service.list_runnable_runs(limit=limit, now=now)
+            return await self._plan_run_store_service.list_runnable_runs(
+                limit=limit, now=now
+            )
 
         run_ids = await scheduler.due_run_ids(limit=limit, now=now)
         runs: list[PreparedPlanRun] = []
