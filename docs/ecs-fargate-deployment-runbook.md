@@ -14,6 +14,12 @@ Do not copy, mount, upload, or bake local `mugen.toml` into the image or ECS
 task. Production runtime values must come from ECS environment variables and AWS
 Secrets Manager.
 
+If a downstream deployment pipeline requires the ECS service and load-balancer
+routing to exist before its first application revision, use the
+[temporary ECS Fargate placeholder service runbook](ecs-fargate-placeholder-service-runbook.md)
+first. It creates the permanent service around a temporary `nginx:latest` task
+that listens on the standard muGen API port `8000`.
+
 ## Architecture
 
 ```text
