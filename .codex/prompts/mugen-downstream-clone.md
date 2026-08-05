@@ -139,6 +139,11 @@ Downstream deployment fork policy:
 - When upstream changes deployment behavior on `upstream/main`, review those
   changes and port relevant behavior into downstream workflow, templates, and
   docs.
+- Keep downstream ECS workflow/template pairs synchronized for the separate
+  `MUGEN_CONFIG_OVERLAY_JSON`, `MUGEN_EXTENSIONS_JSON`, and
+  `MUGEN_MIGRATION_TRACKS_JSON` secret ARN channels. Omit hardcoded platform
+  variables when the generic overlay owns platform selection; retain them only
+  as intentional higher-precedence overrides.
 
 Downstream release workflow:
 1. Downstream app versions are independent from upstream muGen versions.

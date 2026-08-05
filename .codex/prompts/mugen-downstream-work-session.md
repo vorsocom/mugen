@@ -188,6 +188,13 @@ Downstream deployment sync:
   changes generic deployment behavior.
 - When syncing from `upstream/main`, review workflow, action input, task
   template, migration/reseed, smoke-test, and env/secret contract changes.
+- Keep the workflow and task template aligned for the three generic JSON
+  channels: `MUGEN_CONFIG_OVERLAY_JSON`, `MUGEN_EXTENSIONS_JSON`, and
+  `MUGEN_MIGRATION_TRACKS_JSON` should each use a separate Secrets Manager ARN.
+- Remove empty extension/migration environment entries and hardcoded platform
+  variables when the generic overlay should be authoritative. Preserve direct
+  platform variables only as intentional higher-precedence overrides; the base
+  sample config retains the web-only default when neither source sets them.
 - Port relevant changes into downstream-specific deployment files and docs.
 - Do not assume upstream generic deployment files are the downstream production
   source of truth.
