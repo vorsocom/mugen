@@ -210,7 +210,6 @@ production`, so environment variables are the intended source.
 | `ECS_ASSIGN_PUBLIC_IP` | `DISABLED` |
 | `ECS_LOG_GROUP` | `/ecs/mugen-api` |
 | `ECS_HEALTHCHECK_URL` | `https://api.example.com/health` |
-| `CORS_ALLOWED_ORIGINS` | `https://app.example.com` |
 | `DATABASE_URL_SECRET_ARN` | Secrets Manager ARN for `DATABASE_URL` |
 | `SECRET_KEY_SECRET_ARN` | Secrets Manager ARN for `SECRET_KEY` |
 | `ACP_ADMIN_USERNAME_SECRET_ARN` | Secrets Manager ARN for `ACP_ADMIN_USERNAME` |
@@ -414,12 +413,14 @@ example, `TASKDEF_DATABASE_URL_SECRET_ARN` fills
 
 The generic template sources `MUGEN_CONFIG_OVERLAY_JSON`,
 `MUGEN_EXTENSIONS_JSON`, and `MUGEN_MIGRATION_TRACKS_JSON` from three separate
-Secrets Manager ARNs. It intentionally omits `MUGEN_PLATFORMS` and
-`MUGEN_PHASE_B_CRITICAL_PLATFORMS`, allowing the generic config overlay to set
-both lists. With no platform values in the overlay, `conf/mugen.toml.sample`
-preserves the backward-compatible `web` and critical-`web` defaults. A
-downstream task may intentionally add either direct environment variable; direct
-platform variables are applied after the generic overlay and therefore win.
+Secrets Manager ARNs. Its direct environment entries are limited to
+`MUGEN_CONFIG_FILE`, the production `ENVIRONMENT` invariant, and the container
+`PORT`. Configure the logger name and level, CORS origins, ACP seed policy,
+platforms, extensions, and migration tracks through their overlay channels.
+With no platform values in the overlay, `conf/mugen.toml.sample` preserves the
+backward-compatible `web` and critical-`web` defaults. A downstream task may
+intentionally add a direct convenience variable; direct variables are applied
+after the generic overlay and therefore win.
 
 The full runtime precedence, from lowest to highest, is the base config,
 overlay file, generic JSON overlay, dedicated platform/extension/migration
@@ -505,9 +506,10 @@ muGen only validates the generic extension and migration overlay contracts.
 Downstream workflows and templates copied before this contract was introduced
 must be synchronized together: wire all three `TASKDEF_*_SECRET_ARN` variables,
 move extension and migration JSON from empty `environment` entries into
-`secrets`, and remove hardcoded platform variables when the generic overlay
-should be authoritative. Keep direct platform variables only when the
-deployment intentionally needs a higher-precedence override.
+`secrets`, and remove hardcoded application name, log level, CORS, ACP seed, and
+platform variables when the generic overlay should be authoritative. Keep a
+direct convenience variable only when the deployment intentionally needs a
+higher-precedence override.
 
 ## 1. Create Networking
 
@@ -707,13 +709,16 @@ Required non-secret task environment values include:
 
 ```text
 ENVIRONMENT=production
-APP_NAME=mugen-api
 PORT=8000
-LOG_LEVEL=INFO
-CORS_ALLOWED_ORIGINS=https://app.example.com
 MUGEN_CONFIG_FILE=conf/mugen.toml.sample
-ACP_SEED_ACP=true
 ```
+
+Before adopting the generic template, add `mugen.logger.name`,
+`mugen.logger.level`, `acp.cors_origins`, and `acp.seed_acp` to the
+`MUGEN_CONFIG_OVERLAY_JSON` secret. This prevents copied downstream templates
+from retaining higher-precedence task defaults. Production validation rejects
+the sample wildcard CORS value, so every production overlay must declare its
+allowed origins.
 
 `conf/mugen.toml.sample` already enables the upstream web/admin baseline:
 ACP, Web, Context Engine, Audit, Channel Orchestration, and Knowledge Pack. Set
@@ -795,6 +800,10 @@ Initial `MUGEN_CONFIG_OVERLAY_JSON` for a deterministic demo:
 ```json
 {
   "mugen": {
+    "logger": {
+      "name": "mugen-api",
+      "level": "INFO"
+    },
     "modules": {
       "core": {
         "gateway": {
@@ -803,6 +812,10 @@ Initial `MUGEN_CONFIG_OVERLAY_JSON` for a deterministic demo:
         }
       }
     }
+  },
+  "acp": {
+    "cors_origins": ["https://app.example.com"],
+    "seed_acp": true
   }
 }
 ```
@@ -923,11 +936,7 @@ Use a tagged image, not an untagged repository name.
       "environment": [
         { "name": "MUGEN_CONFIG_FILE", "value": "conf/mugen.toml.sample" },
         { "name": "ENVIRONMENT", "value": "production" },
-        { "name": "APP_NAME", "value": "mugen-api" },
-        { "name": "PORT", "value": "8000" },
-        { "name": "LOG_LEVEL", "value": "INFO" },
-        { "name": "CORS_ALLOWED_ORIGINS", "value": "https://app.example.com" },
-        { "name": "ACP_SEED_ACP", "value": "true" }
+        { "name": "PORT", "value": "8000" }
       ],
       "secrets": [
         { "name": "DATABASE_URL", "valueFrom": "<secret-arn-for-DATABASE_URL>" },
@@ -1132,10 +1141,15 @@ Configure the UI to call:
 https://api.example.com/api
 ```
 
-`CORS_ALLOWED_ORIGINS` must include the UI origin, for example:
+`MUGEN_CONFIG_OVERLAY_JSON` must set `acp.cors_origins` to include the UI
+origin, for example:
 
-```text
-https://app.example.com
+```json
+{
+  "acp": {
+    "cors_origins": ["https://app.example.com"]
+  }
+}
 ```
 
 ## 15. Debugging
