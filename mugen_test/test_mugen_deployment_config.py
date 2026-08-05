@@ -500,9 +500,15 @@ class TestMugenDeploymentConfig(unittest.TestCase):
                 "MUGEN_CONFIG_OVERLAY_JSON": json.dumps(
                     {
                         "mugen": {
+                            "platforms": ["web", "whatsapp"],
                             "logger": {
                                 "level": 10,
-                            }
+                            },
+                            "runtime": {
+                                "phase_b": {
+                                    "critical_platforms": ["web", "whatsapp"],
+                                }
+                            },
                         },
                         "quart": {
                             "secret_key": "overlay-secret-key-0123456789abcdef",
@@ -524,6 +530,8 @@ class TestMugenDeploymentConfig(unittest.TestCase):
                 "SECRET_KEY": "direct-secret-key-0123456789abcdef",
                 "LOG_LEVEL": "WARNING",
                 "CORS_ALLOWED_ORIGINS": "https://direct.example.com",
+                "MUGEN_PLATFORMS": "web",
+                "MUGEN_PHASE_B_CRITICAL_PLATFORMS": "web",
             },
         )
 
@@ -540,6 +548,11 @@ class TestMugenDeploymentConfig(unittest.TestCase):
         )
         self.assertEqual(config["mugen"]["logger"]["level"], 30)
         self.assertEqual(config["acp"]["cors_origins"], ["https://direct.example.com"])
+        self.assertEqual(config["mugen"]["platforms"], ["web"])
+        self.assertEqual(
+            config["mugen"]["runtime"]["phase_b"]["critical_platforms"],
+            ["web"],
+        )
 
     def test_environment_overlay_rejects_invalid_generic_overlay_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -860,6 +873,76 @@ class TestMugenDeploymentConfig(unittest.TestCase):
             "vendor.billing.model",
         )
         self.assertIs(by_token["vendor.fw.audit"]["enabled"], False)
+
+    def test_dedicated_json_overlays_merge_after_generic_overlay(self) -> None:
+        config = _base_config()
+
+        apply_environment_overrides(
+            config,
+            environ={
+                "MUGEN_CONFIG_OVERLAY_JSON": json.dumps(
+                    {
+                        "mugen": {
+                            "platforms": ["web", "whatsapp"],
+                            "runtime": {
+                                "phase_b": {
+                                    "critical_platforms": ["web", "whatsapp"],
+                                }
+                            },
+                            "modules": {
+                                "extensions": [
+                                    {
+                                        "type": "fw",
+                                        "token": "vendor.fw.whatsapp",
+                                        "enabled": False,
+                                    }
+                                ]
+                            },
+                        },
+                        "rdbms": {
+                            "migration_tracks": {
+                                "plugins": [
+                                    {
+                                        "name": "vendor",
+                                        "enabled": False,
+                                    }
+                                ]
+                            }
+                        },
+                    }
+                ),
+                "MUGEN_EXTENSIONS_JSON": json.dumps(
+                    [
+                        {
+                            "token": "vendor.fw.whatsapp",
+                            "enabled": True,
+                        }
+                    ]
+                ),
+                "MUGEN_MIGRATION_TRACKS_JSON": json.dumps(
+                    [
+                        {
+                            "name": "vendor",
+                            "enabled": True,
+                        }
+                    ]
+                ),
+            },
+        )
+
+        self.assertEqual(config["mugen"]["platforms"], ["web", "whatsapp"])
+        self.assertEqual(
+            config["mugen"]["runtime"]["phase_b"]["critical_platforms"],
+            ["web", "whatsapp"],
+        )
+        self.assertIs(
+            config["mugen"]["modules"]["extensions"][0]["enabled"],
+            True,
+        )
+        self.assertIs(
+            config["rdbms"]["migration_tracks"]["plugins"][0]["enabled"],
+            True,
+        )
 
     def test_environment_overlay_enables_json_declared_extensions(self) -> None:
         config = _base_config()

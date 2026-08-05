@@ -39,7 +39,7 @@ The app and migration runner apply the same resolved config flow:
 1. Load base config from `MUGEN_CONFIG_FILE`.
 2. Apply `MUGEN_CONFIG_OVERLAY_FILE` when set.
 3. Apply `MUGEN_CONFIG_OVERLAY_JSON` when set.
-4. Apply structural overlays for platforms, extensions, and migration tracks.
+4. Apply dedicated platform, extension, and migration-track variables.
 5. Apply direct convenience env vars last.
 6. In production, validate the resolved config.
 
@@ -57,6 +57,9 @@ migration overlays keep their merge behavior:
 Direct env vars intentionally win over generic overlays. For example, if
 `MUGEN_CONFIG_OVERLAY_JSON` sets `rdbms.sqlalchemy.url` but `DATABASE_URL` is
 also set, `DATABASE_URL` wins for both Alembic and SQLAlchemy URLs.
+Likewise, `MUGEN_PLATFORMS` and `MUGEN_PHASE_B_CRITICAL_PLATFORMS` replace the
+corresponding values from the generic overlay when they are explicitly set.
+Omit them when `MUGEN_CONFIG_OVERLAY_JSON` should be authoritative.
 
 ## Local Commands
 
@@ -126,8 +129,8 @@ Recommended non-secret ECS environment variables:
 | `APP_NAME` | `mugen-api` |
 | `PORT` | `8000` |
 | `LOG_LEVEL` | `INFO` |
-| `MUGEN_PLATFORMS` | `web` |
-| `MUGEN_PHASE_B_CRITICAL_PLATFORMS` | `web` |
+| `MUGEN_PLATFORMS` | Optional explicit override; omit to use the generic overlay or base-config `web` default |
+| `MUGEN_PHASE_B_CRITICAL_PLATFORMS` | Optional explicit override; omit to use the generic overlay or base-config `web` default |
 | `MUGEN_ENABLED_EXTENSIONS` | blank; use only for additional opt-in extensions |
 
 Recommended ECS secrets:
@@ -155,10 +158,12 @@ for local HTTPS testing only.
 
 The upstream repository includes `.github/workflows/deploy-ecs.yml`,
 `.github/actions/ecs-deploy/`, and `.aws/ecs-task-definition.template.json`.
-The workflow deploys upstream muGen from `main`. Downstream applications should
-reuse the composite action pinned to a muGen release tag or copy it, then supply
-their own Dockerfile, task template, ECS service, extension overlays, migration
-tracks, and app-specific secret references.
+The workflow deploys upstream muGen from `main` and wires the generic config,
+extension, and migration JSON inputs to separate Secrets Manager ARNs.
+Downstream applications should reuse the composite action pinned to a muGen
+release tag or copy it, then supply their own Dockerfile, task template, ECS
+service, extension overlays, migration tracks, and app-specific secret
+references.
 
 ## Production Validation
 
