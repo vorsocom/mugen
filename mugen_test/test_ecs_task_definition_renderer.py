@@ -268,18 +268,19 @@ class TestEcsTaskDefinitionRenderer(unittest.TestCase):
             )
 
             environment_names = {entry["name"] for entry in container["environment"]}
-            self.assertTrue(
+            self.assertEqual(
+                environment_names,
                 {
-                    "MUGEN_PLATFORMS",
-                    "MUGEN_PHASE_B_CRITICAL_PLATFORMS",
-                    "MUGEN_EXTENSIONS_JSON",
-                    "MUGEN_MIGRATION_TRACKS_JSON",
-                }.isdisjoint(environment_names)
+                    "MUGEN_CONFIG_FILE",
+                    "ENVIRONMENT",
+                    "PORT",
+                },
             )
 
     def test_generic_workflow_wires_json_overlay_secret_arns(self) -> None:
         workflow_text = _WORKFLOW_PATH.read_text(encoding="utf-8")
 
+        self.assertNotIn("TASKDEF_CORS_ALLOWED_ORIGINS", workflow_text)
         self.assertIn(
             "TASKDEF_MUGEN_CONFIG_OVERLAY_JSON_SECRET_ARN: "
             "${{ vars.MUGEN_CONFIG_OVERLAY_JSON_SECRET_ARN }}",
