@@ -413,6 +413,37 @@ class TestMugenDeploymentConfig(unittest.TestCase):
             "https://billing.example.com",
         )
 
+    def test_generic_overlay_controls_ecs_omitted_convenience_settings(self) -> None:
+        config = _base_config()
+
+        apply_environment_overrides(
+            config,
+            environ={
+                "MUGEN_CONFIG_OVERLAY_JSON": json.dumps(
+                    {
+                        "mugen": {
+                            "logger": {
+                                "name": "downstream-api",
+                                "level": 10,
+                            },
+                        },
+                        "acp": {
+                            "cors_origins": ["https://app.example.com"],
+                            "seed_acp": False,
+                        },
+                    }
+                ),
+            },
+        )
+
+        self.assertEqual(config["mugen"]["logger"]["name"], "downstream-api")
+        self.assertEqual(config["mugen"]["logger"]["level"], 10)
+        self.assertEqual(
+            config["acp"]["cors_origins"],
+            ["https://app.example.com"],
+        )
+        self.assertIs(config["acp"]["seed_acp"], False)
+
     def test_environment_overlay_loads_toml_overlay_file(self) -> None:
         config = _base_config()
 

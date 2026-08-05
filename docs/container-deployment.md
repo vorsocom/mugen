@@ -126,12 +126,17 @@ Recommended non-secret ECS environment variables:
 | --- | --- |
 | `MUGEN_CONFIG_FILE` | `conf/mugen.toml.sample` |
 | `ENVIRONMENT` | `production` |
-| `APP_NAME` | `mugen-api` |
 | `PORT` | `8000` |
-| `LOG_LEVEL` | `INFO` |
 | `MUGEN_PLATFORMS` | Optional explicit override; omit to use the generic overlay or base-config `web` default |
 | `MUGEN_PHASE_B_CRITICAL_PLATFORMS` | Optional explicit override; omit to use the generic overlay or base-config `web` default |
 | `MUGEN_ENABLED_EXTENSIONS` | blank; use only for additional opt-in extensions |
+
+The generic ECS task keeps only `MUGEN_CONFIG_FILE`, `ENVIRONMENT`, and `PORT`
+as direct environment entries. Configure `mugen.logger.name`,
+`mugen.logger.level`, `acp.cors_origins`, and `acp.seed_acp` through
+`MUGEN_CONFIG_OVERLAY_JSON`. A downstream task may still add the corresponding
+direct convenience variables when it intentionally needs a higher-precedence
+override.
 
 Recommended ECS secrets:
 
