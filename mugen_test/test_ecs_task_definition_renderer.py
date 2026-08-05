@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +16,8 @@ _ACTION_DIR = _REPO_ROOT / ".github" / "actions" / "ecs-deploy"
 _ACTION_PATH = _ACTION_DIR / "action.yml"
 _RENDERER_PATH = _ACTION_DIR / "render_task_definition.py"
 _HELPER_PATH = _ACTION_DIR / "ecs_task_helpers.py"
+_TASK_TEMPLATE_PATH = _REPO_ROOT / ".aws" / "ecs-task-definition.template.json"
+_WORKFLOW_PATH = _REPO_ROOT / ".github" / "workflows" / "deploy-ecs.yml"
 
 
 class TestEcsTaskDefinitionRenderer(unittest.TestCase):
@@ -219,6 +223,89 @@ class TestEcsTaskDefinitionRenderer(unittest.TestCase):
                 json.loads(output.read_text(encoding="utf-8"))["family"],
                 "mugen-api",
             )
+
+    def test_generic_template_sources_all_json_overlays_from_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "rendered.json"
+            template_text = _TASK_TEMPLATE_PATH.read_text(encoding="utf-8")
+            placeholders = set(re.findall(r"\{\{([A-Z][A-Z0-9_]*)\}\}", template_text))
+            environment = {
+                f"TASKDEF_{placeholder}": f"value-for-{placeholder.lower()}"
+                for placeholder in placeholders
+            }
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(_RENDERER_PATH),
+                    "--template",
+                    str(_TASK_TEMPLATE_PATH),
+                    "--output",
+                    str(output),
+                    "--env-prefix",
+                    "TASKDEF_",
+                ],
+                check=True,
+                env=environment,
+            )
+
+            rendered = json.loads(output.read_text(encoding="utf-8"))
+            container = rendered["containerDefinitions"][0]
+            secret_values = {
+                entry["name"]: entry["valueFrom"] for entry in container["secrets"]
+            }
+            self.assertEqual(
+                secret_values["MUGEN_CONFIG_OVERLAY_JSON"],
+                "value-for-mugen_config_overlay_json_secret_arn",
+            )
+            self.assertEqual(
+                secret_values["MUGEN_EXTENSIONS_JSON"],
+                "value-for-mugen_extensions_json_secret_arn",
+            )
+            self.assertEqual(
+                secret_values["MUGEN_MIGRATION_TRACKS_JSON"],
+                "value-for-mugen_migration_tracks_json_secret_arn",
+            )
+
+            environment_names = {entry["name"] for entry in container["environment"]}
+            self.assertTrue(
+                {
+                    "MUGEN_PLATFORMS",
+                    "MUGEN_PHASE_B_CRITICAL_PLATFORMS",
+                    "MUGEN_EXTENSIONS_JSON",
+                    "MUGEN_MIGRATION_TRACKS_JSON",
+                }.isdisjoint(environment_names)
+            )
+
+    def test_generic_workflow_wires_json_overlay_secret_arns(self) -> None:
+        workflow_text = _WORKFLOW_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "TASKDEF_MUGEN_CONFIG_OVERLAY_JSON_SECRET_ARN: "
+            "${{ vars.MUGEN_CONFIG_OVERLAY_JSON_SECRET_ARN }}",
+            workflow_text,
+        )
+        self.assertIn(
+            "TASKDEF_MUGEN_EXTENSIONS_JSON_SECRET_ARN: "
+            "${{ vars.MUGEN_EXTENSIONS_JSON_SECRET_ARN }}",
+            workflow_text,
+        )
+        self.assertIn(
+            "TASKDEF_MUGEN_MIGRATION_TRACKS_JSON_SECRET_ARN: "
+            "${{ vars.MUGEN_MIGRATION_TRACKS_JSON_SECRET_ARN }}",
+            workflow_text,
+        )
+
+    def test_sample_config_preserves_web_only_ecs_default(self) -> None:
+        sample_config = tomllib.loads(
+            (_REPO_ROOT / "conf" / "mugen.toml.sample").read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(sample_config["mugen"]["platforms"], ["web"])
+        self.assertEqual(
+            sample_config["mugen"]["runtime"]["phase_b"]["critical_platforms"],
+            ["web"],
+        )
 
 
 class TestEcsTaskHelpers(unittest.TestCase):

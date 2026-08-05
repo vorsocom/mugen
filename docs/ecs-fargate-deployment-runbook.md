@@ -137,7 +137,9 @@ The workflow:
 2. Uses the GitHub Environment named `production`.
 3. Authenticates to AWS with GitHub OIDC, not long-lived AWS access keys.
 4. Builds and pushes `mugen-api:${GITHUB_SHA}` to ECR.
-5. Renders `.aws/ecs-task-definition.template.json`.
+5. Renders `.aws/ecs-task-definition.template.json`, including separate
+   Secrets Manager references for the generic config, extension, and migration
+   JSON inputs.
 6. Registers a new ECS task definition revision.
 7. Runs `python scripts/run_migration_tracks.py upgrade head` as a one-off
    Fargate task.
@@ -219,6 +221,8 @@ production`, so environment variables are the intended source.
 | `ACP_MANAGED_SECRET_ENCRYPTION_KEY_SECRET_ARN` | Secrets Manager ARN for `ACP_MANAGED_SECRET_ENCRYPTION_KEY` |
 | `ACP_REFRESH_TOKEN_PEPPER_SECRET_ARN` | Secrets Manager ARN for `ACP_REFRESH_TOKEN_PEPPER` |
 | `ACP_JWT_CONFIG_JSON_SECRET_ARN` | Secrets Manager ARN for `ACP_JWT_CONFIG_JSON` |
+| `MUGEN_EXTENSIONS_JSON_SECRET_ARN` | Secrets Manager ARN for `MUGEN_EXTENSIONS_JSON` |
+| `MUGEN_MIGRATION_TRACKS_JSON_SECRET_ARN` | Secrets Manager ARN for `MUGEN_MIGRATION_TRACKS_JSON` |
 | `MUGEN_CONFIG_OVERLAY_JSON_SECRET_ARN` | Secrets Manager ARN for `MUGEN_CONFIG_OVERLAY_JSON` |
 
 `ECS_SERVICE` must be the existing service name inside `ECS_CLUSTER`. It is not
@@ -408,6 +412,21 @@ values through environment variables whose names start with `TASKDEF_`; for
 example, `TASKDEF_DATABASE_URL_SECRET_ARN` fills
 `{{DATABASE_URL_SECRET_ARN}}`.
 
+The generic template sources `MUGEN_CONFIG_OVERLAY_JSON`,
+`MUGEN_EXTENSIONS_JSON`, and `MUGEN_MIGRATION_TRACKS_JSON` from three separate
+Secrets Manager ARNs. It intentionally omits `MUGEN_PLATFORMS` and
+`MUGEN_PHASE_B_CRITICAL_PLATFORMS`, allowing the generic config overlay to set
+both lists. With no platform values in the overlay, `conf/mugen.toml.sample`
+preserves the backward-compatible `web` and critical-`web` defaults. A
+downstream task may intentionally add either direct environment variable; direct
+platform variables are applied after the generic overlay and therefore win.
+
+The full runtime precedence, from lowest to highest, is the base config,
+overlay file, generic JSON overlay, dedicated platform/extension/migration
+variables, and remaining direct convenience variables. Extension entries merge
+by normalized `token`; migration tracks merge by `name`; other lists in the
+generic overlay replace the lower-precedence list.
+
 The reusable deployment mechanics live in `.github/actions/ecs-deploy/`. The
 action assumes AWS credentials are already configured and accepts the ECR, ECS,
 network, task template, migration command, ACP reseed command, and health-check
@@ -422,6 +441,9 @@ by downstream repos pinned to a muGen release tag:
 
 - uses: vorsocom/mugen/.github/actions/ecs-deploy@v0.51.0
   env:
+    TASKDEF_MUGEN_CONFIG_OVERLAY_JSON_SECRET_ARN: ${{ vars.MUGEN_CONFIG_OVERLAY_JSON_SECRET_ARN }}
+    TASKDEF_MUGEN_EXTENSIONS_JSON_SECRET_ARN: ${{ vars.MUGEN_EXTENSIONS_JSON_SECRET_ARN }}
+    TASKDEF_MUGEN_MIGRATION_TRACKS_JSON_SECRET_ARN: ${{ vars.MUGEN_MIGRATION_TRACKS_JSON_SECRET_ARN }}
     TASKDEF_ACME_BILLING_CONFIG_JSON_SECRET_ARN: ${{ vars.ACME_BILLING_CONFIG_JSON_SECRET_ARN }}
   with:
     aws-region: ${{ vars.AWS_REGION }}
@@ -457,7 +479,9 @@ COPY plugins/acme_billing /app/plugins/acme_billing
 RUN pip install --no-cache-dir /app/plugins/acme_billing
 ```
 
-Downstream task templates typically extend the upstream template with:
+The generic upstream template already contains the three generic JSON secret
+entries. Downstream task templates typically extend it only with opt-in tokens
+and app-specific secret channels:
 
 ```json
 {
@@ -469,14 +493,6 @@ Downstream task templates typically extend the upstream template with:
   ],
   "secrets": [
     {
-      "name": "MUGEN_EXTENSIONS_JSON",
-      "valueFrom": "arn:aws:secretsmanager:<region>:<account-id>:secret:acme/prod/MUGEN_EXTENSIONS_JSON"
-    },
-    {
-      "name": "MUGEN_MIGRATION_TRACKS_JSON",
-      "valueFrom": "arn:aws:secretsmanager:<region>:<account-id>:secret:acme/prod/MUGEN_MIGRATION_TRACKS_JSON"
-    },
-    {
       "name": "ACME_BILLING_CONFIG_JSON",
       "valueFrom": "arn:aws:secretsmanager:<region>:<account-id>:secret:acme/prod/ACME_BILLING_CONFIG_JSON"
     }
@@ -486,6 +502,12 @@ Downstream task templates typically extend the upstream template with:
 
 The plugin owns the shape and validation of `ACME_BILLING_CONFIG_JSON`. Core
 muGen only validates the generic extension and migration overlay contracts.
+Downstream workflows and templates copied before this contract was introduced
+must be synchronized together: wire all three `TASKDEF_*_SECRET_ARN` variables,
+move extension and migration JSON from empty `environment` entries into
+`secrets`, and remove hardcoded platform variables when the generic overlay
+should be authoritative. Keep direct platform variables only when the
+deployment intentionally needs a higher-precedence override.
 
 ## 1. Create Networking
 
@@ -676,6 +698,8 @@ mugen/api/prod/ACP_SECRET_KEY
 mugen/api/prod/ACP_MANAGED_SECRET_ENCRYPTION_KEY
 mugen/api/prod/ACP_REFRESH_TOKEN_PEPPER
 mugen/api/prod/ACP_JWT_CONFIG_JSON
+mugen/api/prod/MUGEN_EXTENSIONS_JSON
+mugen/api/prod/MUGEN_MIGRATION_TRACKS_JSON
 mugen/api/prod/MUGEN_CONFIG_OVERLAY_JSON
 ```
 
@@ -688,8 +712,6 @@ PORT=8000
 LOG_LEVEL=INFO
 CORS_ALLOWED_ORIGINS=https://app.example.com
 MUGEN_CONFIG_FILE=conf/mugen.toml.sample
-MUGEN_PLATFORMS=web
-MUGEN_PHASE_B_CRITICAL_PLATFORMS=web
 ACP_SEED_ACP=true
 ```
 
@@ -697,7 +719,10 @@ ACP_SEED_ACP=true
 ACP, Web, Context Engine, Audit, Channel Orchestration, and Knowledge Pack. Set
 `MUGEN_ENABLED_EXTENSIONS` only when enabling additional opt-in extensions, such
 as downstream plugin tokens or `core.fw.agent_runtime` after configuring
-`[mugen.agent_runtime]`.
+`[mugen.agent_runtime]`. It also defaults active and phase-B critical platforms
+to `web`, so the generic task does not need platform environment variables for
+existing web-only deployments. Store `[]` in the extension and migration JSON
+secrets when a deployment has no additional entries.
 
 The task definition examples below assume each secret resolves to the exact
 environment variable value. For example, the `SECRET_KEY` secret value should be
@@ -776,6 +801,22 @@ Initial `MUGEN_CONFIG_OVERLAY_JSON` for a deterministic demo:
           "completion": "deterministic",
           "logging": "standard"
         }
+      }
+    }
+  }
+}
+```
+
+To enable a WhatsApp downstream without changing the generic task template, add
+the platform lists to that secret-backed overlay:
+
+```json
+{
+  "mugen": {
+    "platforms": ["web", "whatsapp"],
+    "runtime": {
+      "phase_b": {
+        "critical_platforms": ["web", "whatsapp"]
       }
     }
   }
@@ -886,8 +927,6 @@ Use a tagged image, not an untagged repository name.
         { "name": "PORT", "value": "8000" },
         { "name": "LOG_LEVEL", "value": "INFO" },
         { "name": "CORS_ALLOWED_ORIGINS", "value": "https://app.example.com" },
-        { "name": "MUGEN_PLATFORMS", "value": "web" },
-        { "name": "MUGEN_PHASE_B_CRITICAL_PLATFORMS", "value": "web" },
         { "name": "ACP_SEED_ACP", "value": "true" }
       ],
       "secrets": [
@@ -901,6 +940,8 @@ Use a tagged image, not an untagged repository name.
         { "name": "ACP_MANAGED_SECRET_ENCRYPTION_KEY", "valueFrom": "<secret-arn-for-ACP_MANAGED_SECRET_ENCRYPTION_KEY>" },
         { "name": "ACP_REFRESH_TOKEN_PEPPER", "valueFrom": "<secret-arn-for-ACP_REFRESH_TOKEN_PEPPER>" },
         { "name": "ACP_JWT_CONFIG_JSON", "valueFrom": "<secret-arn-for-ACP_JWT_CONFIG_JSON>" },
+        { "name": "MUGEN_EXTENSIONS_JSON", "valueFrom": "<secret-arn-for-MUGEN_EXTENSIONS_JSON>" },
+        { "name": "MUGEN_MIGRATION_TRACKS_JSON", "valueFrom": "<secret-arn-for-MUGEN_MIGRATION_TRACKS_JSON>" },
         { "name": "MUGEN_CONFIG_OVERLAY_JSON", "valueFrom": "<secret-arn-for-MUGEN_CONFIG_OVERLAY_JSON>" }
       ],
       "logConfiguration": {
