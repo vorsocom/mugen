@@ -8,6 +8,7 @@ import uuid
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from mugen.core.contract.extension.mh import MessageHandlerResponse
 from mugen.core.contract.service.ingress_routing import (
     IngressRouteReason,
     IngressRouteResolution,
@@ -1203,6 +1204,531 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         logging_gateway.error.assert_any_call("Missing sticker payload in response.")
         logging_gateway.error.assert_any_call("Missing reaction payload in response.")
         logging_gateway.error.assert_any_call("Unsupported response type: unknown.")
+
+    async def test_core_delivered_responses_emit_accepted_delivery_receipts(
+        self,
+    ) -> None:
+        cases = (
+            ({"type": "text", "content": "hello"}, "m10"),
+            ({"type": "interactive", "interactive": {}}, "m5"),
+            ({"type": "template", "template": {}}, "m9"),
+            (
+                {
+                    "type": "audio",
+                    "file": {"uri": "/tmp/a.ogg", "type": "audio/ogg"},
+                },
+                "m1",
+            ),
+            (
+                {
+                    "type": "file",
+                    "file": {
+                        "uri": "/tmp/f.pdf",
+                        "type": "application/pdf",
+                        "name": "f.pdf",
+                    },
+                },
+                "m3",
+            ),
+            (
+                {
+                    "type": "image",
+                    "file": {"uri": "/tmp/i.png", "type": "image/png"},
+                },
+                "m4",
+            ),
+            (
+                {
+                    "type": "video",
+                    "file": {"uri": "/tmp/v.mp4", "type": "video/mp4"},
+                },
+                "m11",
+            ),
+        )
+
+        for index, (payload, provider_message_id) in enumerate(cases):
+            with self.subTest(response_type=payload["type"]):
+                callback = AsyncMock()
+                correlation_id = f"ledger-{index}"
+                response = MessageHandlerResponse(
+                    {
+                        **payload,
+                        "delivery_context": {"correlation_id": correlation_id},
+                    },
+                    delivery_receipt_callback=callback,
+                )
+                ext = _new_extension(
+                    config=_make_config(beta_active=False),
+                    client=_make_client(),
+                )
+
+                with patch.object(
+                    ipc_ext,
+                    "_utc_now_iso",
+                    return_value="2026-08-06T12:25:33Z",
+                ):
+                    await ext._send_response_to_user(  # pylint: disable=protected-access
+                        response,
+                        "15550090",
+                    )
+
+                callback.assert_awaited_once_with(
+                    {
+                        "platform": "whatsapp",
+                        "channel": "whatsapp",
+                        "response_type": payload["type"],
+                        "correlation_id": correlation_id,
+                        "outcome": "accepted",
+                        "occurred_at": "2026-08-06T12:25:33Z",
+                        "provider_message_id": provider_message_id,
+                    }
+                )
+
+    async def test_delivery_receipt_accepts_optional_normalization_fields(
+        self,
+    ) -> None:
+        client = _make_client()
+        client.send_text_message = AsyncMock(
+            return_value={"data": {"messages": [{"id": " provider-id "}]}}
+        )
+        callback = AsyncMock()
+        response = MessageHandlerResponse(
+            {
+                "type": "text",
+                "content": "hello",
+                "delivery_context": {"correlation_id": " ledger-id "},
+            },
+            delivery_receipt_callback=callback,
+        )
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            client=client,
+        )
+
+        with patch.object(
+            ipc_ext,
+            "_utc_now_iso",
+            return_value="2026-08-06T12:25:33Z",
+        ):
+            await ext._send_response_to_user(  # pylint: disable=protected-access
+                response,
+                "15550090",
+            )
+
+        receipt = callback.await_args.args[0]
+        self.assertEqual(receipt["correlation_id"], " ledger-id ")
+        self.assertEqual(receipt["provider_message_id"], "provider-id")
+        self.assertEqual(receipt["outcome"], "accepted")
+
+    async def test_delivery_receipt_provider_id_matches_later_status_callback(
+        self,
+    ) -> None:
+        client = _make_client()
+        client.send_interactive_message = AsyncMock(
+            return_value=_ok_payload({"messages": [{"id": "wamid-outbound-1"}]})
+        )
+        callback = AsyncMock()
+        response = MessageHandlerResponse(
+            {
+                "type": "interactive",
+                "interactive": {},
+                "delivery_context": {"correlation_id": "ledger-outbound-1"},
+            },
+            delivery_receipt_callback=callback,
+        )
+        handler = _MhExtension(supported=True, message_types=["status"])
+        messaging_service = _make_messaging_service()
+        messaging_service.mh_extensions = [handler]
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            client=client,
+            messaging_service=messaging_service,
+        )
+
+        await ext._send_response_to_user(  # pylint: disable=protected-access
+            response,
+            "15550090",
+        )
+        provider_message_id = callback.await_args.args[0]["provider_message_id"]
+        status = {
+            "id": provider_message_id,
+            "status": "read",
+            "recipient_id": "15550090",
+        }
+        await ext._process_status_event(  # pylint: disable=protected-access
+            status,
+            skip_dedupe=True,
+        )
+
+        self.assertEqual(provider_message_id, "wamid-outbound-1")
+        self.assertEqual(
+            handler.handle_message.await_args.kwargs["message"]["id"],
+            provider_message_id,
+        )
+
+    async def test_delivery_receipts_sanitize_provider_failures(self) -> None:
+        cases = (
+            (
+                {
+                    "ok": False,
+                    "status": 400,
+                    "data": {
+                        "error": {
+                            "message": "contains message content",
+                            "type": "GraphMethodException",
+                            "code": 123,
+                            "error_subcode": 456,
+                            "fbtrace_id": "secret-trace",
+                        }
+                    },
+                    "error": "recipient 15550090 rejected",
+                    "raw": "access_token=secret",
+                },
+                400,
+                {"type": "GraphMethodException", "code": 123, "subcode": 456},
+            ),
+            (
+                {
+                    "ok": True,
+                    "status": 503,
+                    "data": {"messages": [{"id": "must-not-be-accepted"}]},
+                },
+                503,
+                {"type": "provider_http_error"},
+            ),
+            (
+                {"ok": True, "status": 200, "data": {"messages": []}},
+                200,
+                {"type": "invalid_provider_response"},
+            ),
+            (
+                {"ok": True, "status": 200, "data": {"messages": [{"id": 7}]}},
+                200,
+                {"type": "invalid_provider_response"},
+            ),
+            (
+                {
+                    "ok": True,
+                    "status": "200",
+                    "data": {"messages": [{"id": "must-not-be-accepted"}]},
+                },
+                None,
+                {"type": "invalid_provider_response"},
+            ),
+        )
+
+        for index, (result, http_status, classification) in enumerate(cases):
+            with self.subTest(index=index):
+                client = _make_client()
+                client.send_text_message = AsyncMock(return_value=result)
+                callback = AsyncMock()
+                response = MessageHandlerResponse(
+                    {
+                        "type": "text",
+                        "content": "sensitive message content",
+                        "delivery_context": {
+                            "correlation_id": f"ledger-failure-{index}"
+                        },
+                    },
+                    delivery_receipt_callback=callback,
+                )
+                ext = _new_extension(
+                    config=_make_config(beta_active=False),
+                    client=client,
+                )
+
+                with patch.object(
+                    ipc_ext,
+                    "_utc_now_iso",
+                    return_value="2026-08-06T12:25:33Z",
+                ):
+                    await ext._send_response_to_user(  # pylint: disable=protected-access
+                        response,
+                        "15550090",
+                    )
+
+                receipt = callback.await_args.args[0]
+                self.assertEqual(receipt["outcome"], "failed")
+                self.assertEqual(receipt["error_classification"], classification)
+                self.assertNotIn("provider_message_id", receipt)
+                if http_status is None:
+                    self.assertNotIn("http_status", receipt)
+                else:
+                    self.assertEqual(receipt["http_status"], http_status)
+                serialized_receipt = str(receipt)
+                self.assertNotIn("15550090", serialized_receipt)
+                self.assertNotIn("sensitive message content", serialized_receipt)
+                self.assertNotIn("access_token", serialized_receipt)
+                self.assertNotIn("secret-trace", serialized_receipt)
+
+    async def test_delivery_receipt_sanitizes_client_exception(self) -> None:
+        client = _make_client()
+        client.send_text_message = AsyncMock(
+            side_effect=RuntimeError("access_token=secret recipient=15550090")
+        )
+        callback = AsyncMock()
+        response = MessageHandlerResponse(
+            {
+                "type": "text",
+                "content": "hello",
+                "delivery_context": {"correlation_id": "ledger-exception"},
+            },
+            delivery_receipt_callback=callback,
+        )
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            client=client,
+        )
+
+        with patch.object(
+            ipc_ext,
+            "_utc_now_iso",
+            return_value="2026-08-06T12:25:33Z",
+        ):
+            await ext._send_response_to_user(  # pylint: disable=protected-access
+                response,
+                "15550090",
+            )
+
+        receipt = callback.await_args.args[0]
+        self.assertEqual(receipt["outcome"], "failed")
+        self.assertEqual(receipt["error_classification"], {"type": "RuntimeError"})
+        self.assertNotIn("http_status", receipt)
+        self.assertNotIn("access_token", str(receipt))
+        self.assertNotIn("15550090", str(receipt))
+
+    async def test_invalid_delivery_context_is_ignored_without_blocking_send(
+        self,
+    ) -> None:
+        invalid_contexts = (
+            "bad",
+            {},
+            {"correlation_id": 1},
+            {"correlation_id": "   "},
+            {"correlation_id": "x", "secret": "must-not-pass"},
+            {"correlation_id": "é" * 129},
+            {"correlation_id": "\ud800"},
+        )
+
+        for context in invalid_contexts:
+            with self.subTest(context=context):
+                client = _make_client()
+                callback = AsyncMock()
+                response = MessageHandlerResponse(
+                    {
+                        "type": "text",
+                        "content": "hello",
+                        "delivery_context": context,
+                    },
+                    delivery_receipt_callback=callback,
+                )
+                ext = _new_extension(
+                    config=_make_config(beta_active=False),
+                    client=client,
+                )
+
+                await ext._send_response_to_user(  # pylint: disable=protected-access
+                    response,
+                    "15550090",
+                )
+
+                client.send_text_message.assert_awaited_once()
+                callback.assert_not_awaited()
+
+    def test_delivery_receipt_sanitizer_boundaries(self) -> None:
+        ext = _new_extension(config=_make_config(beta_active=False))
+
+        self.assertIsNone(
+            ext._safe_http_status("200")  # pylint: disable=protected-access
+        )
+        self.assertIsNone(ext._safe_http_status(99))  # pylint: disable=protected-access
+        self.assertIsNone(
+            ext._safe_http_status(600)  # pylint: disable=protected-access
+        )
+        self.assertEqual(
+            ext._safe_http_status(200),  # pylint: disable=protected-access
+            200,
+        )
+        invalid_text = (None, "", "x" * 129, "line\nbreak", "\ud800")
+        for value in invalid_text:
+            with self.subTest(value=value):
+                self.assertIsNone(
+                    ext._safe_classification_text(  # pylint: disable=protected-access
+                        value
+                    )
+                )
+        self.assertEqual(
+            ext._safe_classification_text(  # pylint: disable=protected-access
+                " GraphMethodException "
+            ),
+            "GraphMethodException",
+        )
+        self.assertEqual(
+            ext._error_classification(  # pylint: disable=protected-access
+                None,
+                default_type="fallback",
+            ),
+            {"type": "fallback"},
+        )
+        self.assertEqual(
+            ext._error_classification(  # pylint: disable=protected-access
+                {"data": None},
+                default_type="fallback",
+            ),
+            {"type": "fallback"},
+        )
+        self.assertEqual(
+            ext._error_classification(  # pylint: disable=protected-access
+                {"data": {"error": "bad"}},
+                default_type="fallback",
+            ),
+            {"type": "fallback"},
+        )
+        self.assertEqual(
+            ext._error_classification(  # pylint: disable=protected-access
+                {
+                    "data": {
+                        "error": {
+                            "type": None,
+                            "code": "123",
+                            "subcode": "456",
+                        }
+                    }
+                },
+                default_type="fallback",
+            ),
+            {"type": "fallback"},
+        )
+        self.assertEqual(
+            ext._error_classification(  # pylint: disable=protected-access
+                {"data": {"error": {"subcode": 456}}},
+                default_type="fallback",
+            ),
+            {"type": "fallback", "subcode": 456},
+        )
+
+    async def test_delivery_receipt_handles_missing_result_and_provenance(self) -> None:
+        client = _make_client()
+        client.send_text_message = AsyncMock(return_value=None)
+        callback = AsyncMock()
+        response = MessageHandlerResponse(
+            {
+                "type": "text",
+                "content": "hello",
+                "delivery_context": {"correlation_id": "ledger-none"},
+            },
+            delivery_receipt_callback=callback,
+        )
+        logging_gateway = Mock()
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            client=client,
+            logging_gateway=logging_gateway,
+        )
+
+        await ext._send_response_to_user(  # pylint: disable=protected-access
+            response,
+            "15550090",
+        )
+        receipt = callback.await_args.args[0]
+        self.assertEqual(receipt["outcome"], "failed")
+        self.assertEqual(
+            receipt["error_classification"],
+            {"type": "invalid_provider_response"},
+        )
+
+        client.send_text_message = AsyncMock(
+            return_value=_ok_payload({"messages": [{"id": "provider-id"}]})
+        )
+        await ext._send_response_to_user(  # pylint: disable=protected-access
+            {
+                "type": "text",
+                "content": "hello",
+                "delivery_context": {"correlation_id": "ledger-no-origin"},
+            },
+            "15550090",
+        )
+        logging_gateway.warning.assert_any_call(
+            "WhatsApp delivery receipt has no originating handler provenance."
+        )
+
+    async def test_delivery_receipt_preserves_existing_exception_semantics(
+        self,
+    ) -> None:
+        client = _make_client()
+        client.send_text_message = AsyncMock(side_effect=RuntimeError("boom"))
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            client=client,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "boom"):
+            await ext._send_response_to_user(  # pylint: disable=protected-access
+                {"type": "text", "content": "hello"},
+                "15550090",
+            )
+
+        client.send_text_message = AsyncMock(side_effect=asyncio.CancelledError())
+        with self.assertRaises(asyncio.CancelledError):
+            await ext._send_response_to_user(  # pylint: disable=protected-access
+                {
+                    "type": "text",
+                    "content": "hello",
+                    "delivery_context": {"correlation_id": "ledger-cancelled"},
+                },
+                "15550090",
+            )
+
+        await ext._send_response_to_user(  # pylint: disable=protected-access
+            {"type": "control", "delivery_context": {"correlation_id": "ignored"}},
+            "15550090",
+        )
+
+    async def test_invalid_response_and_media_upload_emit_failure_receipts(
+        self,
+    ) -> None:
+        cases = (
+            ({"type": "interactive"}, "invalid_response"),
+            (
+                {
+                    "type": "image",
+                    "file": {"uri": "/tmp/i.png", "type": "image/png"},
+                },
+                "media_upload_failed",
+            ),
+        )
+
+        for index, (payload, classification_type) in enumerate(cases):
+            with self.subTest(response_type=payload["type"]):
+                client = _make_client()
+                if payload["type"] == "image":
+                    client.upload_media = AsyncMock(return_value=None)
+                callback = AsyncMock()
+                response = MessageHandlerResponse(
+                    {
+                        **payload,
+                        "delivery_context": {
+                            "correlation_id": f"ledger-preparation-{index}"
+                        },
+                    },
+                    delivery_receipt_callback=callback,
+                )
+                ext = _new_extension(
+                    config=_make_config(beta_active=False),
+                    client=client,
+                )
+
+                await ext._send_response_to_user(  # pylint: disable=protected-access
+                    response,
+                    "15550090",
+                )
+
+                receipt = callback.await_args.args[0]
+                self.assertEqual(receipt["outcome"], "failed")
+                self.assertEqual(
+                    receipt["error_classification"],
+                    {"type": classification_type},
+                )
 
     async def test_send_file_response_without_filename(self) -> None:
         client = _make_client()

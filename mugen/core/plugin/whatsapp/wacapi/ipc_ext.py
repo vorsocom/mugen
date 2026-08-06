@@ -72,12 +72,32 @@ def _user_service_provider():
     return di.container.user_service
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 class WhatsAppWACAPIIPCExtension(IIPCExtension):
     """An implementation of IIPCExtension for WhatsApp Cloud API support."""
 
     _event_dedup_table = "whatsapp_wacapi_event_dedup"
     _event_dead_letter_table = "whatsapp_wacapi_event_dead_letter"
     _default_event_dedup_ttl_seconds = 86400
+    _delivery_correlation_id_max_bytes = 256
+    _delivery_response_types = frozenset(
+        {
+            "audio",
+            "contacts",
+            "file",
+            "image",
+            "interactive",
+            "location",
+            "reaction",
+            "sticker",
+            "template",
+            "text",
+            "video",
+        }
+    )
 
     # pylint: disable=too-many-arguments
     # # pylint: disable=too-many-positional-arguments
@@ -168,6 +188,198 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             return None
 
         return data
+
+    def _delivery_correlation_id(self, response: dict) -> str | None:
+        if "delivery_context" not in response:
+            return None
+        delivery_context = response.get("delivery_context")
+        if not isinstance(delivery_context, dict) or set(delivery_context) != {
+            "correlation_id"
+        }:
+            self._logging_gateway.warning(
+                "Ignore invalid WhatsApp delivery_context payload."
+            )
+            return None
+        correlation_id = delivery_context.get("correlation_id")
+        if not isinstance(correlation_id, str) or correlation_id.strip() == "":
+            self._logging_gateway.warning(
+                "Ignore invalid WhatsApp delivery correlation id."
+            )
+            return None
+        try:
+            correlation_size = len(correlation_id.encode("utf-8"))
+        except UnicodeEncodeError:
+            correlation_size = self._delivery_correlation_id_max_bytes + 1
+        if correlation_size > self._delivery_correlation_id_max_bytes:
+            self._logging_gateway.warning(
+                "Ignore oversized WhatsApp delivery correlation id."
+            )
+            return None
+        return correlation_id
+
+    @staticmethod
+    def _safe_http_status(value: object) -> int | None:
+        if type(value) is not int or value < 100 or value > 599:
+            return None
+        return value
+
+    @staticmethod
+    def _safe_classification_text(value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        try:
+            encoded_size = len(normalized.encode("utf-8"))
+        except UnicodeEncodeError:
+            return None
+        if normalized == "" or encoded_size > 128 or not normalized.isprintable():
+            return None
+        return normalized
+
+    def _error_classification(
+        self,
+        result: object,
+        *,
+        default_type: str,
+    ) -> dict[str, object]:
+        classification: dict[str, object] = {"type": default_type}
+        if not isinstance(result, dict):
+            return classification
+        data = result.get("data")
+        if not isinstance(data, dict):
+            return classification
+        error = data.get("error")
+        if not isinstance(error, dict):
+            return classification
+        provider_type = self._safe_classification_text(error.get("type"))
+        if provider_type is not None:
+            classification["type"] = provider_type
+        code = error.get("code")
+        if type(code) is int:
+            classification["code"] = code
+        subcode = error.get("error_subcode", error.get("subcode"))
+        if type(subcode) is int:
+            classification["subcode"] = subcode
+        return classification
+
+    @staticmethod
+    def _base_delivery_receipt(
+        *,
+        response_type: str,
+        correlation_id: str,
+        occurred_at: str,
+        outcome: str,
+    ) -> dict[str, object]:
+        return {
+            "platform": "whatsapp",
+            "channel": "whatsapp",
+            "response_type": response_type,
+            "correlation_id": correlation_id,
+            "outcome": outcome,
+            "occurred_at": occurred_at,
+        }
+
+    def _failed_delivery_receipt(
+        self,
+        *,
+        response_type: str,
+        correlation_id: str,
+        occurred_at: str,
+        result: object,
+        classification_type: str,
+    ) -> dict[str, object]:
+        receipt = self._base_delivery_receipt(
+            response_type=response_type,
+            correlation_id=correlation_id,
+            occurred_at=occurred_at,
+            outcome="failed",
+        )
+        receipt["error_classification"] = self._error_classification(
+            result,
+            default_type=classification_type,
+        )
+        if isinstance(result, dict):
+            status = self._safe_http_status(result.get("status"))
+            if status is not None:
+                receipt["http_status"] = status
+        return receipt
+
+    def _delivery_receipt_from_result(
+        self,
+        *,
+        response_type: str,
+        correlation_id: str,
+        occurred_at: str,
+        result: object,
+    ) -> dict[str, object]:
+        if not isinstance(result, dict):
+            return self._failed_delivery_receipt(
+                response_type=response_type,
+                correlation_id=correlation_id,
+                occurred_at=occurred_at,
+                result=result,
+                classification_type="invalid_provider_response",
+            )
+        if "ok" in result and result.get("ok") is not True:
+            return self._failed_delivery_receipt(
+                response_type=response_type,
+                correlation_id=correlation_id,
+                occurred_at=occurred_at,
+                result=result,
+                classification_type="provider_rejected",
+            )
+        if "status" in result:
+            status = self._safe_http_status(result.get("status"))
+            if status is None or status < 200 or status >= 300:
+                return self._failed_delivery_receipt(
+                    response_type=response_type,
+                    correlation_id=correlation_id,
+                    occurred_at=occurred_at,
+                    result=result,
+                    classification_type=(
+                        "provider_http_error"
+                        if status is not None
+                        else "invalid_provider_response"
+                    ),
+                )
+        data = result.get("data")
+        messages = data.get("messages") if isinstance(data, dict) else None
+        first_message = messages[0] if isinstance(messages, list) and messages else None
+        provider_message_id = (
+            first_message.get("id") if isinstance(first_message, dict) else None
+        )
+        if (
+            not isinstance(provider_message_id, str)
+            or provider_message_id.strip() == ""
+        ):
+            return self._failed_delivery_receipt(
+                response_type=response_type,
+                correlation_id=correlation_id,
+                occurred_at=occurred_at,
+                result=result,
+                classification_type="invalid_provider_response",
+            )
+        receipt = self._base_delivery_receipt(
+            response_type=response_type,
+            correlation_id=correlation_id,
+            occurred_at=occurred_at,
+            outcome="accepted",
+        )
+        receipt["provider_message_id"] = provider_message_id.strip()
+        return receipt
+
+    async def _emit_delivery_receipt(
+        self,
+        response: dict,
+        receipt: dict[str, object],
+    ) -> None:
+        emitter = getattr(response, "emit_delivery_receipt", None)
+        if not callable(emitter):
+            self._logging_gateway.warning(
+                "WhatsApp delivery receipt has no originating handler provenance."
+            )
+            return
+        await emitter(receipt)
 
     @staticmethod
     def _extract_user_text(message: dict) -> str | None:
@@ -826,31 +1038,29 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             "file": file_data,
         }
 
-    async def _send_response_to_user(self, response: dict, sender: str) -> None:
-        response_type = response.get("type")
-        reply_to = response.get("reply_to")
-        if not isinstance(reply_to, str):
-            reply_to = None
-
-        if response_type == "control":
-            return
-
+    async def _dispatch_response_to_user(
+        self,
+        *,
+        response: dict,
+        response_type: object,
+        sender: str,
+        reply_to: str | None,
+    ) -> tuple[object, str, str | None]:
         if response_type == "audio":
             uploaded = await self._upload_response_media(response, "audio")
             if uploaded is None:
-                return
+                return None, "audio send", "media_upload_failed"
             send_result = await self._client.send_audio_message(
                 audio={"id": uploaded["id"]},
                 recipient=sender,
                 reply_to=reply_to,
             )
-            self._extract_api_data(send_result, "audio send")
-            return
+            return send_result, "audio send", None
 
         if response_type == "file":
             uploaded = await self._upload_response_media(response, "document")
             if uploaded is None:
-                return
+                return None, "document send", "media_upload_failed"
             document = {
                 "id": uploaded["id"],
             }
@@ -862,45 +1072,41 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                 recipient=sender,
                 reply_to=reply_to,
             )
-            self._extract_api_data(send_result, "document send")
-            return
+            return send_result, "document send", None
 
         if response_type == "image":
             uploaded = await self._upload_response_media(response, "image")
             if uploaded is None:
-                return
+                return None, "image send", "media_upload_failed"
             send_result = await self._client.send_image_message(
                 image={"id": uploaded["id"]},
                 recipient=sender,
                 reply_to=reply_to,
             )
-            self._extract_api_data(send_result, "image send")
-            return
+            return send_result, "image send", None
 
         if response_type == "video":
             uploaded = await self._upload_response_media(response, "video")
             if uploaded is None:
-                return
+                return None, "video send", "media_upload_failed"
             send_result = await self._client.send_video_message(
                 video={"id": uploaded["id"]},
                 recipient=sender,
                 reply_to=reply_to,
             )
-            self._extract_api_data(send_result, "video send")
-            return
+            return send_result, "video send", None
 
         if response_type == "text":
             content = response.get("content")
             if not isinstance(content, str):
                 self._logging_gateway.error("Missing text content in response payload.")
-                return
+                return None, "text send", "invalid_response"
             send_result = await self._client.send_text_message(
                 message=content,
                 recipient=sender,
                 reply_to=reply_to,
             )
-            self._extract_api_data(send_result, "text send")
-            return
+            return send_result, "text send", None
 
         if response_type == "contacts":
             contacts = response.get("contacts", response.get("content"))
@@ -909,74 +1115,142 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                 recipient=sender,
                 reply_to=reply_to,
             )
-            self._extract_api_data(send_result, "contacts send")
-            return
+            return send_result, "contacts send", None
 
         if response_type == "location":
             location = response.get("location", response.get("content"))
             if not isinstance(location, dict):
                 self._logging_gateway.error("Missing location payload in response.")
-                return
+                return None, "location send", "invalid_response"
             send_result = await self._client.send_location_message(
                 location=location,
                 recipient=sender,
                 reply_to=reply_to,
             )
-            self._extract_api_data(send_result, "location send")
-            return
+            return send_result, "location send", None
 
         if response_type == "interactive":
             interactive = response.get("interactive", response.get("content"))
             if not isinstance(interactive, dict):
                 self._logging_gateway.error("Missing interactive payload in response.")
-                return
+                return None, "interactive send", "invalid_response"
             send_result = await self._client.send_interactive_message(
                 interactive=interactive,
                 recipient=sender,
                 reply_to=reply_to,
             )
-            self._extract_api_data(send_result, "interactive send")
-            return
+            return send_result, "interactive send", None
 
         if response_type == "template":
             template = response.get("template", response.get("content"))
             if not isinstance(template, dict):
                 self._logging_gateway.error("Missing template payload in response.")
-                return
+                return None, "template send", "invalid_response"
             send_result = await self._client.send_template_message(
                 template=template,
                 recipient=sender,
                 reply_to=reply_to,
             )
-            self._extract_api_data(send_result, "template send")
-            return
+            return send_result, "template send", None
 
         if response_type == "sticker":
             sticker = response.get("sticker", response.get("content"))
             if not isinstance(sticker, dict):
                 self._logging_gateway.error("Missing sticker payload in response.")
-                return
+                return None, "sticker send", "invalid_response"
             send_result = await self._client.send_sticker_message(
                 sticker=sticker,
                 recipient=sender,
                 reply_to=reply_to,
             )
-            self._extract_api_data(send_result, "sticker send")
-            return
+            return send_result, "sticker send", None
 
         if response_type == "reaction":
             reaction = response.get("reaction", response.get("content"))
             if not isinstance(reaction, dict):
                 self._logging_gateway.error("Missing reaction payload in response.")
-                return
+                return None, "reaction send", "invalid_response"
             send_result = await self._client.send_reaction_message(
                 reaction=reaction,
                 recipient=sender,
             )
-            self._extract_api_data(send_result, "reaction send")
-            return
+            return send_result, "reaction send", None
 
         self._logging_gateway.error(f"Unsupported response type: {response_type}.")
+        return None, "response send", "invalid_response"
+
+    async def _send_response_to_user(self, response: dict, sender: str) -> None:
+        response_type = response.get("type")
+        reply_to = response.get("reply_to")
+        if not isinstance(reply_to, str):
+            reply_to = None
+
+        if response_type == "control":
+            return
+
+        safe_response_type = (
+            response_type
+            if isinstance(response_type, str)
+            and response_type in self._delivery_response_types
+            else "unknown"
+        )
+        correlation_id = self._delivery_correlation_id(response)
+        occurred_at = _utc_now_iso()
+        try:
+            send_result, send_context, preparation_failure = (
+                await self._dispatch_response_to_user(
+                    response=response,
+                    response_type=response_type,
+                    sender=sender,
+                    reply_to=reply_to,
+                )
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            if correlation_id is None:
+                raise
+            self._logging_gateway.error(
+                "WhatsApp response delivery raised a client exception "
+                f"(response_type={safe_response_type} "
+                f"error_type={type(exc).__name__})."
+            )
+            receipt = self._failed_delivery_receipt(
+                response_type=safe_response_type,
+                correlation_id=correlation_id,
+                occurred_at=occurred_at,
+                result=None,
+                classification_type=type(exc).__name__,
+            )
+            await self._emit_delivery_receipt(response, receipt)
+            return
+
+        if correlation_id is None:
+            if preparation_failure is None:
+                self._extract_api_data(send_result, send_context)
+            return
+
+        if preparation_failure is not None:
+            receipt = self._failed_delivery_receipt(
+                response_type=safe_response_type,
+                correlation_id=correlation_id,
+                occurred_at=occurred_at,
+                result=None,
+                classification_type=preparation_failure,
+            )
+        else:
+            receipt = self._delivery_receipt_from_result(
+                response_type=safe_response_type,
+                correlation_id=correlation_id,
+                occurred_at=occurred_at,
+                result=send_result,
+            )
+            if receipt["outcome"] == "failed":
+                self._extract_api_data(send_result, send_context)
+                self._logging_gateway.error(
+                    f"{send_context} did not return an accepted provider message."
+                )
+        await self._emit_delivery_receipt(response, receipt)
 
     async def process_ipc_command(
         self,
