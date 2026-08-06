@@ -1,13 +1,31 @@
 """Provides an abstract base class for message handler extensions."""
 
-__all__ = ["IMHExtension"]
+__all__ = ["IMHExtension", "MessageHandlerResponse"]
 
 from abc import abstractmethod
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from mugen.core.contract.context import ContextScope
 
 from . import IExtensionBase
+
+
+class MessageHandlerResponse(dict[str, Any]):
+    """Dict-compatible MH response with private delivery provenance."""
+
+    def __init__(
+        self,
+        payload: dict[str, Any],
+        *,
+        delivery_receipt_callback: Callable[[dict[str, Any]], Awaitable[None]],
+    ) -> None:
+        super().__init__(payload)
+        self._delivery_receipt_callback = delivery_receipt_callback
+
+    async def emit_delivery_receipt(self, receipt: dict[str, Any]) -> None:
+        """Send a sanitized delivery receipt to the originating extension."""
+        await self._delivery_receipt_callback(dict(receipt))
 
 
 class IMHExtension(IExtensionBase):
@@ -36,3 +54,11 @@ class IMHExtension(IExtensionBase):
         scope: ContextScope,
     ) -> list[dict] | None:
         """Handle a message."""
+
+    async def handle_delivery_receipt(
+        self,
+        receipt: dict[str, Any],
+        *,
+        scope: ContextScope,
+    ) -> None:
+        """Handle a sanitized receipt for a response produced by this extension."""
