@@ -403,6 +403,103 @@ class TestMugenServiceMessagingIngressExtractors(unittest.IsolatedAsyncioTestCas
             )
         self.assertEqual(entries[0].event.sender, "contact-4")
 
+    async def test_whatsapp_status_dedupe_preserves_each_transition(self) -> None:
+        with patch.object(
+            extractors,
+            "_resolve_ingress_route",
+            new=AsyncMock(return_value={"client_profile_id": str(_CLIENT_PROFILE_ID)}),
+        ):
+            entries = await extractors.extract_whatsapp_stage_entries(
+                path_token="whatsapp-path",
+                payload={
+                    "entry": [
+                        {
+                            "changes": [
+                                {
+                                    "value": {
+                                        "metadata": {"phone_number_id": "phone-1"},
+                                        "statuses": [
+                                            {"id": "wamid-1", "status": "sent"},
+                                            {"id": "wamid-1", "status": "DELIVERED"},
+                                            {"id": "wamid-1", "status": " read "},
+                                            {"id": "wamid-1", "status": "delivered"},
+                                        ],
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                },
+                relational_storage_gateway=object(),
+                logging_gateway=Mock(),
+            )
+
+            separate_entries = []
+            for transition in ("sent", "read"):
+                separate_entries.extend(
+                    await extractors.extract_whatsapp_stage_entries(
+                        path_token="whatsapp-path",
+                        payload={
+                            "entry": [
+                                {
+                                    "changes": [
+                                        {
+                                            "value": {
+                                                "metadata": {
+                                                    "phone_number_id": "phone-1"
+                                                },
+                                                "statuses": [
+                                                    {
+                                                        "id": "wamid-2",
+                                                        "status": transition,
+                                                    }
+                                                ],
+                                            }
+                                        }
+                                    ]
+                                }
+                            ]
+                        },
+                        relational_storage_gateway=object(),
+                        logging_gateway=Mock(),
+                    )
+                )
+
+        self.assertEqual(len(entries), 4)
+        self.assertEqual([entry.event.event_id for entry in entries], ["wamid-1"] * 4)
+        self.assertEqual(
+            [entry.event.dedupe_key for entry in entries],
+            [
+                "status:wamid-1:sent",
+                "status:wamid-1:delivered",
+                "status:wamid-1:read",
+                "status:wamid-1:delivered",
+            ],
+        )
+        self.assertEqual(
+            [entry.event.dedupe_key for entry in separate_entries],
+            ["status:wamid-2:sent", "status:wamid-2:read"],
+        )
+
+    def test_whatsapp_status_dedupe_falls_back_for_invalid_identity(self) -> None:
+        invalid_statuses = (
+            {"status": "sent"},
+            {"id": 123, "status": "sent"},
+            {"id": "wamid-1"},
+            {"id": "wamid-1", "status": ["sent"]},
+        )
+
+        for status in invalid_statuses:
+            with self.subTest(status=status):
+                self.assertEqual(
+                    extractors._whatsapp_status_dedupe_key(  # pylint: disable=protected-access
+                        status
+                    ),
+                    extractors._dedupe_key(  # pylint: disable=protected-access
+                        "status", None, status
+                    ),
+                )
+
     async def test_whatsapp_extractor_preserves_sender_and_handles_empty_contacts(
         self,
     ) -> None:
