@@ -137,6 +137,50 @@ class MyMHExtension(IMHExtension):
 `mugen.messaging.mh_mode` controls whether the runtime may fall back to the
 built-in text handler when no MH extension handles a text turn.
 
+### WhatsApp delivery receipts
+
+An MH extension can correlate a Core-delivered WhatsApp response with its own
+outbound ledger by adding a bounded delivery context:
+
+```python
+return [
+    {
+        "type": "interactive",
+        "interactive": interactive_payload,
+        "delivery_context": {"correlation_id": "opaque-ledger-message-id"},
+    }
+]
+```
+
+`delivery_context` must contain only a non-blank string `correlation_id` of at
+most 256 UTF-8 bytes. Invalid delivery metadata is ignored without changing the
+existing response dispatch behavior.
+
+The extension that produced the response can override the optional receipt
+hook:
+
+```python
+async def handle_delivery_receipt(
+    self,
+    receipt: dict[str, Any],
+    *,
+    scope: ContextScope,
+) -> None:
+    await self.outbound_ledger.record_provider_receipt(
+        tenant_id=scope.tenant_id,
+        correlation_id=receipt["correlation_id"],
+        provider_message_id=receipt.get("provider_message_id"),
+        outcome=receipt["outcome"],
+    )
+```
+
+Core invokes the hook exactly once after the send attempt. Accepted receipts
+contain the Graph provider message ID. Failed receipts contain only a safe HTTP
+status when available and a bounded error classification. Receipts never
+contain the recipient, message payload, raw Graph response, authorization data,
+or credentials. Extensions that omit `delivery_context` or do not override the
+hook retain their previous behavior.
+
 ## IPC Extensions
 
 IPC extensions process typed command requests and return typed handler results.

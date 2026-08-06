@@ -6,6 +6,7 @@ __all__ = ["DefaultMessagingService"]
 
 import asyncio
 import importlib
+from functools import partial
 from types import SimpleNamespace
 from typing import Any
 
@@ -14,7 +15,7 @@ from mugen.core.contract.agent import IAgentRuntime
 from mugen.core.contract.context import ContextScope, IContextEngine
 from mugen.core.contract.extension.cp import ICPExtension
 from mugen.core.contract.extension.ct import ICTExtension
-from mugen.core.contract.extension.mh import IMHExtension
+from mugen.core.contract.extension.mh import IMHExtension, MessageHandlerResponse
 from mugen.core.contract.extension.rpp import IRPPExtension
 from mugen.core.contract.gateway.completion import ICompletionGateway
 from mugen.core.contract.gateway.logging import ILoggingGateway
@@ -193,6 +194,24 @@ class DefaultMessagingService(IMessagingService):
             extension=extension,
             kind="mh",
             operation_label="Messaging extension handler",
+            awaitable=coroutine,
+        )
+
+    async def _invoke_delivery_receipt_handler(
+        self,
+        receipt: dict[str, Any],
+        *,
+        extension: IMHExtension,
+        scope: ContextScope,
+    ) -> None:
+        coroutine = extension.handle_delivery_receipt(
+            receipt=dict(receipt),
+            scope=scope,
+        )
+        await self._await_extension_handler(
+            extension=extension,
+            kind="mh",
+            operation_label="Messaging delivery receipt handler",
             awaitable=coroutine,
         )
 
@@ -882,6 +901,18 @@ class DefaultMessagingService(IMessagingService):
                 continue
             for item in resp:
                 if isinstance(item, dict):
+                    if "delivery_context" in item:
+                        handler_responses.append(
+                            MessageHandlerResponse(
+                                item,
+                                delivery_receipt_callback=partial(
+                                    self._invoke_delivery_receipt_handler,
+                                    extension=mh_ext,
+                                    scope=scope,
+                                ),
+                            )
+                        )
+                        continue
                     handler_responses.append(item)
                     continue
                 self._logging_gateway.warning(

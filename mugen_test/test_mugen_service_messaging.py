@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import mugen.core.service.messaging as messaging_module
 from mugen.core.constants import GLOBAL_TENANT_ID
 from mugen.core.contract.context import ContextScope
+from mugen.core.contract.extension.mh import MessageHandlerResponse
 from mugen.core.contract.service.messaging import MessagingTurnRequest
 from mugen.core.service.messaging import DefaultMessagingService
 from mugen.core.utility.context_runtime import scope_key
@@ -28,6 +29,7 @@ class _DummyMhExt:
         self.platforms = list(platforms)
         self.message_types = message_types
         self.handle_message = AsyncMock(return_value=response, side_effect=side_effect)
+        self.handle_delivery_receipt = AsyncMock()
 
     def platform_supported(self, platform: str) -> bool:
         return platform in self._platforms
@@ -262,6 +264,56 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
         ext_b.handle_message.assert_awaited_once()
         ext_c.handle_message.assert_not_awaited()
         self.assertIs(ext_a.handle_message.await_args.kwargs["scope"], scope)
+
+    async def test_delivery_receipt_routes_only_to_originating_handler(self) -> None:
+        svc = self._new_service()
+        ext_a = _DummyMhExt(
+            platforms=["whatsapp"],
+            message_types=["text"],
+            response=[
+                {
+                    "type": "interactive",
+                    "interactive": {},
+                    "delivery_context": {"correlation_id": "ledger-a"},
+                }
+            ],
+        )
+        ext_b = _DummyMhExt(
+            platforms=["whatsapp"],
+            message_types=["text"],
+            response=[
+                {
+                    "type": "text",
+                    "content": "without receipt",
+                }
+            ],
+        )
+        svc._mh_extensions = [ext_a, ext_b]  # pylint: disable=protected-access
+        scope = _scope(platform="whatsapp", room_id="room-1", sender_id="sender-1")
+
+        responses = await svc.handle_text_message(
+            platform="whatsapp",
+            room_id="room-1",
+            sender="sender-1",
+            message="hello",
+            scope=scope,
+        )
+
+        self.assertIsNotNone(responses)
+        self.assertIsInstance(responses[0], MessageHandlerResponse)
+        self.assertNotIsInstance(responses[1], MessageHandlerResponse)
+        receipt = {
+            "platform": "whatsapp",
+            "correlation_id": "ledger-a",
+            "outcome": "accepted",
+        }
+        await responses[0].emit_delivery_receipt(receipt)
+
+        ext_a.handle_delivery_receipt.assert_awaited_once_with(
+            receipt=receipt,
+            scope=scope,
+        )
+        ext_b.handle_delivery_receipt.assert_not_awaited()
 
     async def test_handle_text_message_runs_whatsapp_command_before_mh_extension(
         self,
