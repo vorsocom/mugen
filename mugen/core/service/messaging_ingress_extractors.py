@@ -58,6 +58,14 @@ def _dedupe_key(event_type: str, event_id: str | None, payload: object) -> str:
     return f"{event_type}:{_json_hash(payload)}"
 
 
+def _whatsapp_status_dedupe_key(status: dict[str, Any]) -> str:
+    status_id = _nonempty_text(status.get("id"))
+    transition = _nonempty_text(status.get("status"))
+    if status_id is None or transition is None:
+        return _dedupe_key("status", None, status)
+    return f"status:{status_id}:{transition.casefold()}"
+
+
 async def _resolve_ingress_route(
     *,
     platform: str,
@@ -463,7 +471,7 @@ async def extract_whatsapp_stage_entries(
                                 source_mode="webhook",
                                 event_type="status",
                                 event_id=status_id,
-                                dedupe_key=_dedupe_key("status", status_id, status),
+                                dedupe_key=_whatsapp_status_dedupe_key(status),
                                 identifier_type="phone_number_id",
                                 identifier_value=phone_number_id,
                                 room_id=recipient,
