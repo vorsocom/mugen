@@ -27,6 +27,19 @@ def _make_config(verification_token: str = "token-1"):
     )
 
 
+def _event_context(
+    payload: dict,
+    *,
+    message_change_count: int = 1,
+) -> webhook.WhatsAppWebhookContext:
+    return webhook.WhatsAppWebhookContext(
+        request_id="request-id",
+        payload_fingerprint="0123456789abcdef",
+        filtered_payload=payload,
+        message_change_count=message_change_count,
+    )
+
+
 class _ClientProfileServiceStub:
     def __init__(
         self,
@@ -283,27 +296,22 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(response, "abc123")
 
-    async def test_event_validation_path_for_non_dict_payload(self) -> None:
+    async def test_event_requires_authenticated_context(self) -> None:
         endpoint = unwrap(webhook.whatsapp_wacapi_event)
         logger = Mock()
         ipc_service = SimpleNamespace(handle_ipc_request=AsyncMock(return_value=None))
 
-        with (
-            patch.object(webhook, "abort", side_effect=_abort_raiser),
-            patch.object(
-                webhook,
-                "request",
-                new=SimpleNamespace(get_json=AsyncMock(return_value=[])),
-            ),
-        ):
+        with patch.object(webhook, "abort", side_effect=_abort_raiser):
             with self.assertRaises(_AbortCalled) as ex:
                 await endpoint(
                     path_token="path-token",
                     ipc_provider=lambda: ipc_service,
                     logger_provider=lambda: logger,
                 )
-            self.assertEqual(ex.exception.code, 400)
-            logger.debug.assert_called_once_with("`data` is not a dict.")
+            self.assertEqual(ex.exception.code, 500)
+            logger.error.assert_called_once_with(
+                "WhatsApp webhook authenticated context missing."
+            )
 
     async def test_event_success_path(self) -> None:
         endpoint = unwrap(webhook.whatsapp_wacapi_event)
@@ -320,16 +328,12 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
                 )
             )
         )
-        with patch.object(
-            webhook,
-            "request",
-            new=SimpleNamespace(get_json=AsyncMock(return_value={"entry": []})),
-        ):
-            response = await endpoint(
-                path_token="path-token",
-                ipc_provider=lambda: ipc_service,
-                logger_provider=lambda: Mock(),
-            )
+        response = await endpoint(
+            path_token="path-token",
+            ipc_provider=lambda: ipc_service,
+            logger_provider=lambda: Mock(),
+            whatsapp_webhook_context=_event_context({"entry": []}),
+        )
 
         self.assertEqual(response, {"response": "OK"})
         ipc_service.handle_ipc_request.assert_awaited_once()
@@ -366,42 +370,34 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
                 )
             )
         )
-        with patch.object(
-            webhook,
-            "request",
-            new=SimpleNamespace(get_json=AsyncMock(return_value={"entry": []})),
-        ):
-            response = await endpoint(
-                path_token="path-token",
-                ipc_provider=lambda: ipc_service,
-                logger_provider=lambda: logger,
-            )
+        response = await endpoint(
+            path_token="path-token",
+            ipc_provider=lambda: ipc_service,
+            logger_provider=lambda: logger,
+            whatsapp_webhook_context=_event_context({"entry": []}),
+        )
         self.assertEqual(response, {"response": "OK"})
         logger.warning.assert_called_once()
 
-    async def test_event_stages_ingress_entries_when_ipc_provider_is_absent(self) -> None:
+    async def test_event_stages_ingress_entries_when_ipc_provider_is_absent(
+        self,
+    ) -> None:
         endpoint = unwrap(webhook.whatsapp_wacapi_event)
         logger = Mock()
         ingress_service = SimpleNamespace(stage=AsyncMock())
         entries = [object()]
 
-        with (
-            patch.object(
-                webhook,
-                "request",
-                new=SimpleNamespace(get_json=AsyncMock(return_value={"entry": []})),
-            ),
-            patch.object(
-                webhook,
-                "extract_whatsapp_stage_entries",
-                new=AsyncMock(return_value=entries),
-            ) as extractor,
-        ):
+        with patch.object(
+            webhook,
+            "extract_whatsapp_stage_entries",
+            new=AsyncMock(return_value=entries),
+        ) as extractor:
             response = await endpoint(
                 path_token="path-token",
                 ingress_provider=lambda: ingress_service,
                 relational_storage_gateway_provider=lambda: "rsg",
                 logger_provider=lambda: logger,
+                whatsapp_webhook_context=_event_context({"entry": []}),
             )
 
         self.assertEqual(response, {"response": "OK"})
@@ -416,11 +412,6 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
             patch.object(webhook, "abort", side_effect=_abort_raiser),
             patch.object(
                 webhook,
-                "request",
-                new=SimpleNamespace(get_json=AsyncMock(return_value={"entry": []})),
-            ),
-            patch.object(
-                webhook,
                 "extract_whatsapp_stage_entries",
                 new=AsyncMock(side_effect=RuntimeError("boom")),
             ),
@@ -431,7 +422,27 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
                     ingress_provider=lambda: SimpleNamespace(stage=AsyncMock()),
                     relational_storage_gateway_provider=lambda: "rsg",
                     logger_provider=lambda: logger,
+                    whatsapp_webhook_context=_event_context({"entry": []}),
                 )
 
         self.assertEqual(ex.exception.code, 500)
         logger.error.assert_called_once()
+
+    async def test_event_acknowledges_ignored_fields_without_dispatch(self) -> None:
+        endpoint = unwrap(webhook.whatsapp_wacapi_event)
+        ipc_service = SimpleNamespace(handle_ipc_request=AsyncMock())
+        ingress_service = SimpleNamespace(stage=AsyncMock())
+        response = await endpoint(
+            path_token="path-token",
+            ipc_provider=lambda: ipc_service,
+            ingress_provider=lambda: ingress_service,
+            logger_provider=lambda: Mock(),
+            whatsapp_webhook_context=_event_context(
+                {"object": "whatsapp_business_account", "entry": []},
+                message_change_count=0,
+            ),
+        )
+
+        self.assertEqual(response, {"response": "OK"})
+        ipc_service.handle_ipc_request.assert_not_awaited()
+        ingress_service.stage.assert_not_awaited()

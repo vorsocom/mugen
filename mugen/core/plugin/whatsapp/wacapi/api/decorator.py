@@ -2,22 +2,145 @@
 Provides webhook decorators for the WhatsApp Cloud API (WACAPI) endpoints.
 """
 
+from collections import Counter
+from dataclasses import dataclass, field
 from functools import wraps
 import hashlib
 import hmac
 import ipaddress
 import json
 import os
+import time
 from types import SimpleNamespace
+import uuid
 
 
 from quart import abort, request
+from werkzeug.exceptions import HTTPException
 
 from mugen.core import di
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.plugin.acp.service.messaging_client_profile import (
     MessagingClientProfileService,
 )
+
+_KNOWN_CHANGE_FIELDS = frozenset(
+    {
+        "account_alerts",
+        "account_review_update",
+        "account_update",
+        "business_capability_update",
+        "flows",
+        "message_template_quality_update",
+        "message_template_status_update",
+        "messages",
+        "phone_number_name_update",
+        "phone_number_quality_update",
+        "security",
+        "template_category_update",
+    }
+)
+_WEBHOOK_METRICS: dict[str, int] = {}
+
+
+@dataclass(slots=True)
+class WhatsAppWebhookContext:
+    """Authenticated and classified WhatsApp webhook request data."""
+
+    request_id: str
+    payload_fingerprint: str
+    filtered_payload: dict[str, object] = field(default_factory=dict)
+    client_profile_id: str | None = None
+    object_type: str = "unknown"
+    entry_count: int = 0
+    change_count: int = 0
+    change_fields: tuple[str, ...] = ()
+    ignored_change_fields: tuple[str, ...] = ()
+    message_change_count: int = 0
+
+
+def _new_webhook_context(raw_body: bytes) -> WhatsAppWebhookContext:
+    return WhatsAppWebhookContext(
+        request_id=uuid.uuid4().hex,
+        payload_fingerprint=hashlib.sha256(raw_body).hexdigest()[:16],
+    )
+
+
+def _safe_client_profile_id(client_profile: object) -> str | None:
+    profile_id = str(getattr(client_profile, "id", "")).strip()
+    try:
+        return str(uuid.UUID(profile_id))
+    except ValueError:
+        return None
+
+
+def _safe_change_field(value: object) -> str:
+    if isinstance(value, str) and value in _KNOWN_CHANGE_FIELDS:
+        return value
+    return "unknown"
+
+
+def _increment_webhook_metric(outcome: str, dimension: str) -> None:
+    metric_name = f"whatsapp.webhook.{outcome}.{dimension}"
+    _WEBHOOK_METRICS[metric_name] = _WEBHOOK_METRICS.get(metric_name, 0) + 1
+
+
+def webhook_metrics_snapshot() -> dict[str, int]:
+    """Return process-local low-cardinality webhook counters."""
+
+    return dict(_WEBHOOK_METRICS)
+
+
+def _log_webhook_outcome(
+    *,
+    logger: ILoggingGateway,
+    context: WhatsAppWebhookContext,
+    level: str,
+    outcome: str,
+    http_status: int,
+    reason_code: str,
+    started: float,
+) -> None:
+    elapsed_ms = max(0.0, (time.perf_counter() - started) * 1000)
+    change_fields = ",".join(context.change_fields) or "none"
+    client_profile_id = context.client_profile_id or "unresolved"
+    message = (
+        "WhatsApp webhook"
+        f" request_id={context.request_id}"
+        f" payload_fingerprint={context.payload_fingerprint}"
+        f" object_type={context.object_type}"
+        f" entry_count={context.entry_count}"
+        f" change_count={context.change_count}"
+        f" change_fields={change_fields}"
+        f" outcome={outcome}"
+        f" http_status={http_status}"
+        f" reason_code={reason_code}"
+        f" elapsed_ms={elapsed_ms:.2f}"
+        f" client_profile_id={client_profile_id}"
+    )
+    getattr(logger, level)(message)
+
+
+def _reject_webhook(
+    *,
+    logger: ILoggingGateway,
+    context: WhatsAppWebhookContext,
+    started: float,
+    http_status: int,
+    reason_code: str,
+    level: str,
+) -> None:
+    _increment_webhook_metric("rejected", reason_code)
+    _log_webhook_outcome(
+        logger=logger,
+        context=context,
+        level=level,
+        outcome="rejected",
+        http_status=http_status,
+        reason_code=reason_code,
+        started=started,
+    )
+    abort(http_status)
 
 
 def _config_provider():
@@ -42,30 +165,16 @@ def _client_profile_service() -> MessagingClientProfileService | None:
     )
 
 
-def _extract_phone_number_id(payload: object) -> str | None:
-    if not isinstance(payload, dict):
+def _extract_change_phone_number_id(change: dict[str, object]) -> str | None:
+    value = change.get("value")
+    if not isinstance(value, dict):
         return None
-    entries = payload.get("entry")
-    if not isinstance(entries, list):
+    metadata = value.get("metadata")
+    if not isinstance(metadata, dict):
         return None
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        changes = entry.get("changes")
-        if not isinstance(changes, list):
-            continue
-        for change in changes:
-            if not isinstance(change, dict):
-                continue
-            value = change.get("value")
-            if not isinstance(value, dict):
-                continue
-            metadata = value.get("metadata")
-            if not isinstance(metadata, dict):
-                continue
-            phone_number_id = metadata.get("phone_number_id")
-            if isinstance(phone_number_id, str) and phone_number_id.strip() != "":
-                return phone_number_id.strip()
+    phone_number_id = metadata.get("phone_number_id")
+    if isinstance(phone_number_id, str) and phone_number_id.strip() != "":
+        return phone_number_id.strip()
     return None
 
 
@@ -112,17 +221,34 @@ def whatsapp_request_signature_verification_required(
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
+            started = time.perf_counter()
             config: SimpleNamespace = config_provider()
             logger: ILoggingGateway = logger_provider()
+            data = await request.get_data()
+            context = _new_webhook_context(data)
+            _increment_webhook_metric("received", "total")
+
             service = _client_profile_service()
             if service is None:
-                logger.error("WhatsApp app secret not found.")
-                abort(500)
+                _reject_webhook(
+                    logger=logger,
+                    context=context,
+                    started=started,
+                    http_status=500,
+                    reason_code="profile_resolution_failed",
+                    level="error",
+                )
 
             path_token = kwargs.get("path_token")
             if not isinstance(path_token, str) or path_token.strip() == "":
-                logger.error("WhatsApp webhook path token missing.")
-                abort(400)
+                _reject_webhook(
+                    logger=logger,
+                    context=context,
+                    started=started,
+                    http_status=400,
+                    reason_code="profile_resolution_failed",
+                    level="warning",
+                )
 
             try:
                 client_profile = await service.resolve_active_by_identifier(
@@ -131,27 +257,26 @@ def whatsapp_request_signature_verification_required(
                     identifier_value=path_token,
                 )
             except (KeyError, RuntimeError, TypeError):
-                logger.error("WhatsApp app secret not found.")
-                abort(500)
+                _reject_webhook(
+                    logger=logger,
+                    context=context,
+                    started=started,
+                    http_status=500,
+                    reason_code="profile_resolution_failed",
+                    level="error",
+                )
 
             if client_profile is None:
-                logger.error("WhatsApp webhook path token verification failed.")
-                abort(401)
+                _reject_webhook(
+                    logger=logger,
+                    context=context,
+                    started=started,
+                    http_status=401,
+                    reason_code="profile_resolution_failed",
+                    level="warning",
+                )
 
-            data = await request.get_data()
-            try:
-                payload = json.loads(data.decode("utf-8"))
-            except (UnicodeDecodeError, ValueError):
-                logger.error("Could not parse WhatsApp webhook payload.")
-                abort(400)
-
-            phone_number_id = _extract_phone_number_id(payload)
-            if phone_number_id is None:
-                logger.error("WhatsApp phone_number_id missing from webhook payload.")
-                abort(400)
-            if str(client_profile.phone_number_id or "").strip() != phone_number_id:
-                logger.error("WhatsApp phone_number_id verification failed.")
-                abort(401)
+            context.client_profile_id = _safe_client_profile_id(client_profile)
 
             try:
                 runtime_config = await service.build_runtime_config(
@@ -160,14 +285,25 @@ def whatsapp_request_signature_verification_required(
                 )
                 app_secret = str(runtime_config.whatsapp.app.secret)
             except (AttributeError, KeyError, RuntimeError, TypeError):
-                logger.error("WhatsApp app secret not found.")
-                abort(500)
+                _reject_webhook(
+                    logger=logger,
+                    context=context,
+                    started=started,
+                    http_status=500,
+                    reason_code="profile_resolution_failed",
+                    level="error",
+                )
 
-            try:
-                xhubsig = request.headers["X-Hub-Signature-256"].removeprefix("sha256=")
-            except KeyError:
-                logger.error("Could not get request hash.")
-                abort(400)
+            xhubsig = request.headers.get("X-Hub-Signature-256")
+            if not isinstance(xhubsig, str) or xhubsig == "":
+                _reject_webhook(
+                    logger=logger,
+                    context=context,
+                    started=started,
+                    http_status=400,
+                    reason_code="missing_signature",
+                    level="warning",
+                )
 
             hexdigest = hmac.new(
                 app_secret.encode("utf8"),
@@ -175,11 +311,201 @@ def whatsapp_request_signature_verification_required(
                 hashlib.sha256,
             ).hexdigest()
 
-            if not hmac.compare_digest(xhubsig, hexdigest):
-                logger.error("API call unauthorized.")
-                abort(401)
+            if not hmac.compare_digest(xhubsig, f"sha256={hexdigest}"):
+                _reject_webhook(
+                    logger=logger,
+                    context=context,
+                    started=started,
+                    http_status=401,
+                    reason_code="invalid_signature",
+                    level="warning",
+                )
 
-            return await func(*args, **kwargs)
+            _increment_webhook_metric("authenticated", "total")
+            try:
+                payload = json.loads(data)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                _reject_webhook(
+                    logger=logger,
+                    context=context,
+                    started=started,
+                    http_status=400,
+                    reason_code="malformed_json",
+                    level="error",
+                )
+
+            if not isinstance(payload, dict):
+                _reject_webhook(
+                    logger=logger,
+                    context=context,
+                    started=started,
+                    http_status=400,
+                    reason_code="malformed_payload",
+                    level="error",
+                )
+
+            context.object_type = (
+                "whatsapp_business_account"
+                if payload.get("object") == "whatsapp_business_account"
+                else "unknown"
+            )
+            entries = payload.get("entry")
+            if not isinstance(entries, list):
+                _reject_webhook(
+                    logger=logger,
+                    context=context,
+                    started=started,
+                    http_status=400,
+                    reason_code="malformed_payload",
+                    level="error",
+                )
+
+            context.entry_count = len(entries)
+            expected_phone_number_id = str(
+                getattr(client_profile, "phone_number_id", "") or ""
+            ).strip()
+            filtered_entries: list[dict[str, object]] = []
+            change_fields: set[str] = set()
+            ignored_change_fields: Counter[str] = Counter()
+
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    _reject_webhook(
+                        logger=logger,
+                        context=context,
+                        started=started,
+                        http_status=400,
+                        reason_code="malformed_payload",
+                        level="error",
+                    )
+                changes = entry.get("changes")
+                if not isinstance(changes, list):
+                    _reject_webhook(
+                        logger=logger,
+                        context=context,
+                        started=started,
+                        http_status=400,
+                        reason_code="malformed_payload",
+                        level="error",
+                    )
+                filtered_changes: list[dict[str, object]] = []
+                for change in changes:
+                    if not isinstance(change, dict):
+                        _reject_webhook(
+                            logger=logger,
+                            context=context,
+                            started=started,
+                            http_status=400,
+                            reason_code="malformed_payload",
+                            level="error",
+                        )
+                    context.change_count += 1
+                    change_field = _safe_change_field(change.get("field"))
+                    change_fields.add(change_field)
+                    context.change_fields = tuple(sorted(change_fields))
+                    if change.get("field") != "messages":
+                        ignored_change_fields[change_field] += 1
+                        continue
+
+                    phone_number_id = _extract_change_phone_number_id(change)
+                    if phone_number_id is None:
+                        _reject_webhook(
+                            logger=logger,
+                            context=context,
+                            started=started,
+                            http_status=400,
+                            reason_code="missing_phone_number_id_for_messages",
+                            level="error",
+                        )
+                    if phone_number_id != expected_phone_number_id:
+                        _reject_webhook(
+                            logger=logger,
+                            context=context,
+                            started=started,
+                            http_status=401,
+                            reason_code="phone_number_id_mismatch",
+                            level="warning",
+                        )
+                    filtered_changes.append(change)
+                    context.message_change_count += 1
+
+                if filtered_changes:
+                    filtered_entry = dict(entry)
+                    filtered_entry["changes"] = filtered_changes
+                    filtered_entries.append(filtered_entry)
+
+            context.change_fields = tuple(sorted(change_fields))
+            context.ignored_change_fields = tuple(sorted(ignored_change_fields))
+            context.filtered_payload = dict(payload)
+            context.filtered_payload["entry"] = filtered_entries
+            kwargs["whatsapp_webhook_context"] = context
+
+            try:
+                result = await func(*args, **kwargs)
+            except HTTPException as exc:
+                http_status = int(exc.code or 500)
+                _increment_webhook_metric("rejected", "routing_failure")
+                _log_webhook_outcome(
+                    logger=logger,
+                    context=context,
+                    level="error",
+                    outcome="rejected",
+                    http_status=http_status,
+                    reason_code="routing_failure",
+                    started=started,
+                )
+                raise
+            except Exception:  # pylint: disable=broad-exception-caught
+                _increment_webhook_metric("rejected", "routing_failure")
+                _log_webhook_outcome(
+                    logger=logger,
+                    context=context,
+                    level="error",
+                    outcome="rejected",
+                    http_status=500,
+                    reason_code="routing_failure",
+                    started=started,
+                )
+                raise
+
+            if ignored_change_fields:
+                for change_field, count in ignored_change_fields.items():
+                    for _index in range(count):
+                        _increment_webhook_metric("ignored", change_field)
+                _log_webhook_outcome(
+                    logger=logger,
+                    context=context,
+                    level="info",
+                    outcome="ignored",
+                    http_status=200,
+                    reason_code="unsupported_change_field",
+                    started=started,
+                )
+            if context.message_change_count > 0:
+                for _index in range(context.message_change_count):
+                    _increment_webhook_metric("accepted", "messages")
+                _log_webhook_outcome(
+                    logger=logger,
+                    context=context,
+                    level="info",
+                    outcome="accepted",
+                    http_status=200,
+                    reason_code="message_event_accepted",
+                    started=started,
+                )
+            elif not ignored_change_fields:
+                _increment_webhook_metric("ignored", "none")
+                _log_webhook_outcome(
+                    logger=logger,
+                    context=context,
+                    level="info",
+                    outcome="ignored",
+                    http_status=200,
+                    reason_code="unsupported_change_field",
+                    started=started,
+                )
+
+            return result
 
         return wrapper
 

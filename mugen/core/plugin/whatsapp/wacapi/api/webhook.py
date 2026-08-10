@@ -16,6 +16,7 @@ from mugen.core.plugin.acp.service.messaging_client_profile import (
     MessagingClientProfileService,
 )
 from mugen.core.plugin.whatsapp.wacapi.api.decorator import (
+    WhatsAppWebhookContext,
     whatsapp_platform_required,
     whatsapp_request_signature_verification_required,
     whatsapp_server_ip_allow_list_required,
@@ -130,18 +131,17 @@ async def whatsapp_wacapi_event(
     ingress_provider=_ingress_provider,
     relational_storage_gateway_provider=_relational_storage_gateway_provider,
     logger_provider=_logger_provider,
+    whatsapp_webhook_context: WhatsAppWebhookContext | None = None,
 ):
     """Respond to Whatsapp Cloud API events."""
-    # Get request data.
-    # get_json was not used to make code more
-    # cosistent with signature verification decorator
-    # for testing.
     logger: ILoggingGateway = logger_provider()
+    if whatsapp_webhook_context is None:
+        logger.error("WhatsApp webhook authenticated context missing.")
+        abort(500)
 
-    data = await request.get_json()
-    if not isinstance(data, dict):
-        logger.debug("`data` is not a dict.")
-        abort(400)
+    data = whatsapp_webhook_context.filtered_payload
+    if whatsapp_webhook_context.message_change_count == 0:
+        return {"response": "OK"}
 
     ipc_svc: IIPCService | None = ipc_provider() if callable(ipc_provider) else None
     if ipc_svc is not None:
@@ -159,6 +159,8 @@ async def whatsapp_wacapi_event(
             logger.warning(
                 "WhatsApp webhook processed with IPC errors"
                 " command=whatsapp_wacapi_event"
+                f" request_id={whatsapp_webhook_context.request_id}"
+                " reason_code=routing_failure"
                 f" error_count={len(response.errors)}"
             )
         return {"response": "OK"}
@@ -177,8 +179,8 @@ async def whatsapp_wacapi_event(
         await ingress_svc.stage(entries)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.error(
-            "WhatsApp webhook staging failed "
-            f"error_type={type(exc).__name__} error={exc}"
+            "WhatsApp webhook staging failed"
+            f" reason_code=routing_failure error_type={type(exc).__name__}"
         )
         abort(500)
     return {"response": "OK"}

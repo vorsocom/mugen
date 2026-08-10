@@ -97,7 +97,9 @@ def _make_message_event(message_id: str, text: str) -> dict:
             {
                 "changes": [
                     {
+                        "field": "messages",
                         "value": {
+                            "metadata": {"phone_number_id": "123456789"},
                             "contacts": [
                                 {
                                     "wa_id": "15551230001",
@@ -112,12 +114,21 @@ def _make_message_event(message_id: str, text: str) -> dict:
                                     "text": {"body": text},
                                 }
                             ],
-                        }
+                        },
                     }
                 ]
             }
         ]
     }
+
+
+def _event_context(payload: dict) -> webhook.WhatsAppWebhookContext:
+    return webhook.WhatsAppWebhookContext(
+        request_id="request-id",
+        payload_fingerprint="0123456789abcdef",
+        filtered_payload=payload,
+        message_change_count=1,
+    )
 
 
 class _IngressRoutingStub:
@@ -158,9 +169,7 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
             mh_extensions=[],
         )
         user_service = SimpleNamespace(
-            get_known_users_list=AsyncMock(
-                return_value={"15551230001": "Known User"}
-            ),
+            get_known_users_list=AsyncMock(return_value={"15551230001": "Known User"}),
             add_known_user=AsyncMock(),
         )
         client = SimpleNamespace(
@@ -192,6 +201,7 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                 path_token="whatsapp-path-token",
                 ipc_provider=lambda: ipc_service,
                 logger_provider=lambda: logger,
+                whatsapp_webhook_context=_event_context(payload),
             )
 
         with patch.object(
@@ -203,6 +213,7 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                 path_token="whatsapp-path-token",
                 ipc_provider=lambda: ipc_service,
                 logger_provider=lambda: logger,
+                whatsapp_webhook_context=_event_context(payload),
             )
 
         self.assertEqual(first, {"response": "OK"})
@@ -234,9 +245,7 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
             mh_extensions=[],
         )
         user_service = SimpleNamespace(
-            get_known_users_list=AsyncMock(
-                return_value={"15551230001": "Known User"}
-            ),
+            get_known_users_list=AsyncMock(return_value={"15551230001": "Known User"}),
             add_known_user=AsyncMock(),
         )
 
@@ -287,6 +296,7 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                 path_token="whatsapp-path-token",
                 ipc_provider=lambda: ipc_service,
                 logger_provider=lambda: ext_logger,
+                whatsapp_webhook_context=_event_context(payload),
             )
 
         self.assertEqual(response, {"response": "OK"})
