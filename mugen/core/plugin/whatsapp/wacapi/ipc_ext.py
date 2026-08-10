@@ -174,9 +174,6 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             error = payload.get("error")
             if error not in [None, ""]:
                 self._logging_gateway.error(str(error))
-            raw = payload.get("raw")
-            if isinstance(raw, str) and raw != "":
-                self._logging_gateway.error(raw)
             return None
 
         data = payload.get("data")
@@ -447,7 +444,9 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
 
     def _resolve_event_dedup_ttl_seconds(self) -> int:
         raw_value = getattr(
-            getattr(getattr(self._config, "whatsapp", SimpleNamespace()), "webhook", None),
+            getattr(
+                getattr(self._config, "whatsapp", SimpleNamespace()), "webhook", None
+            ),
             "dedupe_ttl_seconds",
             self._default_event_dedup_ttl_seconds,
         )
@@ -554,9 +553,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         webhook_payload: dict[str, Any],
     ) -> dict[str, Any] | None:
         claims = (
-            {"phone_number_id": phone_number_id}
-            if phone_number_id is not None
-            else {}
+            {"phone_number_id": phone_number_id} if phone_number_id is not None else {}
         )
         resolution = await self._ingress_router().resolve(
             IngressRouteRequest(
@@ -587,7 +584,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             )
             self._logging_gateway.warning(
                 "Dropped WhatsApp ingress due to unresolved route "
-                f"reason_code={reason_code} phone_number_id={phone_number_id!r}."
+                f"reason_code={reason_code}."
             )
             return None
         return ingress_route
@@ -636,12 +633,16 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             self._logging_gateway.error(
                 "Failed to write WhatsApp dead-letter event."
                 f" reason_code={reason_code}"
-                f" error={type(exc).__name__}: {exc}"
+                f" error_type={type(exc).__name__}."
             )
 
     async def _is_duplicate_event(self, event_type: str, event_payload: dict) -> bool:
         dedupe_key = self._build_event_dedupe_key(event_type, event_payload)
-        event_id = event_payload.get("id") if isinstance(event_payload.get("id"), str) else None
+        event_id = (
+            event_payload.get("id")
+            if isinstance(event_payload.get("id"), str)
+            else None
+        )
         now = self._now_utc()
         try:
             await self._relational_storage_gateway.insert_one(
@@ -677,7 +678,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             self._increment_metric("whatsapp.ipc.dedupe.error")
             self._logging_gateway.error(
                 "WhatsApp dedupe lookup failed."
-                f" error={type(exc).__name__}: {exc}"
+                f" error_type={type(exc).__name__}."
             )
             return False
 
@@ -721,12 +722,12 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             if result is False:
                 self._logging_gateway.warning(
                     "WhatsApp thinking signal reported failure "
-                    f"(sender={sender} state={normalized_state})."
+                    f"state={normalized_state}."
                 )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self._logging_gateway.warning(
                 "WhatsApp thinking signal raised unexpectedly "
-                f"(sender={sender} state={state}): {exc}"
+                f"state={state} error_type={type(exc).__name__}."
             )
 
     async def _process_message_event(
@@ -762,7 +763,9 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             self._logging_gateway.error("Malformed WhatsApp message payload.")
             return
 
-        if skip_dedupe is not True and await self._is_duplicate_event("message", message):
+        if skip_dedupe is not True and await self._is_duplicate_event(
+            "message", message
+        ):
             self._logging_gateway.debug("Skip duplicate WhatsApp message event.")
             return
 
@@ -771,7 +774,8 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         except RuntimeError as exc:
             self._logging_gateway.warning(
                 "WhatsApp sender rejected. Reason: Invalid user access policy."
-                f" sender={sender} error={exc}"
+                " reason_code=invalid_user_access_policy"
+                f" error_type={type(exc).__name__}."
             )
             return
 
@@ -794,7 +798,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                     contact_name = contact_profile.get("name")
                     if isinstance(contact_name, str) and contact_name != "":
                         profile_name = contact_name
-            self._logging_gateway.debug(f"New WhatsApp contact: {sender}")
+            self._logging_gateway.debug("New WhatsApp contact discovered.")
             await self._user_service.add_known_user(
                 sender,
                 profile_name,
@@ -907,7 +911,9 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                             ingress_metadata = {
                                 "ingress_route": dict(ingress_route),
                             }
-                            flow_reply_metadata = self._extract_flow_reply_metadata(message)
+                            flow_reply_metadata = self._extract_flow_reply_metadata(
+                                message
+                            )
                             if flow_reply_metadata is not None:
                                 ingress_metadata["whatsapp_flow_reply"] = (
                                     flow_reply_metadata
@@ -1258,8 +1264,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
     ) -> IPCHandlerResult:
         handler_name = type(self).__name__
         self._logging_gateway.debug(
-            "WhatsAppWACAPIIPCExtension: Executing command:"
-            f" {request.command}"
+            "WhatsAppWACAPIIPCExtension: Executing command:" f" {request.command}"
         )
         match request.command:
             case "whatsapp_ingress_event":
@@ -1289,9 +1294,15 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             raise TypeError("WhatsApp ingress payload.event must be a dict.")
 
         provider_context = payload.get("provider_context")
-        provider_context = provider_context if isinstance(provider_context, dict) else {}
-        ingress_route = self._normalize_ingress_route(provider_context.get("ingress_route"))
-        phone_number_id = self._coerce_nonempty_string(provider_context.get("phone_number_id"))
+        provider_context = (
+            provider_context if isinstance(provider_context, dict) else {}
+        )
+        ingress_route = self._normalize_ingress_route(
+            provider_context.get("ingress_route")
+        )
+        phone_number_id = self._coerce_nonempty_string(
+            provider_context.get("phone_number_id")
+        )
         if (
             ingress_route.get("client_profile_id") in [None, ""]
             and phone_number_id is not None
@@ -1367,6 +1378,10 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                 for change in changes:
                     if not isinstance(change, dict):
                         continue
+                    change_field = change.get("field")
+                    if change_field is not None and change_field != "messages":
+                        found_event_payload = True
+                        continue
 
                     event_value = change.get("value")
                     if not isinstance(event_value, dict):
@@ -1423,7 +1438,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             self._increment_metric("whatsapp.ipc.event.processed_failed")
             self._logging_gateway.error(
                 "Unhandled WhatsApp event processing failure."
-                f" error={type(exc).__name__}: {exc}"
+                f" error_type={type(exc).__name__}."
             )
             await self._record_dead_letter(
                 event_type="webhook",
