@@ -238,13 +238,12 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         attempt: int,
         correlation_id: str,
         method: str,
-        path: str,
-        reason: str,
+        reason_code: str,
     ) -> None:
         delay_seconds = self._retry_backoff_seconds * (2**attempt)
         self._logging_gateway.warning(
-            f"[cid={correlation_id}] Retrying Graph API call for {method} {path} in "
-            f"{delay_seconds:.2f}s ({reason}) attempt={attempt + 1}."
+            f"[cid={correlation_id}] Retrying Graph API call for {method} in "
+            f"{delay_seconds:.2f}s reason_code={reason_code} attempt={attempt + 1}."
         )
         await asyncio.sleep(delay_seconds)
 
@@ -285,9 +284,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             return True
 
         status = (
-            probe_response.get("status")
-            if isinstance(probe_response, dict)
-            else None
+            probe_response.get("status") if isinstance(probe_response, dict) else None
         )
         error = (
             probe_response.get("error")
@@ -332,21 +329,21 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         return await self._call_api(
             media_id,
             method=HTTPMethod.DELETE,
-            correlation_id=media_id,
+            correlation_id=self._new_correlation_id(),
         )
 
     async def download_media(self, media_url: str, mimetype: str) -> str | None:
         return await self._download_file_http(
             media_url,
             mimetype,
-            correlation_id=media_url,
+            correlation_id=self._new_correlation_id(),
         )
 
     async def retrieve_media_url(self, media_id: str) -> dict | None:
         return await self._call_api(
             media_id,
             method=HTTPMethod.GET,
-            correlation_id=media_id,
+            correlation_id=self._new_correlation_id(),
         )
 
     async def send_audio_message(
@@ -627,7 +624,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self._logging_gateway.warning(
                 "Failed to emit WhatsApp thinking signal "
-                f"(recipient={recipient} state={normalized_state}): {exc}"
+                f"state={normalized_state} error_type={type(exc).__name__}."
             )
             return False
 
@@ -635,7 +632,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         if not ok:
             self._logging_gateway.warning(
                 "WhatsApp thinking signal did not succeed "
-                f"(recipient={recipient} state={normalized_state})."
+                f"state={normalized_state}."
             )
             return False
 
@@ -692,7 +689,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         return await self._call_api(
             self._api_media_path,
             files_factory=files_factory,
-            correlation_id=file_name,
+            correlation_id=self._new_correlation_id(),
         )
 
     async def _call_api(
@@ -763,7 +760,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
                 if response.status >= 200 and response.status < 300:
                     self._logging_gateway.debug(
                         f"[cid={resolved_correlation_id}] Graph API success "
-                        f"{method} {path} status={response.status} "
+                        f"method={method} status={response.status} "
                         f"latency_ms={latency_ms:.2f} attempt={attempt + 1}."
                     )
                     return self._build_api_response(
@@ -773,35 +770,30 @@ class DefaultWhatsAppClient(IWhatsAppClient):
                         raw=response_text,
                     )
 
-                error = (
-                    f"Graph API call failed ({response.status}) for {method} {path}."
-                )
+                error = f"Graph API call failed ({response.status}) for {method}."
                 if (
                     self._is_retryable_status(response.status)
                     and attempt < self._max_api_retries
                 ):
                     self._logging_gateway.warning(
                         f"[cid={resolved_correlation_id}] Graph API retryable status "
-                        f"for {method} {path} status={response.status} "
+                        f"method={method} status={response.status} "
                         f"latency_ms={latency_ms:.2f} attempt={attempt + 1}."
                     )
                     await self._wait_before_retry(
                         attempt=attempt,
                         correlation_id=resolved_correlation_id,
                         method=str(method),
-                        path=path,
-                        reason=f"status={response.status}",
+                        reason_code="retryable_http_status",
                     )
                     continue
 
                 self._logging_gateway.debug(
                     f"[cid={resolved_correlation_id}] Graph API terminal failure "
-                    f"{method} {path} status={response.status} "
+                    f"method={method} status={response.status} "
                     f"latency_ms={latency_ms:.2f} attempt={attempt + 1}."
                 )
                 self._logging_gateway.error(error)
-                if response_text != "":
-                    self._logging_gateway.error(response_text)
                 return self._build_api_response(
                     ok=False,
                     status=response.status,
@@ -815,8 +807,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
                         attempt=attempt,
                         correlation_id=resolved_correlation_id,
                         method=str(method),
-                        path=path,
-                        reason=str(e),
+                        reason_code="transport_error",
                     )
                     continue
 
@@ -824,10 +815,13 @@ class DefaultWhatsAppClient(IWhatsAppClient):
                 latency_ms = (time.perf_counter() - started) * 1000
                 self._logging_gateway.debug(
                     f"[cid={resolved_correlation_id}] Graph API transport failure "
-                    f"{method} {path} latency_ms={latency_ms:.2f} "
+                    f"method={method} latency_ms={latency_ms:.2f} "
                     f"attempt={attempt + 1}."
                 )
-                self._logging_gateway.error(error)
+                self._logging_gateway.error(
+                    "Graph API transport failure"
+                    f" error_type={type(e).__name__}."
+                )
                 return self._build_api_response(ok=False, status=None, error=error)
             finally:
                 for resource in resources_to_close:

@@ -48,7 +48,9 @@ def _nonempty_text(value: object) -> str | None:
 
 
 def _json_hash(payload: object) -> str:
-    normalized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    normalized = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
@@ -104,7 +106,7 @@ async def _resolve_ingress_route(
         logging_gateway.warning(
             "Shared ingress route resolution failed "
             f"(platform={platform} reason_code={exc.reason_code} "
-            f"identifier_type={identifier_type} identifier_value={identifier_value!r})."
+            f"identifier_type={identifier_type})."
         )
         return None
 
@@ -122,8 +124,7 @@ def _resolved_client_profile_id(
         return client_profile_id
     logging_gateway.warning(
         "Dropping staged ingress event without resolved client profile "
-        f"(platform={platform} identifier_type={identifier_type} "
-        f"identifier_value={identifier_value!r})."
+        f"(platform={platform} identifier_type={identifier_type})."
     )
     return None
 
@@ -166,7 +167,9 @@ async def extract_line_stage_entries(
         if event_id is None and isinstance(message, dict):
             event_id = _nonempty_text(message.get("id"))
         source = event.get("source")
-        sender = _nonempty_text(source.get("userId")) if isinstance(source, dict) else None
+        sender = (
+            _nonempty_text(source.get("userId")) if isinstance(source, dict) else None
+        )
         entries.append(
             MessagingIngressStageEntry(
                 ipc_command="line_ingress_event",
@@ -229,7 +232,11 @@ async def extract_telegram_stage_entries(
     message = payload.get("message")
     if isinstance(message, dict):
         chat = message.get("chat")
-        room_id = str(chat.get("id")) if isinstance(chat, dict) and chat.get("id") is not None else None
+        room_id = (
+            str(chat.get("id"))
+            if isinstance(chat, dict) and chat.get("id") is not None
+            else None
+        )
         sender = None
         if isinstance(message.get("from"), dict):
             sender_value = message["from"].get("id")
@@ -265,8 +272,14 @@ async def extract_telegram_stage_entries(
     callback_query = payload.get("callback_query")
     if isinstance(callback_query, dict):
         callback_message = callback_query.get("message")
-        chat = callback_message.get("chat") if isinstance(callback_message, dict) else None
-        room_id = str(chat.get("id")) if isinstance(chat, dict) and chat.get("id") is not None else None
+        chat = (
+            callback_message.get("chat") if isinstance(callback_message, dict) else None
+        )
+        room_id = (
+            str(chat.get("id"))
+            if isinstance(chat, dict) and chat.get("id") is not None
+            else None
+        )
         sender = None
         if isinstance(callback_query.get("from"), dict):
             sender_value = callback_query["from"].get("id")
@@ -282,7 +295,9 @@ async def extract_telegram_stage_entries(
                     source_mode="webhook",
                     event_type="callback_query",
                     event_id=callback_id,
-                    dedupe_key=_dedupe_key("callback_query", callback_id, callback_query),
+                    dedupe_key=_dedupe_key(
+                        "callback_query", callback_id, callback_query
+                    ),
                     identifier_type="path_token",
                     identifier_value=path_token,
                     room_id=room_id,
@@ -382,6 +397,9 @@ async def extract_whatsapp_stage_entries(
         for change in changes:
             if not isinstance(change, dict):
                 continue
+            change_field = change.get("field")
+            if change_field is not None and change_field != "messages":
+                continue
             event_value = change.get("value")
             if not isinstance(event_value, dict):
                 continue
@@ -441,7 +459,10 @@ async def extract_whatsapp_stage_entries(
                                 identifier_value=phone_number_id,
                                 room_id=sender,
                                 sender=sender,
-                                payload={"event_value": event_value, "message": message},
+                                payload={
+                                    "event_value": event_value,
+                                    "message": message,
+                                },
                                 provider_context={
                                     "ingress_route": ingress_route or {},
                                     "client_profile_id": str(client_profile_id),

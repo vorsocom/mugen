@@ -59,12 +59,68 @@ Webhook ingress is guarded by all of:
 3. Path token resolution through active ACP WhatsApp client profiles.
 4. Subscription verification (GET) using the matched client profile verify
    token.
-5. Request signature verification (POST) using the matched client profile app
-   secret.
-6. POST payload `phone_number_id` must match the client profile selected by the
-   webhook path token.
+5. POST raw-body authentication using `X-Hub-Signature-256` and the matched
+   client profile app secret, before JSON parsing or event classification.
+6. Per-change routing validation after authentication. Every `messages` change
+   must contain `value.metadata.phone_number_id`, and that id must match the
+   client profile selected by the webhook path token.
 
 Any verification failure is rejected before IPC dispatch.
+
+### Supported webhook fields
+
+The customer-message ingress path supports only `change.field="messages"`:
+
+- inbound customer messages are staged as message events;
+- sent, delivered, read, and failed delivery updates are staged as status
+  events;
+- every `messages` change requires matching phone-number metadata, including
+  when one webhook contains multiple entries or changes.
+
+Authenticated non-message fields are WABA-level events and do not use phone
+number routing. Fields such as `message_template_status_update`,
+`account_update`, and `phone_number_quality_update` are acknowledged with HTTP
+200 and intentionally ignored. They are never passed to customer-message IPC
+or ingress staging, and no default phone number is used. A future supported
+WABA-level field must have its own handler and resolver instead of reusing the
+customer-message route.
+
+Deployments that process only customer conversations should subscribe the Meta
+app to the `messages` webhook field. Subscribe to WABA-level fields only when a
+separate consumer is available; until then, authenticated deliveries are still
+safely acknowledged to prevent repeated retries.
+
+### Webhook diagnostics
+
+Webhook logs contain only a generated request id, a truncated SHA-256 payload
+fingerprint, normalized object type, entry/change counts, normalized distinct
+change fields, outcome, HTTP status, safe reason code, elapsed milliseconds,
+and the resolved non-secret client-profile id. Identical raw request bodies
+produce the same fingerprint, so operators can correlate Meta retries without
+storing or logging the payload. Different bodies produce different
+fingerprints.
+
+Reason codes include:
+
+- `missing_signature` and `invalid_signature` for authentication failures;
+- `profile_resolution_failed` when the path-selected profile or secret cannot
+  be resolved;
+- `malformed_json` and `malformed_payload` for authenticated invalid input;
+- `missing_phone_number_id_for_messages` and `phone_number_id_mismatch` for
+  authenticated message-routing failures;
+- `unsupported_change_field` for authenticated WABA-level changes acknowledged
+  without dispatch;
+- `message_event_accepted` for successfully dispatched message/status changes;
+- `routing_failure` for sanitized downstream dispatch failures.
+
+Process-local low-cardinality counters track received and authenticated
+requests plus rejected, ignored, and accepted changes. Rejections are grouped
+only by reason code; ignored and accepted changes are grouped by normalized
+change field. Unknown field names collapse to `unknown`.
+
+Logs never contain raw webhook bodies or Graph responses, message or media
+content, sender/recipient phone numbers, phone-number ids, path tokens,
+signatures, app secrets, access tokens, or customer template parameters.
 
 ## Flow Data Endpoint Contract
 

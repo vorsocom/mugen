@@ -31,7 +31,9 @@ def _signal_config() -> SimpleNamespace:
 class TestMugenServiceMessagingIngressExtractors(unittest.IsolatedAsyncioTestCase):
     """Covers normalization helpers and platform extractor branches."""
 
-    async def test_resolve_ingress_route_handles_none_success_and_fail_closed(self) -> None:
+    async def test_resolve_ingress_route_handles_none_success_and_fail_closed(
+        self,
+    ) -> None:
         logger = Mock()
 
         self.assertIsNone(
@@ -319,7 +321,7 @@ class TestMugenServiceMessagingIngressExtractors(unittest.IsolatedAsyncioTestCas
                                             {
                                                 "id": "status-1",
                                                 "recipient_id": "recipient-1",
-                                            }
+                                            },
                                         ],
                                     }
                                 },
@@ -481,6 +483,46 @@ class TestMugenServiceMessagingIngressExtractors(unittest.IsolatedAsyncioTestCas
             ["status:wamid-2:sent", "status:wamid-2:read"],
         )
 
+    async def test_whatsapp_extractor_skips_non_message_change_fields(self) -> None:
+        resolver = AsyncMock(
+            return_value={"client_profile_id": str(_CLIENT_PROFILE_ID)}
+        )
+        with patch.object(
+            extractors,
+            "_resolve_ingress_route",
+            new=resolver,
+        ):
+            entries = await extractors.extract_whatsapp_stage_entries(
+                path_token="whatsapp-path",
+                payload={
+                    "entry": [
+                        {
+                            "changes": [
+                                {
+                                    "field": "message_template_status_update",
+                                    "value": {"event": "APPROVED"},
+                                },
+                                {
+                                    "field": "messages",
+                                    "value": {
+                                        "metadata": {"phone_number_id": "phone-1"},
+                                        "statuses": [
+                                            {"id": "wamid-1", "status": "failed"}
+                                        ],
+                                    },
+                                },
+                            ]
+                        }
+                    ]
+                },
+                relational_storage_gateway=object(),
+                logging_gateway=Mock(),
+            )
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].event.event_type, "status")
+        resolver.assert_awaited_once()
+
     def test_whatsapp_status_dedupe_falls_back_for_invalid_identity(self) -> None:
         invalid_statuses = (
             {"status": "sent"},
@@ -544,13 +586,17 @@ class TestMugenServiceMessagingIngressExtractors(unittest.IsolatedAsyncioTestCas
         self.assertIsNone(entries[1].event.room_id)
 
     async def test_signal_helper_paths_and_signal_extractor(self) -> None:
-        self.assertIsNone(extractors._nonempty_text(1))  # pylint: disable=protected-access
+        self.assertIsNone(
+            extractors._nonempty_text(1)
+        )  # pylint: disable=protected-access
         self.assertEqual(
             extractors._nonempty_text(" hi "),  # pylint: disable=protected-access
             "hi",
         )
         self.assertEqual(
-            extractors._dedupe_key("message", " evt-1 ", {"a": 1}),  # pylint: disable=protected-access
+            extractors._dedupe_key(
+                "message", " evt-1 ", {"a": 1}
+            ),  # pylint: disable=protected-access
             "message:evt-1",
         )
         self.assertTrue(
@@ -571,20 +617,14 @@ class TestMugenServiceMessagingIngressExtractors(unittest.IsolatedAsyncioTestCas
             signal_ingress_mod.signal_sender({"sourceUuid": "uuid-1"}),
             "uuid-1",
         )
-        self.assertIsNone(
-            signal_ingress_mod.signal_event_id({"timestamp": True})
-        )
-        self.assertIsNone(
-            signal_ingress_mod.signal_event_id({"timestamp": "bad"})
-        )
+        self.assertIsNone(signal_ingress_mod.signal_event_id({"timestamp": True}))
+        self.assertIsNone(signal_ingress_mod.signal_event_id({"timestamp": "bad"}))
         self.assertEqual(
             signal_ingress_mod.signal_event_id({"timestamp": 5}),
             "5",
         )
         self.assertEqual(
-            signal_ingress_mod.signal_event_id(
-                {"timestamp": 6, "source": "+15550002"}
-            ),
+            signal_ingress_mod.signal_event_id({"timestamp": 6, "source": "+15550002"}),
             "+15550002:6",
         )
         self.assertEqual(
@@ -663,7 +703,9 @@ class TestMugenServiceMessagingIngressExtractors(unittest.IsolatedAsyncioTestCas
             )
         )
         self.assertIsNone(normalize_client_profile_id("not-a-uuid"))
-        self.assertIsNone(client_profile_id_from_ingress_route({"client_profile_id": "bad"}))
+        self.assertIsNone(
+            client_profile_id_from_ingress_route({"client_profile_id": "bad"})
+        )
         self.assertIsNone(get_active_client_profile_id())
         with client_profile_scope(_CLIENT_PROFILE_ID):
             self.assertEqual(get_active_client_profile_id(), _CLIENT_PROFILE_ID)

@@ -226,9 +226,7 @@ def _new_extension(
     return WhatsAppWACAPIIPCExtension(
         config=config,
         logging_gateway=logging_gateway or Mock(),
-        relational_storage_gateway=(
-            relational_storage_gateway or _MemoryRelational()
-        ),
+        relational_storage_gateway=(relational_storage_gateway or _MemoryRelational()),
         messaging_service=messaging_service or _make_messaging_service(),
         user_service=user_service or _make_user_service(),
         whatsapp_client=client or _make_client(),
@@ -261,7 +259,9 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         )
 
         with (
-            patch.object(ext, "_whatsapp_ingress_event", new=AsyncMock()) as ingress_handler,
+            patch.object(
+                ext, "_whatsapp_ingress_event", new=AsyncMock()
+            ) as ingress_handler,
             patch.object(ext, "_wacapi_event", new=AsyncMock()) as event_handler,
         ):
             handled_ingress = await ext.process_ipc_command(
@@ -303,7 +303,10 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             )
 
         ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
-            return_value={"client_profile_id": _CLIENT_PROFILE_ID, "tenant_id": "tenant-a"}
+            return_value={
+                "client_profile_id": _CLIENT_PROFILE_ID,
+                "tenant_id": "tenant-a",
+            }
         )
         ext._process_message_event = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
         ext._process_status_event = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
@@ -316,7 +319,10 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                         "event_value": {"messages": [{"id": "wamid-1"}]},
                         "message": {"id": "wamid-1", "from": "15550001"},
                     },
-                    "provider_context": {"phone_number_id": "phone-1", "ingress_route": {}},
+                    "provider_context": {
+                        "phone_number_id": "phone-1",
+                        "ingress_route": {},
+                    },
                 },
                 command="whatsapp_ingress_event",
             )
@@ -330,7 +336,10 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                     "payload": {
                         "status": {"id": "status-1", "recipient_id": "15550002"},
                     },
-                    "provider_context": {"phone_number_id": "phone-1", "ingress_route": {}},
+                    "provider_context": {
+                        "phone_number_id": "phone-1",
+                        "ingress_route": {},
+                    },
                 },
                 command="whatsapp_ingress_event",
             )
@@ -344,7 +353,10 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 {
                     "client_profile_id": str(_CLIENT_PROFILE_ID),
                     "payload": {"event_value": {}},
-                    "provider_context": {"phone_number_id": "phone-1", "ingress_route": {}},
+                    "provider_context": {
+                        "phone_number_id": "phone-1",
+                        "ingress_route": {},
+                    },
                 },
                 command="whatsapp_ingress_event",
             )
@@ -363,7 +375,10 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                     "payload": {
                         "event_value": {},
                     },
-                    "provider_context": {"phone_number_id": "phone-1", "ingress_route": {}},
+                    "provider_context": {
+                        "phone_number_id": "phone-1",
+                        "ingress_route": {},
+                    },
                 },
                 command="whatsapp_ingress_event",
             )
@@ -453,7 +468,10 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         logging_gateway.error.assert_any_call("Missing payload for ctx.")
         logging_gateway.error.assert_any_call("ctx failed.")
         logging_gateway.error.assert_any_call("boom")
-        logging_gateway.error.assert_any_call('{"error":"boom"}')
+        self.assertNotIn(
+            '{"error":"boom"}',
+            [call.args[0] for call in logging_gateway.error.call_args_list],
+        )
         logging_gateway.error.assert_any_call("Unexpected payload type for ctx.")
 
     def test_extract_user_text_covers_fallback_and_nfm_paths(self) -> None:
@@ -635,7 +653,9 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         messaging_service.handle_text_message.assert_not_awaited()
         user_service.add_known_user.assert_not_awaited()
 
-    async def test_user_access_policy_denies_without_reply_when_no_message(self) -> None:
+    async def test_user_access_policy_denies_without_reply_when_no_message(
+        self,
+    ) -> None:
         client = _make_client()
         client.user_access_policy.return_value = MessagingClientUserAccessPolicy(
             mode="allow-only",
@@ -708,15 +728,21 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         client.send_text_message.assert_not_awaited()
         self.assertIn(
             "Invalid user access policy",
-            ext._logging_gateway.warning.call_args.args[0],  # pylint: disable=protected-access
+            ext._logging_gateway.warning.call_args.args[
+                0
+            ],  # pylint: disable=protected-access
         )
 
-    async def test_resolve_user_access_policy_handles_none_and_invalid_results(self) -> None:
+    async def test_resolve_user_access_policy_handles_none_and_invalid_results(
+        self,
+    ) -> None:
         client = _make_client()
         client.user_access_policy.return_value = None
         ext = _new_extension(config=_make_config(beta_active=False), client=client)
 
-        policy = await ext._resolve_user_access_policy()  # pylint: disable=protected-access
+        policy = (
+            await ext._resolve_user_access_policy()
+        )  # pylint: disable=protected-access
         self.assertEqual(policy, MessagingClientUserAccessPolicy())
 
         client.user_access_policy.return_value = "invalid"
@@ -840,7 +866,10 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             call.args[0] for call in logging_gateway.warning.call_args_list
         ]
         self.assertTrue(
-            any("thinking signal raised unexpectedly" in message for message in warning_messages)
+            any(
+                "thinking signal raised unexpectedly" in message
+                for message in warning_messages
+            )
         )
 
     async def test_processing_signal_false_result_logs_warning(self) -> None:
@@ -870,7 +899,10 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             call.args[0] for call in logging_gateway.warning.call_args_list
         ]
         self.assertTrue(
-            any("thinking signal reported failure" in message for message in warning_messages)
+            any(
+                "thinking signal reported failure" in message
+                for message in warning_messages
+            )
         )
 
     async def test_processing_signal_stop_emits_when_handler_raises(self) -> None:
@@ -2103,13 +2135,21 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             relational_storage_gateway=relational,
         )
         self.assertFalse(
-            await ext._is_duplicate_event("message", {"id": "evt-1"})  # pylint: disable=protected-access
+            await ext._is_duplicate_event(
+                "message", {"id": "evt-1"}
+            )  # pylint: disable=protected-access
         )
         self.assertTrue(
-            await ext._is_duplicate_event("message", {"id": "evt-1"})  # pylint: disable=protected-access
+            await ext._is_duplicate_event(
+                "message", {"id": "evt-1"}
+            )  # pylint: disable=protected-access
         )
-        self.assertEqual(ext._metrics["whatsapp.ipc.dedupe.miss"], 1)  # pylint: disable=protected-access
-        self.assertEqual(ext._metrics["whatsapp.ipc.dedupe.hit"], 1)  # pylint: disable=protected-access
+        self.assertEqual(
+            ext._metrics["whatsapp.ipc.dedupe.miss"], 1
+        )  # pylint: disable=protected-access
+        self.assertEqual(
+            ext._metrics["whatsapp.ipc.dedupe.hit"], 1
+        )  # pylint: disable=protected-access
 
     async def test_resolve_event_dedupe_ttl_seconds_fallback_paths(self) -> None:
         cfg_invalid = _make_config(beta_active=False)
@@ -2150,7 +2190,9 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             error_message="boom",
         )
         self.assertEqual(
-            ext._metrics["whatsapp.ipc.dead_letter.write_failure"],  # pylint: disable=protected-access
+            ext._metrics[
+                "whatsapp.ipc.dead_letter.write_failure"
+            ],  # pylint: disable=protected-access
             1,
         )
         logger.error.assert_called_once()
@@ -2170,9 +2212,13 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             relational_storage_gateway=_UpdateFailGateway(),
         )
         self.assertTrue(
-            await ext._is_duplicate_event("message", {"id": "evt-1"})  # pylint: disable=protected-access
+            await ext._is_duplicate_event(
+                "message", {"id": "evt-1"}
+            )  # pylint: disable=protected-access
         )
-        self.assertEqual(ext._metrics["whatsapp.ipc.dedupe.hit"], 1)  # pylint: disable=protected-access
+        self.assertEqual(
+            ext._metrics["whatsapp.ipc.dedupe.hit"], 1
+        )  # pylint: disable=protected-access
 
     async def test_duplicate_event_storage_error_is_recorded(self) -> None:
         class _InsertFailGateway:
@@ -2189,10 +2235,14 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             relational_storage_gateway=_InsertFailGateway(),
         )
         self.assertFalse(
-            await ext._is_duplicate_event("message", {"id": "evt-1"})  # pylint: disable=protected-access
+            await ext._is_duplicate_event(
+                "message", {"id": "evt-1"}
+            )  # pylint: disable=protected-access
         )
         self.assertEqual(
-            ext._metrics["whatsapp.ipc.dedupe.error"],  # pylint: disable=protected-access
+            ext._metrics[
+                "whatsapp.ipc.dedupe.error"
+            ],  # pylint: disable=protected-access
             1,
         )
         logger.error.assert_called_once()
@@ -2213,7 +2263,9 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertEqual(
-            ext._metrics["whatsapp.ipc.event.malformed"],  # pylint: disable=protected-access
+            ext._metrics[
+                "whatsapp.ipc.event.malformed"
+            ],  # pylint: disable=protected-access
             1,
         )
         self.assertEqual(relational.dead_letters[0]["reason_code"], "malformed_payload")
@@ -2244,7 +2296,9 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             await ext._wacapi_event(payload)  # pylint: disable=protected-access
 
         self.assertEqual(
-            ext._metrics["whatsapp.ipc.event.processed_failed"],  # pylint: disable=protected-access
+            ext._metrics[
+                "whatsapp.ipc.event.processed_failed"
+            ],  # pylint: disable=protected-access
             1,
         )
         self.assertEqual(
@@ -2253,7 +2307,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         )
         logger.error.assert_any_call(
             "Unhandled WhatsApp event processing failure."
-            " error=RuntimeError: boom"
+            " error_type=RuntimeError."
         )
 
     def test_get_contact_for_sender_edge_paths(self) -> None:
@@ -2482,13 +2536,15 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
 
     async def test_event_with_no_messages_or_statuses_still_acknowledges(self) -> None:
         ext = _new_extension(config=_make_config(beta_active=False))
+        ext._resolve_ingress_route = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
         payload = _make_request(
             {
                 "entry": [
                     {
                         "changes": [
                             {
-                                "value": {},
+                                "field": "message_template_status_update",
+                                "value": {"event": "APPROVED"},
                             }
                         ]
                     }
@@ -2497,6 +2553,13 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         )
 
         await ext._wacapi_event(payload)  # pylint: disable=protected-access
+        ext._resolve_ingress_route.assert_not_awaited()
+        self.assertEqual(
+            ext._metrics.get(
+                "whatsapp.ipc.event.processed_ok"
+            ),  # pylint: disable=protected-access
+            1,
+        )
 
     async def test_unknown_message_type_delegates_to_message_handlers(self) -> None:
         ext = _new_extension(config=_make_config(beta_active=False))
@@ -2817,7 +2880,9 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             logging_gateway=logging_gateway,
         )
 
-        await ext._wacapi_event(_make_request({"entry": []}))  # pylint: disable=protected-access
+        await ext._wacapi_event(
+            _make_request({"entry": []})
+        )  # pylint: disable=protected-access
 
         logging_gateway.error.assert_any_call("Malformed WhatsApp event payload.")
 
@@ -2894,7 +2959,9 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 "scope": kwargs["scope"],
             },
         )
-        self.assertEqual(kwargs["scope"].tenant_id, "00000000-0000-0000-0000-000000000000")
+        self.assertEqual(
+            kwargs["scope"].tenant_id, "00000000-0000-0000-0000-000000000000"
+        )
         self.assertEqual(kwargs["scope"].platform, "whatsapp")
         self.assertEqual(kwargs["scope"].channel_id, "whatsapp")
         self.assertEqual(kwargs["scope"].room_id, "15550005")
@@ -2960,7 +3027,9 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 ],
             )
 
-            ext._active_ingress_route = {"tenant_id": "tenant-2"}  # pylint: disable=protected-access
+            ext._active_ingress_route = {
+                "tenant_id": "tenant-2"
+            }  # pylint: disable=protected-access
             await ext._call_message_handlers(  # pylint: disable=protected-access
                 message={"id": "m5"},
                 message_type="custom",
@@ -2998,11 +3067,17 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             "DefaultIngressRoutingService",
             return_value=sentinel_router,
         ) as router_ctor:
-            self.assertIs(ext._ingress_router(), sentinel_router)  # pylint: disable=protected-access
-            self.assertIs(ext._ingress_router(), sentinel_router)  # pylint: disable=protected-access
+            self.assertIs(
+                ext._ingress_router(), sentinel_router
+            )  # pylint: disable=protected-access
+            self.assertIs(
+                ext._ingress_router(), sentinel_router
+            )  # pylint: disable=protected-access
             router_ctor.assert_called_once()
 
-        self.assertIsNone(ext._coerce_nonempty_string(123))  # pylint: disable=protected-access
+        self.assertIsNone(
+            ext._coerce_nonempty_string(123)
+        )  # pylint: disable=protected-access
         self.assertEqual(  # pylint: disable=protected-access
             ext._compose_message_context(
                 ingress_route={"tenant_slug": "tenant-a"},
@@ -3030,7 +3105,9 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             "pnid-1",
         )
 
-    async def test_missing_binding_ingress_route_is_dead_lettered_and_dropped(self) -> None:
+    async def test_missing_binding_ingress_route_is_dead_lettered_and_dropped(
+        self,
+    ) -> None:
         class _FallbackRouter:
             async def resolve(self, request):  # noqa: ARG002
                 return IngressRouteResolution(
@@ -3063,7 +3140,9 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         await ext._wacapi_event(payload)  # pylint: disable=protected-access
         messaging.handle_text_message.assert_not_awaited()
         self.assertEqual(
-            ext._metrics.get("whatsapp.ipc.route.unresolved"),  # pylint: disable=protected-access
+            ext._metrics.get(
+                "whatsapp.ipc.route.unresolved"
+            ),  # pylint: disable=protected-access
             1,
         )
         self.assertEqual(len(relational.dead_letters), 1)
@@ -3071,7 +3150,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(relational.dead_letters[0]["error_message"], "missing_binding")
         logger.warning.assert_any_call(
             "Dropped WhatsApp ingress due to unresolved route "
-            "reason_code=missing_binding phone_number_id='pnid-1'."
+            "reason_code=missing_binding."
         )
 
         class _UnresolvedWithDetailRouter:
@@ -3094,7 +3173,11 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn(
             "detail",
-            str(ext_with_detail._relational_storage_gateway.dead_letters[0]["error_message"]),  # pylint: disable=protected-access
+            str(
+                ext_with_detail._relational_storage_gateway.dead_letters[0][
+                    "error_message"
+                ]
+            ),  # pylint: disable=protected-access
         )
 
     async def test_event_skips_processing_when_ingress_route_resolution_returns_none(
@@ -3122,7 +3205,9 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
 
         messaging.handle_text_message.assert_not_awaited()
 
-    async def test_process_message_and_status_normalize_explicit_ingress_route(self) -> None:
+    async def test_process_message_and_status_normalize_explicit_ingress_route(
+        self,
+    ) -> None:
         ext = _new_extension(config=_make_config(beta_active=False))
         with (
             patch.object(ext, "_is_duplicate_event", new=AsyncMock(return_value=True)),
