@@ -223,6 +223,7 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
                 platform_key="whatsapp",
                 value={
                     "app": {"id": "app-id"},
+                    "business": {"waba_id": "waba-1"},
                     "user_access": {
                         "mode": "allow-all-except",
                         "users": ["15550000001"],
@@ -232,6 +233,7 @@ class TestMessagingClientProfileService(unittest.IsolatedAsyncioTestCase):
             ),
             {
                 "app": {"id": "app-id"},
+                "business": {"waba_id": "waba-1"},
                 "user_access": {
                     "mode": "allow-all-except",
                     "users": ["15550000001"],

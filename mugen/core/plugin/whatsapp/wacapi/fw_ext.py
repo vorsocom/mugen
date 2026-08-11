@@ -10,6 +10,9 @@ from mugen.core import di
 from mugen.core.contract.extension.fw import IFWExtension
 from mugen.core.contract.gateway.storage.rdbms import IRelationalStorageGateway
 from mugen.core.plugin.whatsapp.wacapi.flow_data import WhatsAppFlowDataRegistry
+from mugen.core.plugin.whatsapp.wacapi.webhook_change import (
+    WhatsAppWebhookChangeRegistry,
+)
 
 
 def _config_provider():
@@ -42,6 +45,13 @@ class WACAPIFWExtension(IFWExtension):  # pylint: disable=too-few-public-methods
             di.container.register_ext_service(
                 di.EXT_SERVICE_WHATSAPP_FLOW_DATA_REGISTRY,
                 WhatsAppFlowDataRegistry(),
+            )
+        if not di.container.has_ext_service(
+            di.EXT_SERVICE_WHATSAPP_WEBHOOK_CHANGE_REGISTRY
+        ):
+            di.container.register_ext_service(
+                di.EXT_SERVICE_WHATSAPP_WEBHOOK_CHANGE_REGISTRY,
+                WhatsAppWebhookChangeRegistry(),
             )
 
         # Import endpoints now that services are available.

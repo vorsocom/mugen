@@ -58,10 +58,15 @@ def _make_client_profile(
     )
 
 
-def _make_runtime_config(*, app_secret: str = "app-secret") -> SimpleNamespace:
+def _make_runtime_config(
+    *,
+    app_secret: str = "app-secret",
+    waba_id: str | None = None,
+) -> SimpleNamespace:
     return SimpleNamespace(
         whatsapp=SimpleNamespace(
             app=SimpleNamespace(secret=app_secret),
+            business=SimpleNamespace(waba_id=waba_id),
         )
     )
 
@@ -155,6 +160,90 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
             ],
             1,
         )
+
+    def test_dispatch_metric_and_waba_helpers_cover_safe_outcomes(self) -> None:
+        self.assertIsNone(whatsapp_decorator._configured_waba_id(SimpleNamespace()))
+        self.assertIsNone(
+            whatsapp_decorator._configured_waba_id(
+                SimpleNamespace(
+                    whatsapp=SimpleNamespace(business=SimpleNamespace(waba_id=None))
+                )
+            )
+        )
+        self.assertIsNone(
+            whatsapp_decorator._configured_waba_id(
+                SimpleNamespace(
+                    whatsapp=SimpleNamespace(business=SimpleNamespace(waba_id=" "))
+                )
+            )
+        )
+        self.assertEqual(
+            whatsapp_decorator._configured_waba_id(
+                SimpleNamespace(
+                    whatsapp=SimpleNamespace(
+                        business=SimpleNamespace(waba_id=" waba-1 ")
+                    )
+                )
+            ),
+            "waba-1",
+        )
+
+        context = whatsapp_decorator._new_webhook_context(b"body")
+        context.dispatch_results = (
+            whatsapp_decorator.WhatsAppWebhookChangeDispatch(
+                change_field="future_field",
+                safe_change_field="unknown",
+                event_type="unknown",
+            ),
+            whatsapp_decorator.WhatsAppWebhookChangeDispatch(
+                change_field="messages",
+                safe_change_field="messages",
+                event_type="unknown",
+            ),
+            whatsapp_decorator.WhatsAppWebhookChangeDispatch(
+                change_field="flows",
+                safe_change_field="flows",
+                event_type="FLOW_STATUS_CHANGE",
+                handler_count=5,
+                handled_count=2,
+                ignored_count=1,
+                permanent_failure_count=1,
+                retryable_failure_count=1,
+            ),
+        )
+        whatsapp_decorator._record_dispatch_metrics(context)
+        whatsapp_decorator._record_dispatch_metrics(context)
+        metrics = whatsapp_decorator.webhook_metrics_snapshot()
+        self.assertEqual(metrics["whatsapp.webhook.ignored.unknown"], 1)
+        self.assertEqual(metrics["whatsapp.webhook.accepted.flows"], 2)
+        self.assertEqual(metrics["whatsapp.webhook.ignored.flows"], 1)
+        self.assertEqual(
+            metrics["whatsapp.webhook.rejected.permanent_handler_failure"],
+            1,
+        )
+        self.assertEqual(
+            metrics["whatsapp.webhook.rejected.retryable_handler_failure"],
+            1,
+        )
+        self.assertEqual(
+            whatsapp_decorator._dispatch_failure_reason(context),
+            "retryable_handler_failure",
+        )
+        context.dispatch_results = context.dispatch_results[:-1] + (
+            whatsapp_decorator.WhatsAppWebhookChangeDispatch(
+                change_field="flows",
+                safe_change_field="flows",
+                event_type="unknown",
+                handler_count=1,
+                permanent_failure_count=1,
+            ),
+        )
+        self.assertEqual(
+            whatsapp_decorator._dispatch_failure_reason(context),
+            "permanent_handler_failure",
+        )
+        context.dispatch_results = ()
+        self.assertIsNone(whatsapp_decorator._dispatch_failure_reason(context))
 
     def test_extract_change_phone_number_id_handles_shapes(self) -> None:
         self.assertIsNone(whatsapp_decorator._extract_change_phone_number_id({}))
@@ -343,7 +432,7 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.filtered_payload["entry"], [])
         logger.info.assert_called_once()
         self.assertIn(
-            "reason_code=unsupported_change_field", logger.info.call_args.args[0]
+            "reason_code=no_registered_handler", logger.info.call_args.args[0]
         )
 
     async def test_signature_guard_profile_resolution_failures(self) -> None:
@@ -515,6 +604,9 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
             {"entry": [{}]},
             {"entry": [{"changes": "bad-changes"}]},
             {"entry": [{"changes": ["bad-change"]}]},
+            {"entry": [{"changes": [{}]}]},
+            {"entry": [{"changes": [{"field": "bad-field", "value": {}}]}]},
+            {"entry": [{"changes": [{"field": "flows", "value": []}]}]},
         )
         for payload in malformed_payloads:
             whatsapp_decorator._WEBHOOK_METRICS.clear()
@@ -604,6 +696,73 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("wrong-phone-id", log_message)
         self.assertNotIn("123456789", log_message)
 
+    async def test_signature_guard_validates_configured_waba_identity(self) -> None:
+        payload = {
+            "object": "whatsapp_business_account",
+            "entry": [
+                {
+                    "id": "expected-waba",
+                    "time": 1234,
+                    "changes": [
+                        {
+                            "field": "flows",
+                            "value": {"event": "FLOW_STATUS_CHANGE"},
+                        }
+                    ],
+                }
+            ],
+        }
+        service = SimpleNamespace(
+            resolve_active_by_identifier=AsyncMock(return_value=_make_client_profile()),
+            build_runtime_config=AsyncMock(
+                return_value=_make_runtime_config(
+                    app_secret="profile-secret",
+                    waba_id="expected-waba",
+                )
+            ),
+        )
+        (
+            result,
+            exc,
+            _logger,
+            handler,
+            _request_mock,
+            _service,
+        ) = await self._execute_signature_guard(
+            body=json.dumps(payload).encode(),
+            service=service,
+        )
+
+        self.assertIsNone(exc)
+        self.assertEqual(result, {"ok": True})
+        envelope = handler.await_args.kwargs[
+            "whatsapp_webhook_context"
+        ].change_envelopes[0]
+        self.assertEqual(envelope.entry_id, "expected-waba")
+        self.assertEqual(envelope.entry_time, 1234)
+        self.assertEqual(envelope.entry_index, 0)
+        self.assertEqual(envelope.change_index, 0)
+
+        payload["entry"][0]["id"] = "wrong-waba"
+        (
+            _result,
+            exc,
+            logger,
+            handler,
+            _request_mock,
+            _service,
+        ) = await self._execute_signature_guard(
+            body=json.dumps(payload).encode(),
+            service=service,
+        )
+        self.assertIsInstance(exc, _AbortCalled)
+        self.assertEqual(exc.code, 401)
+        handler.assert_not_awaited()
+        log_message = logger.warning.call_args.args[0]
+        self.assertIn("reason_code=waba_id_mismatch", log_message)
+        self.assertNotIn("expected-waba", log_message)
+        self.assertNotIn("wrong-waba", log_message)
+
     async def test_signature_guard_acknowledges_waba_fields_without_phone_metadata(
         self,
     ) -> None:
@@ -630,7 +789,7 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
                             "value": {"display_phone_number": "15557654321"},
                         },
                         {
-                            "field": "attacker-controlled-field",
+                            "field": "future_unknown_field",
                             "value": {"access_token": "token-secret"},
                         },
                     ],
@@ -653,6 +812,15 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"ok": True})
         context = handler.await_args.kwargs["whatsapp_webhook_context"]
         self.assertEqual(context.filtered_payload["entry"], [])
+        self.assertEqual(
+            [item.change_field for item in context.change_envelopes],
+            [
+                "message_template_status_update",
+                "account_update",
+                "phone_number_quality_update",
+                "future_unknown_field",
+            ],
+        )
         self.assertEqual(context.entry_count, 2)
         self.assertEqual(context.change_count, 4)
         self.assertEqual(
@@ -669,29 +837,23 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
         logger.warning.assert_not_called()
         log_message = logger.info.call_args.args[0]
         self.assertIn("outcome=ignored", log_message)
-        self.assertIn("reason_code=unsupported_change_field", log_message)
+        self.assertIn("reason_code=no_registered_handler", log_message)
         for sensitive in (
             "waba-1",
             "waba-2",
             "customer-template-secret",
             "15557654321",
-            "attacker-controlled-field",
+            "future_unknown_field",
             "token-secret",
             "expected-path",
             "profile-secret",
         ):
             self.assertNotIn(sensitive, log_message)
         metrics = whatsapp_decorator.webhook_metrics_snapshot()
-        self.assertEqual(
-            metrics["whatsapp.webhook.ignored.message_template_status_update"],
-            1,
+        self.assertNotIn(
+            "whatsapp.webhook.ignored.message_template_status_update",
+            metrics,
         )
-        self.assertEqual(metrics["whatsapp.webhook.ignored.account_update"], 1)
-        self.assertEqual(
-            metrics["whatsapp.webhook.ignored.phone_number_quality_update"],
-            1,
-        )
-        self.assertEqual(metrics["whatsapp.webhook.ignored.unknown"], 1)
 
     async def test_signature_guard_filters_mixed_entries_and_accepts_statuses(
         self,
@@ -777,9 +939,8 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(context.message_change_count, 2)
         self.assertEqual(context.change_count, 4)
-        self.assertEqual(logger.info.call_count, 2)
+        self.assertEqual(logger.info.call_count, 1)
         combined_logs = " ".join(call.args[0] for call in logger.info.call_args_list)
-        self.assertIn("reason_code=unsupported_change_field", combined_logs)
         self.assertIn("reason_code=message_event_accepted", combined_logs)
         signature = request_mock.headers["X-Hub-Signature-256"]
         for sensitive in (
@@ -798,11 +959,10 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(metrics["whatsapp.webhook.received.total"], 1)
         self.assertEqual(metrics["whatsapp.webhook.authenticated.total"], 1)
         self.assertEqual(metrics["whatsapp.webhook.accepted.messages"], 2)
-        self.assertEqual(
-            metrics["whatsapp.webhook.ignored.message_template_status_update"],
-            1,
+        self.assertNotIn(
+            "whatsapp.webhook.ignored.message_template_status_update",
+            metrics,
         )
-        self.assertEqual(metrics["whatsapp.webhook.ignored.account_update"], 1)
 
     async def test_signature_guard_sanitizes_profile_and_object_values(self) -> None:
         payload = {
@@ -811,7 +971,7 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
                 {
                     "changes": [
                         {
-                            "field": "unknown-secret-field",
+                            "field": "unknown_secret_field",
                             "value": {},
                         }
                     ]
@@ -843,7 +1003,7 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
         self.assertIn("change_fields=unknown", log_message)
         self.assertIn("client_profile_id=unresolved", log_message)
         self.assertNotIn("object-secret", log_message)
-        self.assertNotIn("unknown-secret-field", log_message)
+        self.assertNotIn("unknown_secret_field", log_message)
         self.assertNotIn("profile-secret", log_message)
 
     async def test_signature_guard_records_handler_failures_safely(self) -> None:
@@ -886,6 +1046,101 @@ class TestMugenWhatsAppWacapiDecorator(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("reason_code=routing_failure", log_message)
                 self.assertIn(f"http_status={expected_status}", log_message)
                 self.assertNotIn("customer payload secret", log_message)
+
+    async def test_signature_guard_summarizes_dispatch_outcomes(self) -> None:
+        payload = {
+            "object": "whatsapp_business_account",
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "field": "flows",
+                            "value": {"event": "FLOW_STATUS_CHANGE"},
+                        }
+                    ]
+                }
+            ],
+        }
+        body = json.dumps(payload).encode()
+        for outcome, expected_level, expected_reason in (
+            (
+                "permanent_failure",
+                "warning",
+                "permanent_handler_failure",
+            ),
+            ("handled", "info", "change_handler_handled"),
+        ):
+            with self.subTest(outcome=outcome):
+
+                async def handler(**kwargs):
+                    kwargs["whatsapp_webhook_context"].dispatch_results = (
+                        whatsapp_decorator.WhatsAppWebhookChangeDispatch(
+                            change_field="flows",
+                            safe_change_field="flows",
+                            event_type="FLOW_STATUS_CHANGE",
+                            handler_count=1,
+                            handled_count=int(outcome == "handled"),
+                            permanent_failure_count=int(outcome == "permanent_failure"),
+                        ),
+                    )
+                    return {"ok": True}
+
+                result, exc, logger, *_rest = await self._execute_signature_guard(
+                    body=body,
+                    handler=handler,
+                )
+                self.assertIsNone(exc)
+                self.assertEqual(result, {"ok": True})
+                log_message = getattr(logger, expected_level).call_args.args[0]
+                self.assertIn(f"reason_code={expected_reason}", log_message)
+
+    async def test_signature_guard_preserves_dispatch_failure_reasons(self) -> None:
+        payload = {
+            "object": "whatsapp_business_account",
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "field": "flows",
+                            "value": {"event": "FLOW_STATUS_CHANGE"},
+                        }
+                    ]
+                }
+            ],
+        }
+        body = json.dumps(payload).encode()
+        cases = (
+            ("retryable_failure", BadRequest(), "retryable_handler_failure"),
+            (
+                "permanent_failure",
+                RuntimeError("payload secret"),
+                "permanent_handler_failure",
+            ),
+        )
+        for outcome, raised, expected_reason in cases:
+            with self.subTest(outcome=outcome):
+
+                async def handler(**kwargs):
+                    kwargs["whatsapp_webhook_context"].dispatch_results = (
+                        whatsapp_decorator.WhatsAppWebhookChangeDispatch(
+                            change_field="flows",
+                            safe_change_field="flows",
+                            event_type="FLOW_STATUS_CHANGE",
+                            handler_count=1,
+                            permanent_failure_count=int(outcome == "permanent_failure"),
+                            retryable_failure_count=int(outcome == "retryable_failure"),
+                        ),
+                    )
+                    raise raised
+
+                _result, exc, logger, *_rest = await self._execute_signature_guard(
+                    body=body,
+                    handler=handler,
+                )
+                self.assertIs(exc, raised)
+                log_message = logger.error.call_args.args[0]
+                self.assertIn(f"reason_code={expected_reason}", log_message)
+                self.assertNotIn("payload secret", log_message)
 
     async def test_whatsapp_server_ip_allow_list_required_paths(self) -> None:
         async def _ok_handler():

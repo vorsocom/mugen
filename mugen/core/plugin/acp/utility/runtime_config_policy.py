@@ -97,6 +97,7 @@ ALLOWED_MESSAGING_CLIENT_PROFILE_SETTINGS_PATHS: dict[
     "whatsapp": ALLOWED_MESSAGING_SETTINGS_PATHS["whatsapp"]
     | frozenset(
         {
+            ("business", "waba_id"),
             ("user_access", "mode"),
             ("user_access", "users"),
             ("user_access", "denied_message"),
