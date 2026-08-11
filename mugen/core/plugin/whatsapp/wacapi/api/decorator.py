@@ -2,7 +2,6 @@
 Provides webhook decorators for the WhatsApp Cloud API (WACAPI) endpoints.
 """
 
-from collections import Counter
 from dataclasses import dataclass, field
 from functools import wraps
 import hashlib
@@ -23,27 +22,17 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.plugin.acp.service.messaging_client_profile import (
     MessagingClientProfileService,
 )
-
-_KNOWN_CHANGE_FIELDS = frozenset(
-    {
-        "account_alerts",
-        "account_review_update",
-        "account_update",
-        "business_capability_update",
-        "flows",
-        "message_template_quality_update",
-        "message_template_status_update",
-        "messages",
-        "phone_number_name_update",
-        "phone_number_quality_update",
-        "security",
-        "template_category_update",
-    }
+from mugen.core.plugin.whatsapp.wacapi.webhook_change import (
+    WhatsAppWebhookChangeDispatch,
+    WhatsAppWebhookChangeEnvelope,
+    normalize_webhook_change_field,
+    safe_webhook_change_field,
 )
+
 _WEBHOOK_METRICS: dict[str, int] = {}
 
 
-@dataclass(slots=True)
+@dataclass(slots=True)  # pylint: disable=too-many-instance-attributes
 class WhatsAppWebhookContext:
     """Authenticated and classified WhatsApp webhook request data."""
 
@@ -55,8 +44,10 @@ class WhatsAppWebhookContext:
     entry_count: int = 0
     change_count: int = 0
     change_fields: tuple[str, ...] = ()
-    ignored_change_fields: tuple[str, ...] = ()
     message_change_count: int = 0
+    change_envelopes: tuple[WhatsAppWebhookChangeEnvelope, ...] = ()
+    dispatch_results: tuple[WhatsAppWebhookChangeDispatch, ...] = ()
+    dispatch_metrics_recorded: bool = False
 
 
 def _new_webhook_context(raw_body: bytes) -> WhatsAppWebhookContext:
@@ -75,9 +66,17 @@ def _safe_client_profile_id(client_profile: object) -> str | None:
 
 
 def _safe_change_field(value: object) -> str:
-    if isinstance(value, str) and value in _KNOWN_CHANGE_FIELDS:
-        return value
-    return "unknown"
+    return safe_webhook_change_field(value)
+
+
+def _configured_waba_id(runtime_config: object) -> str | None:
+    try:
+        value = runtime_config.whatsapp.business.waba_id
+    except AttributeError:
+        return None
+    if not isinstance(value, str) or value.strip() == "":
+        return None
+    return value.strip()
 
 
 def _increment_webhook_metric(outcome: str, dimension: str) -> None:
@@ -117,8 +116,40 @@ def _log_webhook_outcome(
         f" reason_code={reason_code}"
         f" elapsed_ms={elapsed_ms:.2f}"
         f" client_profile_id={client_profile_id}"
+        f" handler_count={sum(item.handler_count for item in context.dispatch_results)}"
+        f" handled_count={sum(item.handled_count for item in context.dispatch_results)}"
+        f" ignored_count={sum(item.ignored_count for item in context.dispatch_results)}"
+        " permanent_failure_count="
+        f"{sum(item.permanent_failure_count for item in context.dispatch_results)}"
+        " retryable_failure_count="
+        f"{sum(item.retryable_failure_count for item in context.dispatch_results)}"
     )
     getattr(logger, level)(message)
+
+
+def _record_dispatch_metrics(context: WhatsAppWebhookContext) -> None:
+    if context.dispatch_metrics_recorded:
+        return
+    for result in context.dispatch_results:
+        if result.handler_count == 0 and result.change_field != "messages":
+            _increment_webhook_metric("ignored", result.safe_change_field)
+        for _index in range(result.handled_count):
+            _increment_webhook_metric("accepted", result.safe_change_field)
+        for _index in range(result.ignored_count):
+            _increment_webhook_metric("ignored", result.safe_change_field)
+        for _index in range(result.permanent_failure_count):
+            _increment_webhook_metric("rejected", "permanent_handler_failure")
+        for _index in range(result.retryable_failure_count):
+            _increment_webhook_metric("rejected", "retryable_handler_failure")
+    context.dispatch_metrics_recorded = True
+
+
+def _dispatch_failure_reason(context: WhatsAppWebhookContext) -> str | None:
+    if any(item.retryable_failure_count for item in context.dispatch_results):
+        return "retryable_handler_failure"
+    if any(item.permanent_failure_count for item in context.dispatch_results):
+        return "permanent_handler_failure"
+    return None
 
 
 def _reject_webhook(
@@ -364,11 +395,12 @@ def whatsapp_request_signature_verification_required(
             expected_phone_number_id = str(
                 getattr(client_profile, "phone_number_id", "") or ""
             ).strip()
+            expected_waba_id = _configured_waba_id(runtime_config)
             filtered_entries: list[dict[str, object]] = []
             change_fields: set[str] = set()
-            ignored_change_fields: Counter[str] = Counter()
+            change_envelopes: list[WhatsAppWebhookChangeEnvelope] = []
 
-            for entry in entries:
+            for entry_index, entry in enumerate(entries):
                 if not isinstance(entry, dict):
                     _reject_webhook(
                         logger=logger,
@@ -377,6 +409,19 @@ def whatsapp_request_signature_verification_required(
                         http_status=400,
                         reason_code="malformed_payload",
                         level="error",
+                    )
+                entry_id = entry.get("id")
+                if expected_waba_id is not None and (
+                    not isinstance(entry_id, str)
+                    or entry_id.strip() != expected_waba_id
+                ):
+                    _reject_webhook(
+                        logger=logger,
+                        context=context,
+                        started=started,
+                        http_status=401,
+                        reason_code="waba_id_mismatch",
+                        level="warning",
                     )
                 changes = entry.get("changes")
                 if not isinstance(changes, list):
@@ -389,7 +434,7 @@ def whatsapp_request_signature_verification_required(
                         level="error",
                     )
                 filtered_changes: list[dict[str, object]] = []
-                for change in changes:
+                for change_index, change in enumerate(changes):
                     if not isinstance(change, dict):
                         _reject_webhook(
                             logger=logger,
@@ -400,11 +445,47 @@ def whatsapp_request_signature_verification_required(
                             level="error",
                         )
                     context.change_count += 1
-                    change_field = _safe_change_field(change.get("field"))
-                    change_fields.add(change_field)
+                    try:
+                        raw_change_field = normalize_webhook_change_field(
+                            change.get("field")
+                        )
+                    except ValueError:
+                        _reject_webhook(
+                            logger=logger,
+                            context=context,
+                            started=started,
+                            http_status=400,
+                            reason_code="malformed_payload",
+                            level="error",
+                        )
+                    change_value = change.get("value")
+                    if not isinstance(change_value, dict):
+                        _reject_webhook(
+                            logger=logger,
+                            context=context,
+                            started=started,
+                            http_status=400,
+                            reason_code="malformed_payload",
+                            level="error",
+                        )
+                    safe_change_field = _safe_change_field(raw_change_field)
+                    change_fields.add(safe_change_field)
                     context.change_fields = tuple(sorted(change_fields))
-                    if change.get("field") != "messages":
-                        ignored_change_fields[change_field] += 1
+                    change_envelopes.append(
+                        WhatsAppWebhookChangeEnvelope.build(
+                            request_id=context.request_id,
+                            payload_fingerprint=context.payload_fingerprint,
+                            client_profile_id=context.client_profile_id,
+                            object_type=context.object_type,
+                            entry_id=entry_id,
+                            entry_time=entry.get("time"),
+                            entry_index=entry_index,
+                            change_index=change_index,
+                            change_field=raw_change_field,
+                            change_value=change_value,
+                        )
+                    )
+                    if raw_change_field != "messages":
                         continue
 
                     phone_number_id = _extract_change_phone_number_id(change)
@@ -435,7 +516,7 @@ def whatsapp_request_signature_verification_required(
                     filtered_entries.append(filtered_entry)
 
             context.change_fields = tuple(sorted(change_fields))
-            context.ignored_change_fields = tuple(sorted(ignored_change_fields))
+            context.change_envelopes = tuple(change_envelopes)
             context.filtered_payload = dict(payload)
             context.filtered_payload["entry"] = filtered_entries
             kwargs["whatsapp_webhook_context"] = context
@@ -444,43 +525,37 @@ def whatsapp_request_signature_verification_required(
                 result = await func(*args, **kwargs)
             except HTTPException as exc:
                 http_status = int(exc.code or 500)
-                _increment_webhook_metric("rejected", "routing_failure")
+                _record_dispatch_metrics(context)
+                reason_code = _dispatch_failure_reason(context) or "routing_failure"
+                if reason_code == "routing_failure":
+                    _increment_webhook_metric("rejected", reason_code)
                 _log_webhook_outcome(
                     logger=logger,
                     context=context,
                     level="error",
                     outcome="rejected",
                     http_status=http_status,
-                    reason_code="routing_failure",
+                    reason_code=reason_code,
                     started=started,
                 )
                 raise
             except Exception:  # pylint: disable=broad-exception-caught
-                _increment_webhook_metric("rejected", "routing_failure")
+                _record_dispatch_metrics(context)
+                reason_code = _dispatch_failure_reason(context) or "routing_failure"
+                if reason_code == "routing_failure":
+                    _increment_webhook_metric("rejected", reason_code)
                 _log_webhook_outcome(
                     logger=logger,
                     context=context,
                     level="error",
                     outcome="rejected",
                     http_status=500,
-                    reason_code="routing_failure",
+                    reason_code=reason_code,
                     started=started,
                 )
                 raise
 
-            if ignored_change_fields:
-                for change_field, count in ignored_change_fields.items():
-                    for _index in range(count):
-                        _increment_webhook_metric("ignored", change_field)
-                _log_webhook_outcome(
-                    logger=logger,
-                    context=context,
-                    level="info",
-                    outcome="ignored",
-                    http_status=200,
-                    reason_code="unsupported_change_field",
-                    started=started,
-                )
+            _record_dispatch_metrics(context)
             if context.message_change_count > 0:
                 for _index in range(context.message_change_count):
                     _increment_webhook_metric("accepted", "messages")
@@ -493,15 +568,40 @@ def whatsapp_request_signature_verification_required(
                     reason_code="message_event_accepted",
                     started=started,
                 )
-            elif not ignored_change_fields:
-                _increment_webhook_metric("ignored", "none")
+            elif any(item.permanent_failure_count for item in context.dispatch_results):
+                _log_webhook_outcome(
+                    logger=logger,
+                    context=context,
+                    level="warning",
+                    outcome="acknowledged",
+                    http_status=200,
+                    reason_code="permanent_handler_failure",
+                    started=started,
+                )
+            elif any(item.handled_count for item in context.dispatch_results):
+                _log_webhook_outcome(
+                    logger=logger,
+                    context=context,
+                    level="info",
+                    outcome="accepted",
+                    http_status=200,
+                    reason_code="change_handler_handled",
+                    started=started,
+                )
+            else:
+                reason_code = (
+                    "no_registered_handler"
+                    if any(item.handler_count == 0 for item in context.dispatch_results)
+                    or not context.dispatch_results
+                    else "change_handler_ignored"
+                )
                 _log_webhook_outcome(
                     logger=logger,
                     context=context,
                     level="info",
                     outcome="ignored",
                     http_status=200,
-                    reason_code="unsupported_change_field",
+                    reason_code=reason_code,
                     started=started,
                 )
 

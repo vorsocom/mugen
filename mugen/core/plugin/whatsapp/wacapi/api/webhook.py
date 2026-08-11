@@ -21,6 +21,11 @@ from mugen.core.plugin.whatsapp.wacapi.api.decorator import (
     whatsapp_request_signature_verification_required,
     whatsapp_server_ip_allow_list_required,
 )
+from mugen.core.plugin.whatsapp.wacapi.webhook_change import (
+    WhatsAppWebhookChangeDispatch,
+    WhatsAppWebhookChangeEnvelope,
+    WhatsAppWebhookChangeRegistry,
+)
 from mugen.core.service.messaging_ingress_extractors import (
     extract_whatsapp_stage_entries,
 )
@@ -46,6 +51,13 @@ def _logger_provider():
     return di.container.logging_gateway
 
 
+def _change_registry_provider():
+    return di.container.get_ext_service(
+        di.EXT_SERVICE_WHATSAPP_WEBHOOK_CHANGE_REGISTRY,
+        None,
+    )
+
+
 def _client_profile_service() -> MessagingClientProfileService | None:
     relational_storage_gateway = getattr(
         di.container,
@@ -58,6 +70,60 @@ def _client_profile_service() -> MessagingClientProfileService | None:
         table="admin_messaging_client_profile",
         rsg=relational_storage_gateway,
     )
+
+
+def _log_change_dispatch(
+    *,
+    logger: ILoggingGateway,
+    envelope: WhatsAppWebhookChangeEnvelope,
+    result: WhatsAppWebhookChangeDispatch,
+) -> None:
+    level = (
+        "error"
+        if result.retryable_failure_count
+        else "warning" if result.permanent_failure_count else "info"
+    )
+    getattr(logger, level)(
+        "WhatsApp webhook change dispatch"
+        f" request_id={envelope.request_id}"
+        f" payload_fingerprint={envelope.payload_fingerprint}"
+        f" client_profile_id={envelope.client_profile_id or 'unresolved'}"
+        f" object_type={envelope.object_type}"
+        f" entry_index={envelope.entry_index}"
+        f" change_index={envelope.change_index}"
+        f" change_field={result.safe_change_field}"
+        f" event_type={result.event_type}"
+        f" handler_count={result.handler_count}"
+        f" handled_count={result.handled_count}"
+        f" ignored_count={result.ignored_count}"
+        f" permanent_failure_count={result.permanent_failure_count}"
+        f" retryable_failure_count={result.retryable_failure_count}"
+        f" reason_code={result.reason_code}"
+    )
+
+
+async def _dispatch_authenticated_changes(
+    *,
+    context: WhatsAppWebhookContext,
+    logger: ILoggingGateway,
+    registry_provider,
+) -> bool:
+    registry = registry_provider() if callable(registry_provider) else None
+    if registry is None:
+        registry = WhatsAppWebhookChangeRegistry()
+
+    results: list[WhatsAppWebhookChangeDispatch] = []
+    for envelope in context.change_envelopes:
+        result = await registry.dispatch(envelope)
+        results.append(result)
+        if result.handler_count or envelope.change_field != "messages":
+            _log_change_dispatch(
+                logger=logger,
+                envelope=envelope,
+                result=result,
+            )
+    context.dispatch_results = tuple(results)
+    return any(result.retryable_failure_count for result in results)
 
 
 @api.get("/whatsapp/wacapi/webhook/<path_token>")
@@ -131,6 +197,7 @@ async def whatsapp_wacapi_event(
     ingress_provider=_ingress_provider,
     relational_storage_gateway_provider=_relational_storage_gateway_provider,
     logger_provider=_logger_provider,
+    change_registry_provider=_change_registry_provider,
     whatsapp_webhook_context: WhatsAppWebhookContext | None = None,
 ):
     """Respond to Whatsapp Cloud API events."""
@@ -139,8 +206,15 @@ async def whatsapp_wacapi_event(
         logger.error("WhatsApp webhook authenticated context missing.")
         abort(500)
 
+    retry_required = await _dispatch_authenticated_changes(
+        context=whatsapp_webhook_context,
+        logger=logger,
+        registry_provider=change_registry_provider,
+    )
     data = whatsapp_webhook_context.filtered_payload
     if whatsapp_webhook_context.message_change_count == 0:
+        if retry_required:
+            abort(500)
         return {"response": "OK"}
 
     ipc_svc: IIPCService | None = ipc_provider() if callable(ipc_provider) else None
@@ -163,6 +237,8 @@ async def whatsapp_wacapi_event(
                 " reason_code=routing_failure"
                 f" error_count={len(response.errors)}"
             )
+        if retry_required:
+            abort(500)
         return {"response": "OK"}
 
     ingress_svc: IMessagingIngressService = ingress_provider()
@@ -182,5 +258,7 @@ async def whatsapp_wacapi_event(
             "WhatsApp webhook staging failed"
             f" reason_code=routing_failure error_type={type(exc).__name__}"
         )
+        abort(500)
+    if retry_required:
         abort(500)
     return {"response": "OK"}
