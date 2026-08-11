@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import call, Mock, patch
 
 from mugen.core.plugin.whatsapp.wacapi import fw_ext
 from mugen.core.plugin.whatsapp.wacapi.flow_data import WhatsAppFlowDataRegistry
+from mugen.core.plugin.whatsapp.wacapi.webhook_change import (
+    WhatsAppWebhookChangeRegistry,
+)
 
 
 class TestMugenWhatsAppWacapiFWExtension(unittest.IsolatedAsyncioTestCase):
@@ -32,16 +35,26 @@ class TestMugenWhatsAppWacapiFWExtension(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ext.platforms, ["whatsapp"])
             await ext.setup(app=Mock())
 
-        container.has_ext_service.assert_called_once_with(
-            fw_ext.di.EXT_SERVICE_WHATSAPP_FLOW_DATA_REGISTRY
+        self.assertEqual(
+            container.has_ext_service.call_args_list,
+            [
+                call(fw_ext.di.EXT_SERVICE_WHATSAPP_FLOW_DATA_REGISTRY),
+                call(fw_ext.di.EXT_SERVICE_WHATSAPP_WEBHOOK_CHANGE_REGISTRY),
+            ],
         )
-        container.register_ext_service.assert_called_once()
-        service_name, registry = container.register_ext_service.call_args.args
+        self.assertEqual(container.register_ext_service.call_count, 2)
+        service_name, registry = container.register_ext_service.call_args_list[0].args
         self.assertEqual(
             service_name,
             fw_ext.di.EXT_SERVICE_WHATSAPP_FLOW_DATA_REGISTRY,
         )
         self.assertIsInstance(registry, WhatsAppFlowDataRegistry)
+        service_name, registry = container.register_ext_service.call_args_list[1].args
+        self.assertEqual(
+            service_name,
+            fw_ext.di.EXT_SERVICE_WHATSAPP_WEBHOOK_CHANGE_REGISTRY,
+        )
+        self.assertIsInstance(registry, WhatsAppWebhookChangeRegistry)
 
     async def test_setup_preserves_existing_flow_data_registry(self) -> None:
         container = SimpleNamespace(

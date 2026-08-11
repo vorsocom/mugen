@@ -97,6 +97,13 @@ class TestRuntimeConfigPolicy(unittest.TestCase):
             },
         )
         self.assertEqual(
+            policy.normalize_messaging_client_profile_settings(
+                platform_key="whatsapp",
+                value={"Business": {"Waba_Id": "waba-1"}},
+            ),
+            {"business": {"waba_id": "waba-1"}},
+        )
+        self.assertEqual(
             policy.normalize_secret_ref_map(
                 platform_key="matrix",
                 value={"CLIENT.PASSWORD": key_ref_id},

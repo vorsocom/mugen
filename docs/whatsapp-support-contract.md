@@ -42,6 +42,9 @@ When `whatsapp` is enabled in `mugen.platforms`, startup is fail-closed unless:
 Webhook path tokens, verification tokens, app secrets, phone-number ids, and
 Graph API access tokens are owned by ACP `MessagingClientProfiles` plus
 `KeyRef` secrets. Zero active client profiles is valid at startup.
+An optional WABA identity can be stored in the client profile setting
+`business.waba_id`; when configured, every authenticated `entry.id` must match
+it before any change is dispatched.
 WhatsApp Flow Data private key material is also profile-owned through
 `flows.private_key` and optional `flows.private_key_passphrase` `KeyRef`
 secret paths.
@@ -67,9 +70,9 @@ Webhook ingress is guarded by all of:
 
 Any verification failure is rejected before IPC dispatch.
 
-### Supported webhook fields
+### Webhook field routing
 
-The customer-message ingress path supports only `change.field="messages"`:
+The customer-message ingress path supports `change.field="messages"`:
 
 - inbound customer messages are staged as message events;
 - sent, delivered, read, and failed delivery updates are staged as status
@@ -77,18 +80,92 @@ The customer-message ingress path supports only `change.field="messages"`:
 - every `messages` change requires matching phone-number metadata, including
   when one webhook contains multiple entries or changes.
 
-Authenticated non-message fields are WABA-level events and do not use phone
-number routing. Fields such as `message_template_status_update`,
-`account_update`, and `phone_number_quality_update` are acknowledged with HTTP
-200 and intentionally ignored. They are never passed to customer-message IPC
-or ingress staging, and no default phone number is used. A future supported
-WABA-level field must have its own handler and resolver instead of reusing the
-customer-message route.
+All syntactically valid authenticated change fields are also offered to the
+`whatsapp_webhook_change_registry` extension service. Exact field handlers and
+the optional `*` wildcard can observe `messages`, `flows`, template updates,
+account updates, phone-quality updates, and future Meta fields without a core
+allowlist update. Exact and wildcard handlers run in their global registration
+order. One handler failure does not prevent later independent handlers from
+running.
+
+Non-message changes are control-plane events and never enter customer-message
+IPC, ingress staging, or the agent runtime merely because they were delivered.
+They do not require `value.metadata.phone_number_id`, and the framework never
+derives or selects a default phone number for them. A downstream handler must
+explicitly own any further routing. `messages` changes still follow established
+ingress even when an extension handler also observes them.
+
+When no extension handler matches a non-message field, the request is
+acknowledged with HTTP 200 and reason `no_registered_handler`. Intentional
+ignores and successful handlers also return HTTP 200. Permanent handler
+validation failures are sanitized and acknowledged with HTTP 200 to prevent a
+futile retry. If any handler reports a retryable failure or raises unexpectedly,
+all remaining matching handlers are attempted and the request returns HTTP 500
+so Meta can retry it.
 
 Deployments that process only customer conversations should subscribe the Meta
-app to the `messages` webhook field. Subscribe to WABA-level fields only when a
-separate consumer is available; until then, authenticated deliveries are still
-safely acknowledged to prevent repeated retries.
+app only to the `messages` field. Subscribe to `flows`, template, account, or
+other control-plane fields when a corresponding extension handler or wildcard
+observer is registered. Unhandled authenticated fields remain safely
+acknowledged to prevent repeated retries.
+
+### Downstream webhook change handlers
+
+The WACAPI framework extension creates the registry before importing the
+webhook endpoint. Downstream FW plugins register handlers through
+`di.EXT_SERVICE_WHATSAPP_WEBHOOK_CHANGE_REGISTRY`:
+
+```python
+from mugen.core import di
+from mugen.core.plugin.whatsapp.wacapi.webhook_change import (
+    WhatsAppWebhookChangeOutcome,
+)
+
+
+async def observe_flow_lifecycle(event):
+    # Product policy and persistence belong downstream.
+    await record_flow_health(event)
+    return WhatsAppWebhookChangeOutcome.HANDLED
+
+
+async def setup(app) -> None:
+    registry = di.container.get_ext_service(
+        di.EXT_SERVICE_WHATSAPP_WEBHOOK_CHANGE_REGISTRY
+    )
+    registry.register_handler(
+        observe_flow_lifecycle,
+        change_field="flows",
+    )
+```
+
+Each handler receives a frozen `WhatsAppWebhookChangeEnvelope` containing:
+
+- `request_id` and the stable truncated SHA-256 `payload_fingerprint`;
+- resolved non-secret `client_profile_id` and normalized `object_type`;
+- Meta's WABA `entry_id` and optional `entry_time`;
+- zero-based `entry_index` and `change_index`;
+- the original syntactically valid `change_field`;
+- a deeply immutable `change_value` mapping.
+
+The envelope deliberately excludes headers, path tokens, signatures, app
+secrets, access tokens, and verification material. `change_value` can contain
+customer data and must never be logged wholesale.
+
+Handlers return `handled`, `ignored`, `permanent_failure`, or
+`retryable_failure`, preferably through `WhatsAppWebhookChangeOutcome`.
+Unexpected exceptions and unsupported return values are classified as
+retryable failures without logging exception text. A wildcard handler is
+registered with `change_field="*"` and receives the original unknown field even
+though logs and metrics normalize that field to `unknown`.
+
+Meta delivery is at least once. Handlers must tolerate duplicates and should
+form an idempotency key from `payload_fingerprint`, `entry_index`, and
+`change_index`. Identical retries expose the same values.
+
+Do not confuse `field="flows"` lifecycle/control-plane events with completed
+customer Flow submissions. A customer completion arrives under
+`field="messages"` as `interactive.nfm_reply` and continues through normal
+message ingress.
 
 ### Webhook diagnostics
 
@@ -108,15 +185,22 @@ Reason codes include:
 - `malformed_json` and `malformed_payload` for authenticated invalid input;
 - `missing_phone_number_id_for_messages` and `phone_number_id_mismatch` for
   authenticated message-routing failures;
-- `unsupported_change_field` for authenticated WABA-level changes acknowledged
-  without dispatch;
+- `no_registered_handler` for authenticated changes with no extension handler;
+- `change_handler_handled` and `change_handler_ignored` for completed extension
+  dispatch;
+- `permanent_handler_failure` for a sanitized non-retryable handler failure;
+- `retryable_handler_failure` for a handler or systemic failure that returns
+  HTTP 500;
+- `waba_id_mismatch` for a configured WABA identity mismatch;
 - `message_event_accepted` for successfully dispatched message/status changes;
 - `routing_failure` for sanitized downstream dispatch failures.
 
 Process-local low-cardinality counters track received and authenticated
 requests plus rejected, ignored, and accepted changes. Rejections are grouped
-only by reason code; ignored and accepted changes are grouped by normalized
-change field. Unknown field names collapse to `unknown`.
+only by safe reason code; ignored and accepted changes are grouped by normalized
+change field. Framework-recognized fields retain their name and all future or
+arbitrary fields collapse to `unknown`. Recognized safe control-plane event
+types may be logged; arbitrary event values normalize to `unknown`.
 
 Logs never contain raw webhook bodies or Graph responses, message or media
 content, sender/recipient phone numbers, phone-number ids, path tokens,
