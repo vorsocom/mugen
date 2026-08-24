@@ -179,6 +179,7 @@ def contribute(
             "soft_delete": SoftDeletePolicy(
                 mode=SoftDeleteMode.TIMESTAMP,
                 column="DeletedAt",
+                allow_deleted_collection_views=True,
                 allow_restore=True,
                 allow_hard_delete=False,
             ),
@@ -209,6 +210,7 @@ def contribute(
             "soft_delete": SoftDeletePolicy(
                 mode=SoftDeleteMode.TIMESTAMP,
                 column="DeletedAt",
+                allow_deleted_collection_views=True,
                 allow_restore=True,
                 allow_hard_delete=False,
             ),

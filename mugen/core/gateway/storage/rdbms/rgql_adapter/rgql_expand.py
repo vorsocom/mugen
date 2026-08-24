@@ -95,6 +95,28 @@ def apply_to_filter_groups(
     return merged
 
 
+def selected_query_columns(
+    edm_type: EdmType,
+    selected_properties: Sequence[str],
+) -> list[str]:
+    """Resolve stored projection columns and mandatory response fields."""
+    columns = [
+        title_to_snake(name)
+        for name in selected_properties
+        if "/" not in name
+        and not bool(getattr(edm_type.properties.get(name), "computed", False))
+    ]
+    for name, prop in edm_type.properties.items():
+        if not bool(getattr(prop, "always_serialize", False)):
+            continue
+        if bool(getattr(prop, "computed", False)):
+            continue
+        column = title_to_snake(name)
+        if column not in columns:
+            columns.append(column)
+    return columns
+
+
 def apply_to_where(
     where: dict[str, Any],
     defaults: dict[str, Any],
@@ -357,7 +379,7 @@ async def expand_navs_recursive(
             )
 
         # Only root-level scalar properties for this nav for now
-        child_columns = [title_to_snake(p) for p in child_opts.select if "/" not in p]
+        child_columns = selected_query_columns(nav_type, child_opts.select)
 
     where_provider = ctx.default_where_provider
     if (
@@ -641,7 +663,7 @@ async def expand_navs_bulk(
             )
 
         # Only root-level scalar properties for this nav for now
-        child_columns = [title_to_snake(p) for p in child_opts.select if "/" not in p]
+        child_columns = selected_query_columns(nav_type, child_opts.select)
 
     needs_child_id = bool(child_opts.expand)  # nested expansions need child.id
 

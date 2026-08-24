@@ -1,0 +1,28 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "admin",
+    "password": "aDmin,123"
+  },
+  "billing_namespace": "com.vorsocomputing.mugen.billing",
+  "catalog": {
+    "product_code": "__BILLING_PRODUCT_CODE__-ARCHIVE",
+    "price_code": "__BILLING_PRODUCT_CODE__-ARCHIVE-PRICE"
+  },
+  "catalog_reader": {
+    "username": "reader___BILLING_PRODUCT_CODE__",
+    "password": "E2e,Reader123!",
+    "email": "reader.__BILLING_PRODUCT_CODE__@example.com"
+  },
+  "authenticated_only": {
+    "username": "authenticated___BILLING_PRODUCT_CODE__",
+    "password": "E2e,Authenticated123!",
+    "email": "authenticated.__BILLING_PRODUCT_CODE__@example.com"
+  }
+}

@@ -5,4 +5,5 @@ import mugen.core.plugin.acp.api.action
 import mugen.core.plugin.acp.api.crud
 import mugen.core.plugin.acp.api.func_auth
 import mugen.core.plugin.acp.api.func_ipc
+import mugen.core.plugin.acp.api.func_runtime_extensions
 import mugen.core.plugin.acp.api.func_runtime_matrix

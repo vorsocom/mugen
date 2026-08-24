@@ -44,6 +44,40 @@ global Price.
 
 ## Permissions and lifecycle
 
+Clients determine Billing availability from the authenticated runtime extension
+contract instead of probing catalog routes:
+
+```text
+GET /api/core/acp/v1/runtime/extensions
+GET /api/core/acp/v1/runtime/extensions/core.fw.billing
+```
+
+The collection returns `{"value": [...]}` sorted by extension token. It includes
+every known built-in extension and every configured downstream extension. A detail
+lookup returns `404` only when the token is wholly unknown. Any authenticated user
+may read this client-safe state, including a user whose only Billing role is
+`catalog_reader`.
+
+```json
+{
+  "token": "core.fw.billing",
+  "extension_type": "fw",
+  "configured": true,
+  "enabled": true,
+  "available": true,
+  "status": "registered",
+  "reason": null
+}
+```
+
+`status` is one of `absent`, `disabled`, `registered`, `unsupported`, or `failed`.
+Only `registered` has `available: true`. The corresponding safe failure reasons are
+`not_configured`, `disabled_by_configuration`,
+`unsupported_by_active_platforms`, and `registration_failed`; raw bootstrap errors
+and configuration details are never returned. The state reflects the completed
+runtime registration sweep and remains available when a non-critical extension
+fails, provided ACP itself started successfully.
+
 The global `<billing-namespace>:catalog_reader` role receives `read` permission
 for Products and Prices only. Catalog create, update, archive, and restore remain
 administrator operations. Archive uses:
@@ -56,11 +90,44 @@ POST /api/core/acp/v1/BillingPrices/{priceId}/$action/archive
 with a `RowVersion` payload. Restore uses ACP's standard global `$restore`
 endpoint.
 
-Collections return active catalog rows. Archived rows remain resolvable by
-direct ID and through tenant-resource forward navigation so historical billing
-records do not lose their Product or Price meaning. A global Price deliberately
-has no reverse Subscription, Invoice Line, Usage Event, or Entitlement Bucket
-navigation.
+Product and Price collections support explicit lifecycle views on their global
+routes only:
+
+```text
+GET /api/core/acp/v1/BillingProducts?$deleted=active
+GET /api/core/acp/v1/BillingProducts?$deleted=archived
+GET /api/core/acp/v1/BillingProducts?$deleted=all
+GET /api/core/acp/v1/BillingPrices?$deleted=archived&$filter=ProductId eq guid'<uuid>'
+```
+
+Omitting `$deleted` is equivalent to `active`. The option composes with existing
+pagination, ordering, filtering, selection, and count options. Invalid, repeated,
+entity-route, tenant-route, or non-catalog uses return `400`.
+
+Every Product and Price response includes `DeletedAt`, `IsArchived`, and
+`RowVersion`, even when `$select` is used. `DeletedAt` is `null` for active rows,
+and `IsArchived` is a computed, read-only boolean. Payloads and routes never accept
+or return `TenantId`.
+
+Archived rows remain resolvable by direct ID and through tenant-resource forward
+navigation so historical billing records do not lose their Product or Price
+meaning. Restore uses the archived row's current version:
+
+```text
+POST /api/core/acp/v1/BillingProducts/{productId}/$restore
+POST /api/core/acp/v1/BillingPrices/{priceId}/$restore
+```
+
+```json
+{
+  "RowVersion": 2
+}
+```
+
+Catalog reads, including archived views, require Product or Price `read`
+permission. Restore continues to require `update`; stale versions return `409`.
+A global Price deliberately has no reverse Subscription, Invoice Line, Usage Event,
+or Entitlement Bucket navigation.
 
 Archiving does not terminate or alter a current Subscription. It prevents new
 Subscriptions and reactivation; existing current and historical references

@@ -9,6 +9,7 @@ __all__ = [
     "PHASE_A_NON_BLOCKING_DEGRADATIONS_KEY",
     "BootstrapConfigError",
     "BootstrapError",
+    "EXTENSION_STATUSES_KEY",
     "ExtensionLoadError",
     "MUGEN_EXTENSION_KEY",
     "PHASE_A_STATUS_KEY",
@@ -26,6 +27,7 @@ __all__ = [
     "bootstrap_app",
     "create_quart_app",
     "get_bootstrap_state",
+    "get_extension_statuses",
     "run_line_client",
     "run_signal_client",
     "run_telegram_client",
@@ -49,6 +51,7 @@ from quart import Quart, jsonify
 
 from mugen.bootstrap_state import (
     BOOTSTRAP_STATE_KEY,
+    EXTENSION_STATUSES_KEY,
     MUGEN_EXTENSION_KEY,
     PHASE_A_BLOCKING_FAILURES_KEY,
     PHASE_A_CAPABILITY_ERRORS_KEY,
@@ -68,6 +71,7 @@ from mugen.bootstrap_state import (
     PHASE_STATUS_STOPPED,
     SHUTDOWN_REQUESTED_KEY,
     get_bootstrap_state,
+    get_extension_statuses,
 )
 from mugen.config import AppConfig
 from mugen.core.bootstrap.extensions import (
@@ -106,6 +110,7 @@ from mugen.core.domain.use_case import (
     RuntimeCapabilityInput,
     evaluate_runtime_capabilities,
 )
+from mugen.core.plugin.token_registry import get_plugin_extension_token_registry
 from mugen.core.runtime.phase_b_bootstrap import (
     PHASE_B_CRITICAL_PLATFORMS_KEY as _PHASE_B_CRITICAL_PLATFORMS_KEY,
     PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY as _PHASE_B_DEGRADE_ON_CRITICAL_EXIT_KEY,
@@ -1315,6 +1320,43 @@ async def run_platform_clients(
         raise
 
 
+def _extension_status_record(
+    *,
+    token: str,
+    extension_type: str,
+    configured: bool,
+    enabled: bool,
+    status: str,
+    reason: str | None,
+) -> dict[str, object]:
+    """Build a client-safe runtime extension status record."""
+    return {
+        "token": token,
+        "extension_type": extension_type,
+        "configured": configured,
+        "enabled": enabled,
+        "available": status == "registered",
+        "status": status,
+        "reason": reason,
+    }
+
+
+def _initialize_extension_statuses(app: Quart) -> dict[str, dict[str, object]]:
+    """Initialize known extensions as absent for this bootstrap sweep."""
+    statuses = get_extension_statuses(app)
+    statuses.clear()
+    for token, binding in get_plugin_extension_token_registry().items():
+        statuses[token] = _extension_status_record(
+            token=token,
+            extension_type=binding[0],
+            configured=False,
+            enabled=False,
+            status="absent",
+            reason="not_configured",
+        )
+    return statuses
+
+
 async def register_extensions(  # pylint: disable=too-many-positional-arguments
     app: Quart,
     config_provider=_config_provider,
@@ -1336,6 +1378,8 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
         extensions = configured_extensions(config)
     except RuntimeError as exc:
         raise BootstrapConfigError(str(exc)) from exc
+
+    extension_statuses = _initialize_extension_statuses(app)
 
     if extension_registry_provider is None:
         extension_registry: IExtensionRegistry = DefaultExtensionRegistry(
@@ -1359,8 +1403,26 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
         token = raw_token.strip().lower()
         configured_type = str(getattr(ext_cfg, "type", "") or "").strip().lower()
         critical = _parse_ext_bool(getattr(ext_cfg, "critical", False), default=False)
+        enabled = _extension_enabled(ext_cfg)
+        known_status = extension_statuses.get(token)
+        extension_type = (
+            str(known_status["extension_type"])
+            if known_status is not None
+            else configured_type
+        )
 
-        if not _extension_enabled(ext_cfg):
+        extension_statuses[token] = _extension_status_record(
+            token=token,
+            extension_type=extension_type,
+            configured=True,
+            enabled=enabled,
+            status="failed" if enabled else "disabled",
+            reason=(
+                "registration_failed" if enabled else "disabled_by_configuration"
+            ),
+        )
+
+        if not enabled:
             logger.info(
                 f"Skipping disabled extension: {token or '<unknown>'}"
                 f" ({configured_type or '<unknown>'})."
@@ -1374,6 +1436,14 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
                 configured_type=configured_type,
             )
             resolved_type = spec.extension_type
+            extension_statuses[token] = _extension_status_record(
+                token=token,
+                extension_type=resolved_type,
+                configured=True,
+                enabled=True,
+                status="failed",
+                reason="registration_failed",
+            )
             if configured_type not in {"", resolved_type}:
                 raise ExtensionLoadError(
                     "Extension type/token mismatch "
@@ -1413,11 +1483,27 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
             continue
 
         if registered:
+            extension_statuses[token] = _extension_status_record(
+                token=token,
+                extension_type=resolved_type,
+                configured=True,
+                enabled=True,
+                status="registered",
+                reason=None,
+            )
             logger.debug(f"Registered {resolved_type.upper()} extension: {token}.")
             if resolved_type not in registered_tokens_by_type:
                 registered_tokens_by_type[resolved_type] = set()
             registered_tokens_by_type[resolved_type].add(token)
         else:
+            extension_statuses[token] = _extension_status_record(
+                token=token,
+                extension_type=resolved_type,
+                configured=True,
+                enabled=True,
+                status="unsupported",
+                reason="unsupported_by_active_platforms",
+            )
             logger.debug(f"Skipped unsupported extension: {token} ({resolved_type}).")
 
     logger.debug(
