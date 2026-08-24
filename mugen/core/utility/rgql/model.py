@@ -57,6 +57,10 @@ class EdmProperty:
         Whether the property may be used in $filter expressions.
     sortable:
         Whether the property may be used in $orderby expressions.
+    computed:
+        Whether the property is derived at serialization time rather than stored.
+    always_serialize:
+        Whether projections must retain this property in response payloads.
     """
 
     name: str
@@ -65,6 +69,8 @@ class EdmProperty:
     filterable: bool = True
     sortable: bool = True
     redact: bool = False
+    computed: bool = False
+    always_serialize: bool = False
 
 
 @dataclass

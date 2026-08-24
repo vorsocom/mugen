@@ -76,6 +76,12 @@ class TestBillingGlobalCatalogContract(unittest.TestCase):
             {"DeletedByUser", "Product"},
         )
         self.assertTrue(price_type.properties["MeterCode"].nullable)
+        for edm_type in (product_type, price_type):
+            self.assertIn("IsArchived", edm_type.properties)
+            self.assertTrue(edm_type.properties["IsArchived"].computed)
+            self.assertTrue(edm_type.properties["IsArchived"].always_serialize)
+            self.assertTrue(edm_type.properties["DeletedAt"].always_serialize)
+            self.assertTrue(edm_type.properties["RowVersion"].always_serialize)
 
     def test_models_use_global_keys_and_global_foreign_keys(self) -> None:
         self.assertNotIn("tenant_id", Product.__table__.columns)
@@ -280,6 +286,9 @@ class TestBillingGlobalCatalogContract(unittest.TestCase):
         for entity_set in ("BillingProducts", "BillingPrices"):
             resource = registry.get_resource(entity_set)
             self.assertTrue(resource.behavior.resolve_soft_deleted_references)
+            self.assertTrue(
+                resource.behavior.soft_delete.allow_deleted_collection_views
+            )
             self.assertTrue(resource.capabilities.allow_manage)
             self.assertTrue(resource.capabilities.actions["archive"]["is_admin_action"])
 

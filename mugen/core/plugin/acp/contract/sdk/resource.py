@@ -100,6 +100,7 @@ class SoftDeletePolicy:
     column: Optional[str] = None  # e.g., "DeletedAt" or "IsDeleted"
     deleted_value: Any | None = True  # only for FLAG, usually True
     include_deleted_default: bool = False
+    allow_deleted_collection_views: bool = False
     allow_restore: bool = False
     allow_hard_delete: bool = True
 

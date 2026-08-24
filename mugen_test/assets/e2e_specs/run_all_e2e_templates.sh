@@ -266,6 +266,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 ACP_RUNNER="$REPO_ROOT/.codex/skills/acp-http-e2e-tester/scripts/run_acp_http_e2e.sh"
 WEB_RUNNER="$REPO_ROOT/mugen_test/assets/e2e_specs/web/run_web_http_e2e.sh"
 ACP_INVITE_RUNNER="$REPO_ROOT/mugen_test/assets/e2e_specs/acp/run_acp_invitation_redeem_e2e.sh"
+BILLING_ARCHIVE_RUNNER="$REPO_ROOT/mugen_test/assets/e2e_specs/billing/run_billing_runtime_archive_e2e.sh"
 
 PRINT_CONFIG=0
 ONLY_FILTER=""
@@ -344,6 +345,11 @@ if [[ ! -x "$ACP_INVITE_RUNNER" ]]; then
   exit 1
 fi
 
+if [[ ! -x "$BILLING_ARCHIVE_RUNNER" ]]; then
+  echo "ERROR: runner not found or not executable: $BILLING_ARCHIVE_RUNNER" >&2
+  exit 1
+fi
+
 E2E_PYTHON_BIN="$(resolve_python_bin)"
 E2E_PYTHONPATH="$REPO_ROOT"
 if [[ -n "${PYTHONPATH:-}" ]]; then
@@ -382,6 +388,7 @@ declare -a FULL_SPECS=(
   "mugen_test/assets/e2e_specs/ops_workflow/ops-workflow-e2e-decision-request.template.json"
   "mugen_test/assets/e2e_specs/ops_metering/ops-metering-e2e-meter-definition-smoke.template.json"
   "mugen_test/assets/e2e_specs/billing/billing-e2e-account-product-smoke.template.json"
+  "mugen_test/assets/e2e_specs/billing/billing-runtime-archive.template.json"
   "mugen_test/assets/e2e_specs/ops_vpn/ops-vpn-e2e-vendor-lifecycle.template.json"
   "mugen_test/assets/e2e_specs/knowledge_pack/knowledge-pack-e2e-pack-smoke.template.json"
   "mugen_test/assets/e2e_specs/ops_governance/ops-governance-e2e-policy-evaluate.template.json"
@@ -512,6 +519,8 @@ for spec_rel in "${SPECS[@]}"; do
     runner="$WEB_RUNNER"
   elif [[ "$spec_rel" == *"/acp/acp-tenant-invitation-redeem.template.json" ]]; then
     runner="$ACP_INVITE_RUNNER"
+  elif [[ "$spec_rel" == *"/billing/billing-runtime-archive.template.json" ]]; then
+    runner="$BILLING_ARCHIVE_RUNNER"
   fi
 
   if [[ "$SERVER_MODE" == "shared" && "$PRINT_CONFIG" -ne 1 && "$runner" != "$ACP_INVITE_RUNNER" ]]; then
@@ -522,7 +531,7 @@ for spec_rel in "${SPECS[@]}"; do
     stop_shared_server
   fi
 
-  if [[ "$use_shared_server_for_runner" -eq 1 && "$runner" == "$ACP_RUNNER" ]]; then
+  if [[ "$use_shared_server_for_runner" -eq 1 && ( "$runner" == "$ACP_RUNNER" || "$runner" == "$BILLING_ARCHIVE_RUNNER" ) ]]; then
     runner_extra_env=("ACP_E2E_EXTERNAL_SERVER=1")
   elif [[ "$use_shared_server_for_runner" -eq 1 && "$runner" == "$WEB_RUNNER" ]]; then
     runner_extra_env=("WEB_E2E_EXTERNAL_SERVER=1")

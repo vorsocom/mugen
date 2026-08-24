@@ -29,6 +29,7 @@ from mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_expand import (
     expand_navs_bulk,
     expand_navs_recursive,
     normalise_expand_levels,
+    selected_query_columns,
 )
 from mugen.core.gateway.storage.rdbms.rgql_adapter.error import RGQLExpandError
 from mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_to_relational import (
@@ -121,6 +122,38 @@ class TestMugenRgqlExpandHelpers(unittest.TestCase):
                     target_fk="ParentId",
                 ),
             },
+        )
+
+    def test_selected_query_columns_skip_computed_and_retain_mandatory(self) -> None:
+        edm_type = EdmType(
+            name="NS.Archive",
+            kind="entity",
+            properties={
+                "Code": EdmProperty("Code", TypeRef("Edm.String")),
+                "DeletedAt": EdmProperty(
+                    "DeletedAt",
+                    TypeRef("Edm.DateTimeOffset"),
+                    always_serialize=True,
+                ),
+                "IsArchived": EdmProperty(
+                    "IsArchived",
+                    TypeRef("Edm.Boolean"),
+                    computed=True,
+                    always_serialize=True,
+                ),
+            },
+        )
+
+        self.assertEqual(
+            selected_query_columns(edm_type, ["Code", "IsArchived"]),
+            ["code", "deleted_at"],
+        )
+        self.assertEqual(
+            selected_query_columns(
+                edm_type,
+                ["Code", "DeletedAt", "IsArchived"],
+            ),
+            ["code", "deleted_at"],
         )
 
     def test_apply_to_filter_groups_and_where(self) -> None:

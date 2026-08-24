@@ -20,7 +20,12 @@ price_type = EdmType(
         "UpdatedAt": EdmProperty(
             "UpdatedAt", TypeRef("Edm.DateTimeOffset"), nullable=False
         ),
-        "RowVersion": EdmProperty("RowVersion", TypeRef("Edm.Int64"), nullable=False),
+        "RowVersion": EdmProperty(
+            "RowVersion",
+            TypeRef("Edm.Int64"),
+            nullable=False,
+            always_serialize=True,
+        ),
         "ProductId": EdmProperty("ProductId", TypeRef("Edm.Guid"), nullable=False),
         "Code": EdmProperty("Code", TypeRef("Edm.String"), nullable=False),
         "PriceType": EdmProperty("PriceType", TypeRef("Edm.String"), nullable=False),
@@ -37,8 +42,21 @@ price_type = EdmType(
             filterable=False,
             sortable=False,
         ),
-        "DeletedAt": EdmProperty("DeletedAt", TypeRef("Edm.DateTimeOffset")),
+        "DeletedAt": EdmProperty(
+            "DeletedAt",
+            TypeRef("Edm.DateTimeOffset"),
+            always_serialize=True,
+        ),
         "DeletedByUserId": EdmProperty("DeletedByUserId", TypeRef("Edm.Guid")),
+        "IsArchived": EdmProperty(
+            "IsArchived",
+            TypeRef("Edm.Boolean"),
+            nullable=False,
+            filterable=False,
+            sortable=False,
+            computed=True,
+            always_serialize=True,
+        ),
     },
     nav_properties={
         "DeletedByUser": EdmNavigationProperty(
