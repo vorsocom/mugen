@@ -297,6 +297,24 @@ def rgql_enabled(
                 registry=registry,
                 tenant_id=tenant_id,
             )
+            base_reference_where_provider = make_default_where_provider(
+                registry=registry,
+                tenant_id=tenant_id,
+                include_deleted=True,
+            )
+
+            def _resolves_soft_deleted_references(type_name: str) -> bool:
+                try:
+                    target_resource = registry.get_resource_by_type(type_name)
+                except KeyError:
+                    return False
+                return bool(
+                    getattr(
+                        target_resource.behavior,
+                        "resolve_soft_deleted_references",
+                        False,
+                    )
+                )
 
             def default_where_provider(type_name: str) -> dict[str, Any]:
                 defaults = dict(base_default_where_provider(type_name))
@@ -306,6 +324,13 @@ def rgql_enabled(
                 ):
                     defaults["status"] = "active"
                 return defaults
+
+            def forward_reference_where_provider(
+                type_name: str,
+            ) -> dict[str, Any]:
+                if _resolves_soft_deleted_references(type_name):
+                    return dict(base_reference_where_provider(type_name))
+                return default_where_provider(type_name)
 
             def _serialize_entity(
                 entity,
@@ -577,6 +602,7 @@ def rgql_enabled(
                     max_filter_terms=max_filter_terms,
                     nav_path_planner=_plan_nav_path,
                     default_where_provider=default_where_provider,
+                    forward_reference_where_provider=(forward_reference_where_provider),
                 )
 
                 # Support $expand=* by materializing wildcards into concrete navs
@@ -614,7 +640,11 @@ def rgql_enabled(
             values: list[dict[str, Any]] = []
             count: int | None = None
 
-            delete_filter = default_where_provider(edm_type.name)
+            delete_filter = (
+                forward_reference_where_provider(edm_type.name)
+                if entity_id is not None
+                else default_where_provider(edm_type.name)
+            )
 
             if entity_id is None:
                 filter_groups = apply_to_filter_groups(

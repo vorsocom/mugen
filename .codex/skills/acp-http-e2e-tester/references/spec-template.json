@@ -11,6 +11,7 @@
     "password": "__ACP_PASSWORD__"
   },
   "tenant_id": null,
+  "scope": "tenant",
   "entity_set": "YourEntitySet",
   "create_payload": {
     "Title": "Unique test title"
@@ -32,6 +33,7 @@
   ],
   "assertions": {
     "final_status": null,
+    "absent_fields": [],
     "event_entity_set": "YourEventEntitySet",
     "event_entity_id_field": "CaseId",
     "event_type_field": "EventType",

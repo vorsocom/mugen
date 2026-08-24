@@ -4,13 +4,11 @@ __all__ = ["Price", "PriceType", "IntervalUnit"]
 
 import enum
 import uuid
-from typing import TYPE_CHECKING, List
 
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
-    ForeignKeyConstraint,
-    Index,
+    ForeignKey,
     Integer,
     UniqueConstraint,
     Uuid,
@@ -21,11 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.soft_delete import SoftDeleteMixin
-from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
 from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
-
-if TYPE_CHECKING:
-    from mugen.core.plugin.billing.model.entitlement_bucket import EntitlementBucket
 
 
 class PriceType(str, enum.Enum):
@@ -46,13 +40,17 @@ class IntervalUnit(str, enum.Enum):
 
 
 # pylint: disable=too-few-public-methods
-class Price(ModelBase, TenantScopedMixin, SoftDeleteMixin):
+class Price(ModelBase, SoftDeleteMixin):
     """An ORM for billing prices."""
 
     __tablename__ = "billing_price"
 
     product_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
+        ForeignKey(
+            f"{CORE_SCHEMA_TOKEN}.billing_product.id",
+            ondelete="RESTRICT",
+        ),
         nullable=False,
         index=True,
     )
@@ -112,9 +110,9 @@ class Price(ModelBase, TenantScopedMixin, SoftDeleteMixin):
         nullable=True,
     )
 
-    meter_code: Mapped[str] = mapped_column(
+    meter_code: Mapped[str | None] = mapped_column(
         CITEXT(64),
-        nullable=False,
+        nullable=True,
         index=True,
     )
 
@@ -127,36 +125,14 @@ class Price(ModelBase, TenantScopedMixin, SoftDeleteMixin):
         back_populates="prices",
     )
 
-    subscriptions: Mapped[List["Subscription"]] = relationship(  # type: ignore
-        back_populates="price",
-        cascade="save-update, merge",
-    )
-
-    invoice_lines: Mapped[List["InvoiceLine"]] = relationship(  # type: ignore
-        back_populates="price",
-        cascade="save-update, merge",
-    )
-
-    usage_events: Mapped[List["UsageEvent"]] = relationship(  # type: ignore
-        back_populates="price",
-        cascade="save-update, merge",
-    )
-
-    entitlement_buckets: Mapped[List["EntitlementBucket"]] = relationship(
-        back_populates="price",
-        cascade="save-update, merge",
-    )
-
     __table_args__ = (
-        ForeignKeyConstraint(
-            ("tenant_id", "product_id"),
-            (f"{CORE_SCHEMA_TOKEN}.billing_product.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_product.id"),
-            name="fkx_billing_price__tenant_product",
-            ondelete="RESTRICT",
-        ),
         CheckConstraint(
             "length(btrim(code)) > 0",
             name="ck_billing_price__code_nonempty",
+        ),
+        CheckConstraint(
+            "code = btrim(code)",
+            name="ck_billing_price__code_trimmed",
         ),
         CheckConstraint(
             "length(btrim(currency)) = 3",
@@ -179,32 +155,28 @@ class Price(ModelBase, TenantScopedMixin, SoftDeleteMixin):
             name="ck_billing_price__usage_unit_nonempty_if_set",
         ),
         CheckConstraint(
-            "length(btrim(meter_code)) > 0",
-            name="ck_billing_price__meter_code_nonempty",
+            "meter_code IS NULL OR length(btrim(meter_code)) > 0",
+            name="ck_billing_price__meter_code_nonempty_if_set",
+        ),
+        CheckConstraint(
+            "(meter_code IS NULL) = (usage_unit IS NULL)",
+            name="ck_billing_price__meter_pair_complete",
+        ),
+        CheckConstraint(
+            (
+                "price_type <> 'metered' OR "
+                "(meter_code IS NOT NULL AND usage_unit IS NOT NULL)"
+            ),
+            name="ck_billing_price__metered_pair_required",
         ),
         CheckConstraint(
             "NOT (deleted_at IS NOT NULL AND deleted_by_user_id IS NULL)",
             name="ck_billing_price__not_deleted_and_not_deleted_by",
         ),
         UniqueConstraint(
-            "tenant_id",
-            "id",
-            name="ux_billing_price__tenant_id_id",
-        ),
-        Index(
-            "ix_billing_price__tenant_code",
-            "tenant_id",
-            "code",
-        ),
-        Index(
-            "ix_billing_price__tenant_product",
-            "tenant_id",
             "product_id",
-        ),
-        Index(
-            "ix_billing_price__tenant_meter_code",
-            "tenant_id",
-            "meter_code",
+            "code",
+            name="ux_billing_price__product_code",
         ),
         {"schema": CORE_SCHEMA_TOKEN},
     )

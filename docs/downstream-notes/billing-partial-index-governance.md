@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owner: downstream plugin team
-- Last Updated: 2026-02-14
+- Last Updated: 2026-08-24
 
 ## Context
 
@@ -46,6 +46,10 @@ Current migration-owned partial index patterns include:
   - `9c4211adf09d_billing_payment_allocations`
   - `d8a9f3c1e52b_billing_entitlements_and_usage_allocations`
   - `f7b1c2d3e4a5_billing_runs_adjustments_and_meter_codes`
+
+Product and Price are exceptions after `3e7c9a1b5d2f`: their global Code
+uniqueness includes active and soft-deleted rows. This deliberately prevents
+code reuse from making restore ambiguous.
 
 ### Services / APIs
 

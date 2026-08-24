@@ -31,7 +31,9 @@ from mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_expand import (
     normalise_expand_levels,
 )
 from mugen.core.gateway.storage.rdbms.rgql_adapter.error import RGQLExpandError
-from mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_to_relational import RGQLToRelationalAdapter
+from mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_to_relational import (
+    RGQLToRelationalAdapter,
+)
 
 
 @dataclass
@@ -61,7 +63,9 @@ class _FakeNavService:
     def __init__(self, *, list_result=None, get_result=None, partition_result=None):
         self._list_result = list_result if list_result is not None else []
         self._get_result = get_result
-        self._partition_result = partition_result if partition_result is not None else []
+        self._partition_result = (
+            partition_result if partition_result is not None else []
+        )
         self.last_list_kwargs = None
         self.last_get_kwargs = None
         self.last_partition_kwargs = None
@@ -331,9 +335,9 @@ class TestMugenRgqlExpandAsync(unittest.IsolatedAsyncioTestCase):
             default_where_provider = lambda _type_name: {}
 
         if serialization_provider is None:
-            serialization_provider = (
-                lambda entity, _edm_type, _cols, _paths: {"Id": getattr(entity, "id", None)}
-            )
+            serialization_provider = lambda entity, _edm_type, _cols, _paths: {
+                "Id": getattr(entity, "id", None)
+            }
 
         return ExpansionContext(
             model=cls._make_model(),
@@ -499,6 +503,9 @@ class TestMugenRgqlExpandAsync(unittest.IsolatedAsyncioTestCase):
             service_resolver=lambda type_name: services.get(type_name),
             default_where_provider=lambda _type_name: {"is_deleted": False},
         )
+        ctx.forward_reference_where_provider = lambda _type_name: {
+            "include_archived": True
+        }
 
         parent = _Entity(id=1, owner_id=5)
         await expand_navs_recursive(
@@ -517,7 +524,7 @@ class TestMugenRgqlExpandAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parent.owner, {"Name": "Boss"})  # type: ignore[attr-defined]
         self.assertEqual(
             child_service.last_get_kwargs["where"],
-            {"id": 5, "is_deleted": False},
+            {"id": 5, "include_archived": True},
         )
         self.assertIn("name", child_service.last_get_kwargs["columns"])
         self.assertIn("id", child_service.last_get_kwargs["columns"])
@@ -886,7 +893,9 @@ class TestMugenRgqlExpandAsync(unittest.IsolatedAsyncioTestCase):
         self.assertIn("id", child_service.last_list_kwargs["columns"])
         self.assertIn("owner_id", child_service.last_list_kwargs["columns"])
 
-        scalar_filters = child_service.last_list_kwargs["filter_groups"][0].scalar_filters
+        scalar_filters = child_service.last_list_kwargs["filter_groups"][
+            0
+        ].scalar_filters
         self.assertEqual(len(scalar_filters), 1)
         self.assertEqual(scalar_filters[0].op, ScalarFilterOp.IN)
         self.assertEqual(scalar_filters[0].value, [5, 6])

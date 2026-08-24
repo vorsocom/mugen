@@ -6,7 +6,6 @@ from typing import List
 
 from sqlalchemy import (
     CheckConstraint,
-    Index,
     UniqueConstraint,
 )
 from sqlalchemy import Text
@@ -15,12 +14,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.soft_delete import SoftDeleteMixin
-from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
 from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
 
 
 # pylint: disable=too-few-public-methods
-class Product(ModelBase, TenantScopedMixin, SoftDeleteMixin):
+class Product(ModelBase, SoftDeleteMixin):
     """An ORM for billing products."""
 
     __tablename__ = "billing_product"
@@ -58,6 +56,10 @@ class Product(ModelBase, TenantScopedMixin, SoftDeleteMixin):
             name="ck_billing_product__code_nonempty",
         ),
         CheckConstraint(
+            "code = btrim(code)",
+            name="ck_billing_product__code_trimmed",
+        ),
+        CheckConstraint(
             "length(btrim(name)) > 0",
             name="ck_billing_product__name_nonempty",
         ),
@@ -66,14 +68,8 @@ class Product(ModelBase, TenantScopedMixin, SoftDeleteMixin):
             name="ck_billing_product__not_deleted_and_not_deleted_by",
         ),
         UniqueConstraint(
-            "tenant_id",
-            "id",
-            name="ux_billing_product__tenant_id_id",
-        ),
-        Index(
-            "ix_billing_product__tenant_code",
-            "tenant_id",
             "code",
+            name="ux_billing_product__code",
         ),
         {"schema": CORE_SCHEMA_TOKEN},
     )

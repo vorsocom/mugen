@@ -43,6 +43,7 @@ from mugen.core.plugin.acp.contract.sdk.binding import (
 )
 from mugen.core.plugin.acp.contract.sdk.permission import (
     DefaultGlobalGrant,
+    GlobalRoleDef,
     PermissionObjectDef,
 )
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
@@ -131,6 +132,13 @@ def contribute(
             is_set=True,
         )
     )
+    registry.register_global_role(
+        GlobalRoleDef(
+            namespace=plugin_ns.ns,
+            name="catalog_reader",
+            display_name="Billing Catalog Reader",
+        )
+    )
 
     # ------------------------------------------------------------------
     # 2) Resource catalog
@@ -159,10 +167,11 @@ def contribute(
         {
             "set": "BillingProducts",
             "entity": "Product",
-            "description": "Billable product or SKU (tenant-scoped).",
+            "description": "Global billable product or platform SKU.",
             "allow_create": True,
             "allow_update": True,
             "allow_delete": False,
+            "allow_manage": True,
             "crud": CrudPolicy(
                 create_schema=BillingProductCreateValidation,
                 update_schema=BillingProductUpdateValidation,
@@ -173,16 +182,26 @@ def contribute(
                 allow_restore=True,
                 allow_hard_delete=False,
             ),
+            "resolve_soft_deleted_references": True,
+            "actions": {
+                "archive": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": RowVersionValidation,
+                    "confirm": "Archive this global product?",
+                    "is_admin_action": True,
+                },
+            },
         },
         {
             "set": "BillingPrices",
             "entity": "Price",
             "description": (
-                "Price definition for a product (one-time/recurring/metered)."
+                "Global Price definition for a Product " "(one-time/recurring/metered)."
             ),
             "allow_create": True,
             "allow_update": True,
             "allow_delete": False,
+            "allow_manage": True,
             "crud": CrudPolicy(
                 create_schema=BillingPriceCreateValidation,
                 update_schema=BillingPriceUpdateValidation,
@@ -193,6 +212,15 @@ def contribute(
                 allow_restore=True,
                 allow_hard_delete=False,
             ),
+            "resolve_soft_deleted_references": True,
+            "actions": {
+                "archive": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": RowVersionValidation,
+                    "confirm": "Archive this global price?",
+                    "is_admin_action": True,
+                },
+            },
         },
         {
             "set": "BillingSubscriptions",
@@ -425,6 +453,19 @@ def contribute(
         for pobj in billing_obj_keys
         for ptyp in admin_verb_keys
     )
+    catalog_object_keys = {
+        PermissionObjectDef(plugin_ns.ns, "product").key,
+        PermissionObjectDef(plugin_ns.ns, "price").key,
+    }
+    registry.register_default_global_grants(
+        DefaultGlobalGrant(
+            plugin_ns.key("catalog_reader"),
+            permission_object,
+            admin_ns.verb("read"),
+            True,
+        )
+        for permission_object in sorted(catalog_object_keys)
+    )
 
     # ------------------------------------------------------------------
     # 5) AdminResources + declarative runtime binding specs
@@ -466,6 +507,9 @@ def contribute(
                 behavior=AdminBehavior(
                     soft_delete=r.get("soft_delete", SoftDeletePolicy()),
                     rgql_enabled=True,
+                    resolve_soft_deleted_references=bool(
+                        r.get("resolve_soft_deleted_references", False)
+                    ),
                 ),
                 crud=r.get("crud", CrudPolicy()),
                 title=_humanize(entity_set),
