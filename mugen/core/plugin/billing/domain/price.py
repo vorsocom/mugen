@@ -4,16 +4,15 @@ __all__ = ["PriceDE"]
 
 import uuid
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any
 
 from mugen.core.plugin.acp.domain.base import BaseDE
 from mugen.core.plugin.acp.domain.mixin.soft_delete import SoftDeleteDEMixin
-from mugen.core.plugin.acp.domain.mixin.tenant_scoped import TenantScopedDEMixin
 
 
 # pylint: disable=too-many-instance-attributes
 @dataclass
-class PriceDE(BaseDE, TenantScopedDEMixin, SoftDeleteDEMixin):
+class PriceDE(BaseDE, SoftDeleteDEMixin):
     """A domain entity for the billing Price DB model."""
 
     product_id: uuid.UUID | None = None
@@ -33,5 +32,3 @@ class PriceDE(BaseDE, TenantScopedDEMixin, SoftDeleteDEMixin):
     attributes: dict[str, Any] | None = None
 
     product: "ProductDE | None" = None  # type: ignore
-    subscriptions: Sequence["SubscriptionDE"] | None = None  # type: ignore
-    entitlement_buckets: Sequence["EntitlementBucketDE"] | None = None  # type: ignore

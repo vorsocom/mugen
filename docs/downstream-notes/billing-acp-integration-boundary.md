@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owner: downstream plugin team
-- Last Updated: 2026-02-14
+- Last Updated: 2026-08-24
 
 ## Context
 
@@ -15,6 +15,8 @@ abstractions.
 ## Decision
 
 - Treat ACP as the admin control plane for billing resources and actions.
+- Treat Products and Prices as global catalog resources; keep Accounts,
+  Subscriptions, and operational/accounting records tenant-scoped.
 - Keep billing contributor logic in `mugen/core/plugin/billing/contrib.py` as
   the single registration surface for billing ACP resources.
 - Keep billing API package (`mugen/core/plugin/billing/api`) reserved for
@@ -28,7 +30,10 @@ abstractions.
   - Register billing entity metadata, behavior, and action contracts.
   - Bind ACP resources to billing model/EDM/service implementations.
 - Downstream responsibilities:
-  - Configure tenant policy and seed values for production environments.
+  - Configure tenant policy and seed global Product/Price values for production
+    environments.
+  - Remove tenant filters from Product and Price lookups while preserving them
+    for Accounts and Subscriptions.
   - Add domain-specific non-ACP endpoints only when ACP actions are
     insufficient.
   - Operate plugin enablement order and rollout sequencing.

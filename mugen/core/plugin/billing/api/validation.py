@@ -1,9 +1,15 @@
 """Validation schemas used by billing ACP CRUD resources."""
 
+from typing import Any
+import uuid
+
+from pydantic import NonNegativeInt, PositiveInt, model_validator
+
 from mugen.core.plugin.acp.api.validation.crud_builder import (
     build_create_validation,
     build_update_validation,
 )
+from mugen.core.plugin.acp.contract.api.validation import IValidationBase
 
 __all__ = [
     "BillingAccountCreateValidation",
@@ -51,49 +57,169 @@ BillingAccountUpdateValidation = build_update_validation(
     optional_any=("attributes",),
 )
 
-BillingProductCreateValidation = build_create_validation(
-    "BillingProductCreateValidation",
-    module=__name__,
-    doc="Validate create payloads for BillingProduct.",
-    required_uuid=("tenant_id",),
-    required_text=("code", "name"),
-)
 
-BillingProductUpdateValidation = build_update_validation(
-    "BillingProductUpdateValidation",
-    module=__name__,
-    doc="Validate update payloads for BillingProduct.",
-    optional_text=("code", "name", "description"),
-    optional_any=("attributes",),
-)
+class _GlobalCatalogValidation(IValidationBase):
+    """Reject tenant ownership fields on global catalog payloads."""
 
-BillingPriceCreateValidation = build_create_validation(
-    "BillingPriceCreateValidation",
-    module=__name__,
-    doc="Validate create payloads for BillingPrice.",
-    required_uuid=("tenant_id", "product_id"),
-    required_text=("code", "price_type", "currency", "meter_code"),
-)
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_tenant_id(cls, value: Any) -> Any:
+        if isinstance(value, dict) and ("TenantId" in value or "tenant_id" in value):
+            raise ValueError("TenantId is not valid for global catalog resources.")
+        return value
 
-BillingPriceUpdateValidation = build_update_validation(
-    "BillingPriceUpdateValidation",
-    module=__name__,
-    doc="Validate update payloads for BillingPrice.",
-    optional_text=(
-        "code",
-        "price_type",
-        "currency",
-        "interval_unit",
-        "usage_unit",
-        "meter_code",
-    ),
-    optional_any=(
-        "unit_amount",
-        "interval_count",
-        "trial_period_days",
-        "attributes",
-    ),
-)
+    @staticmethod
+    def _required_text(value: str | None, field_name: str) -> str:
+        if value is None:
+            raise ValueError(f"{field_name} must not be null.")
+        normalized = str(value).strip()
+        if normalized == "":
+            raise ValueError(f"{field_name} must be non-empty.")
+        return normalized
+
+    @staticmethod
+    def _optional_text(value: str | None, field_name: str) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if normalized == "":
+            raise ValueError(f"{field_name} must be non-empty when provided.")
+        return normalized
+
+
+class BillingProductCreateValidation(_GlobalCatalogValidation):
+    """Validate create payloads for a global BillingProduct."""
+
+    code: str
+    name: str
+    description: str | None = None
+    attributes: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "BillingProductCreateValidation":
+        self.code = self._required_text(self.code, "Code")
+        self.name = self._required_text(self.name, "Name")
+        self.description = self._optional_text(self.description, "Description")
+        return self
+
+
+class BillingProductUpdateValidation(_GlobalCatalogValidation):
+    """Validate update payloads for a global BillingProduct."""
+
+    code: str | None = None
+    name: str | None = None
+    description: str | None = None
+    attributes: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "BillingProductUpdateValidation":
+        mutable = {"code", "name", "description", "attributes"}
+        if not mutable.intersection(self.model_fields_set):
+            raise ValueError("At least one mutable field must be provided.")
+        if "code" in self.model_fields_set:
+            self.code = self._required_text(self.code, "Code")
+        if "name" in self.model_fields_set:
+            self.name = self._required_text(self.name, "Name")
+        self.description = self._optional_text(self.description, "Description")
+        return self
+
+
+class BillingPriceCreateValidation(_GlobalCatalogValidation):
+    """Validate create payloads for a global BillingPrice."""
+
+    product_id: uuid.UUID
+    code: str
+    price_type: str
+    currency: str
+    unit_amount: NonNegativeInt | None = None
+    interval_unit: str | None = None
+    interval_count: PositiveInt | None = None
+    trial_period_days: NonNegativeInt | None = None
+    usage_unit: str | None = None
+    meter_code: str | None = None
+    attributes: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _normalize_and_validate_meter(self) -> "BillingPriceCreateValidation":
+        self.code = self._required_text(self.code, "Code")
+        self.price_type = self._required_text(
+            self.price_type,
+            "PriceType",
+        ).lower()
+        self.currency = self._required_text(self.currency, "Currency").upper()
+        self.interval_unit = self._optional_text(
+            self.interval_unit,
+            "IntervalUnit",
+        )
+        if self.interval_unit is not None:
+            self.interval_unit = self.interval_unit.lower()
+        self.usage_unit = self._optional_text(self.usage_unit, "UsageUnit")
+        self.meter_code = self._optional_text(self.meter_code, "MeterCode")
+
+        has_meter_code = self.meter_code is not None
+        has_usage_unit = self.usage_unit is not None
+        if has_meter_code != has_usage_unit:
+            raise ValueError("MeterCode and UsageUnit must be provided together.")
+        if self.price_type == "metered" and not has_meter_code:
+            raise ValueError("Metered Prices require MeterCode and UsageUnit.")
+        return self
+
+
+class BillingPriceUpdateValidation(_GlobalCatalogValidation):
+    """Validate update payloads for a global BillingPrice."""
+
+    product_id: uuid.UUID | None = None
+    code: str | None = None
+    price_type: str | None = None
+    currency: str | None = None
+    unit_amount: NonNegativeInt | None = None
+    interval_unit: str | None = None
+    interval_count: PositiveInt | None = None
+    trial_period_days: NonNegativeInt | None = None
+    usage_unit: str | None = None
+    meter_code: str | None = None
+    attributes: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "BillingPriceUpdateValidation":
+        mutable = {
+            "product_id",
+            "code",
+            "price_type",
+            "currency",
+            "unit_amount",
+            "interval_unit",
+            "interval_count",
+            "trial_period_days",
+            "usage_unit",
+            "meter_code",
+            "attributes",
+        }
+        if not mutable.intersection(self.model_fields_set):
+            raise ValueError("At least one mutable field must be provided.")
+
+        if "product_id" in self.model_fields_set and self.product_id is None:
+            raise ValueError("ProductId must not be null.")
+        if "code" in self.model_fields_set:
+            self.code = self._required_text(self.code, "Code")
+        if "price_type" in self.model_fields_set:
+            self.price_type = self._required_text(self.price_type, "PriceType")
+        if self.price_type is not None:
+            self.price_type = self.price_type.lower()
+        if "currency" in self.model_fields_set:
+            self.currency = self._required_text(self.currency, "Currency")
+        if self.currency is not None:
+            self.currency = self.currency.upper()
+        self.interval_unit = self._optional_text(
+            self.interval_unit,
+            "IntervalUnit",
+        )
+        if self.interval_unit is not None:
+            self.interval_unit = self.interval_unit.lower()
+        self.usage_unit = self._optional_text(self.usage_unit, "UsageUnit")
+        self.meter_code = self._optional_text(self.meter_code, "MeterCode")
+        return self
+
 
 BillingSubscriptionCreateValidation = build_create_validation(
     "BillingSubscriptionCreateValidation",

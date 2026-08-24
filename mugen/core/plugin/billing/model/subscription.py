@@ -117,9 +117,7 @@ class Subscription(ModelBase, TenantScopedMixin, SoftDeleteMixin):
         back_populates="subscriptions",
     )
 
-    price: Mapped["Price"] = relationship(  # type: ignore
-        back_populates="subscriptions",
-    )
+    price: Mapped["Price"] = relationship()  # type: ignore
 
     invoices: Mapped[list["Invoice"]] = relationship(  # type: ignore
         back_populates="subscription",
@@ -144,14 +142,17 @@ class Subscription(ModelBase, TenantScopedMixin, SoftDeleteMixin):
     __table_args__ = (
         ForeignKeyConstraint(
             ("tenant_id", "account_id"),
-            (f"{CORE_SCHEMA_TOKEN}.billing_account.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_account.id"),
+            (
+                f"{CORE_SCHEMA_TOKEN}.billing_account.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.billing_account.id",
+            ),
             name="fkx_billing_subscription__tenant_account",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
-            ("tenant_id", "price_id"),
-            (f"{CORE_SCHEMA_TOKEN}.billing_price.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_price.id"),
-            name="fkx_billing_subscription__tenant_price",
+            ("price_id",),
+            (f"{CORE_SCHEMA_TOKEN}.billing_price.id",),
+            name="fk_billing_subscription__price",
             ondelete="RESTRICT",
         ),
         CheckConstraint(

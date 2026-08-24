@@ -93,9 +93,7 @@ class _FakeExpansionContext:
     def __init__(self, **kwargs):
         self.max_depth = kwargs["max_depth"]
 
-    async def permitted(
-        self, edm_type, path: str
-    ) -> bool:
+    async def permitted(self, edm_type, path: str) -> bool:
         return True
 
 
@@ -257,6 +255,68 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.app = Quart("test-acp-rgql-decorator")
 
+    async def test_entity_soft_deleted_reference_filter_selection(self) -> None:
+        async def _endpoint(**kwargs):
+            return kwargs
+
+        entity = _Entity(id=uuid.uuid4(), name="Archived")
+        auth_svc = SimpleNamespace(has_permission=AsyncMock(return_value=True))
+        logger = SimpleNamespace(debug=Mock(), error=Mock())
+
+        def _where_factory(*, include_deleted=False, **_kwargs):
+            if include_deleted:
+                return lambda _type_name: {}
+            return lambda _type_name: {"deleted_at": None}
+
+        for mode in ("missing_resource", "include_deleted"):
+            service = SimpleNamespace(
+                get=AsyncMock(return_value=entity),
+                list=AsyncMock(return_value=[entity]),
+                count=AsyncMock(return_value=1),
+            )
+            registry = _FakeRegistry(service=service)
+            if mode == "missing_resource":
+                registry._resource_by_type.pop(
+                    "ACP.User"
+                )  # pylint: disable=protected-access
+            else:
+                registry._resource.behavior.resolve_soft_deleted_references = (
+                    True  # pylint: disable=protected-access
+                )
+
+            wrapped = rgql_mod.rgql_enabled(
+                config_provider=_config,
+                logger_provider=lambda: logger,
+                auth_provider=lambda: auth_svc,
+                registry_provider=lambda registry=registry: registry,
+            )(_endpoint)
+            with (
+                patch.object(
+                    rgql_mod,
+                    "make_default_where_provider",
+                    side_effect=_where_factory,
+                ),
+                patch.object(
+                    rgql_mod,
+                    "apply_to_where",
+                    side_effect=lambda where, defaults: {**where, **defaults},
+                ),
+            ):
+                async with self.app.test_request_context(
+                    "/api/core/acp/v1/Users",
+                    method="GET",
+                ):
+                    result = await wrapped(
+                        entity_set="Users",
+                        entity_id=str(entity.id),
+                        auth_user=str(uuid.uuid4()),
+                    )
+            self.assertEqual(result["rgql"].values[0]["Name"], "Archived")
+            expected_where = {"id": entity.id}
+            if mode == "missing_resource":
+                expected_where["deleted_at"] = None
+            self.assertEqual(service.get.await_args.args[0], expected_where)
+
     def test_provider_helpers(self) -> None:
         services = {
             rgql_mod.di.EXT_SERVICE_ADMIN_SVC_AUTH: "auth-svc",
@@ -268,18 +328,10 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
             get_required_ext_service=lambda key: services[key],
         )
         with patch.object(rgql_mod.di, "container", new=container):
-            self.assertEqual(
-                rgql_mod._config_provider(), "cfg"
-            )
-            self.assertEqual(
-                rgql_mod._logger_provider(), "logger"
-            )
-            self.assertEqual(
-                rgql_mod._auth_provider(), "auth-svc"
-            )
-            self.assertEqual(
-                rgql_mod._registry_provider(), "registry-svc"
-            )
+            self.assertEqual(rgql_mod._config_provider(), "cfg")
+            self.assertEqual(rgql_mod._logger_provider(), "logger")
+            self.assertEqual(rgql_mod._auth_provider(), "auth-svc")
+            self.assertEqual(rgql_mod._registry_provider(), "registry-svc")
 
     def test_search_filter_groups_cover_direct_and_related_fields(self) -> None:
         model = EdmModel(
@@ -336,10 +388,7 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
             path_planner=_planner("ACP.GlobalRoleMembership"),
         )
         self.assertEqual(
-            [
-                group.related_text_filters[0].field
-                for group in related_groups
-            ],
+            [group.related_text_filters[0].field for group in related_groups],
             ["username", "display_name"],
         )
         self.assertEqual(
@@ -363,10 +412,7 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(combined_groups), 4)
         self.assertTrue(
-            all(
-                len(group.related_text_filters) == 2
-                for group in combined_groups
-            )
+            all(len(group.related_text_filters) == 2 for group in combined_groups)
         )
 
         or_groups = rgql_mod._search_filter_groups(

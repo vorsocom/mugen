@@ -152,6 +152,8 @@ class ExpansionContext:
 
     default_where_provider: DefaultWhereProvider = lambda _type_name: {}
 
+    forward_reference_where_provider: DefaultWhereProvider | None = None
+
     permission_cache: dict[tuple[str, str], bool] = field(default_factory=dict)
 
     async def permitted(self, edm_type: EdmType, path: str) -> bool:
@@ -288,9 +290,11 @@ async def expand_navs_recursive(
             ctx.adapter.build_relational_query(
                 child_opts,
                 path_planner=(
-                    lambda path: ctx.nav_path_planner(nav_type.name, path)
-                    if ctx.nav_path_planner is not None
-                    else None
+                    lambda path: (
+                        ctx.nav_path_planner(nav_type.name, path)
+                        if ctx.nav_path_planner is not None
+                        else None
+                    )
                 ),
             )
         )
@@ -355,7 +359,13 @@ async def expand_navs_recursive(
         # Only root-level scalar properties for this nav for now
         child_columns = [title_to_snake(p) for p in child_opts.select if "/" not in p]
 
-    delete_filter = ctx.default_where_provider(nav_type.name)
+    where_provider = ctx.default_where_provider
+    if (
+        not nav.target_type.is_collection
+        and ctx.forward_reference_where_provider is not None
+    ):
+        where_provider = ctx.forward_reference_where_provider
+    delete_filter = where_provider(nav_type.name)
     if nav.target_type.is_collection:
         # Filter deleted.
         child_filter_groups = apply_to_filter_groups(
@@ -515,7 +525,8 @@ async def expand_navs_bulk(
     levels_remaining: int,
 ) -> None:
     """
-    Materialize one $expand item for many root entities with as few DB calls as possible.
+    Materialize one $expand item for many root entities with as few DB calls as
+    possible.
     """
     if (
         not expand_item
@@ -563,9 +574,11 @@ async def expand_navs_bulk(
             ctx.adapter.build_relational_query(
                 child_opts,
                 path_planner=(
-                    lambda path: ctx.nav_path_planner(nav_type.name, path)
-                    if ctx.nav_path_planner is not None
-                    else None
+                    lambda path: (
+                        ctx.nav_path_planner(nav_type.name, path)
+                        if ctx.nav_path_planner is not None
+                        else None
+                    )
                 ),
             )
         )
@@ -645,7 +658,13 @@ async def expand_navs_bulk(
             query_columns=query_columns,
         )
 
-    delete_filter = ctx.default_where_provider(nav_type.name)
+    where_provider = ctx.default_where_provider
+    if (
+        not nav.target_type.is_collection
+        and ctx.forward_reference_where_provider is not None
+    ):
+        where_provider = ctx.forward_reference_where_provider
+    delete_filter = where_provider(nav_type.name)
 
     if nav.target_type.is_collection:
         parent_fk = title_to_snake(nav.target_fk)

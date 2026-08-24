@@ -21,7 +21,6 @@ price_type = EdmType(
             "UpdatedAt", TypeRef("Edm.DateTimeOffset"), nullable=False
         ),
         "RowVersion": EdmProperty("RowVersion", TypeRef("Edm.Int64"), nullable=False),
-        "TenantId": EdmProperty("TenantId", TypeRef("Edm.Guid"), nullable=False),
         "ProductId": EdmProperty("ProductId", TypeRef("Edm.Guid"), nullable=False),
         "Code": EdmProperty("Code", TypeRef("Edm.String"), nullable=False),
         "PriceType": EdmProperty("PriceType", TypeRef("Edm.String"), nullable=False),
@@ -31,7 +30,7 @@ price_type = EdmType(
         "IntervalCount": EdmProperty("IntervalCount", TypeRef("Edm.Int32")),
         "TrialPeriodDays": EdmProperty("TrialPeriodDays", TypeRef("Edm.Int32")),
         "UsageUnit": EdmProperty("UsageUnit", TypeRef("Edm.String")),
-        "MeterCode": EdmProperty("MeterCode", TypeRef("Edm.String"), nullable=False),
+        "MeterCode": EdmProperty("MeterCode", TypeRef("Edm.String")),
         "Attributes": EdmProperty(
             "Attributes",
             TypeRef("Edm.String"),
@@ -42,11 +41,6 @@ price_type = EdmType(
         "DeletedByUserId": EdmProperty("DeletedByUserId", TypeRef("Edm.Guid")),
     },
     nav_properties={
-        "Tenant": EdmNavigationProperty(
-            "Tenant",
-            target_type=TypeRef("ACP.Tenant"),
-            source_fk="TenantId",
-        ),
         "DeletedByUser": EdmNavigationProperty(
             "DeletedByUser",
             target_type=TypeRef("ACP.User"),
@@ -56,26 +50,6 @@ price_type = EdmType(
             "Product",
             target_type=TypeRef("BILLING.Product"),
             source_fk="ProductId",
-        ),
-        "Subscriptions": EdmNavigationProperty(
-            "Subscriptions",
-            target_type=TypeRef("BILLING.Subscription", is_collection=True),
-            target_fk="PriceId",
-        ),
-        "InvoiceLines": EdmNavigationProperty(
-            "InvoiceLines",
-            target_type=TypeRef("BILLING.InvoiceLine", is_collection=True),
-            target_fk="PriceId",
-        ),
-        "UsageEvents": EdmNavigationProperty(
-            "UsageEvents",
-            target_type=TypeRef("BILLING.UsageEvent", is_collection=True),
-            target_fk="PriceId",
-        ),
-        "EntitlementBuckets": EdmNavigationProperty(
-            "EntitlementBuckets",
-            target_type=TypeRef("BILLING.EntitlementBucket", is_collection=True),
-            target_fk="PriceId",
         ),
     },
     key_properties=("Id",),

@@ -139,7 +139,7 @@ def _build_update_data(
         except ValidationError as e:
             abort(400, str(e))
 
-        update_data = validated.model_dump(by_alias=False, exclude_none=True)
+        update_data = validated.model_dump(by_alias=False, exclude_unset=True)
         if tenant_scoped:
             update_data.pop("tenant_id", None)
         return update_data

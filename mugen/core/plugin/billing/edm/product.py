@@ -21,7 +21,6 @@ product_type = EdmType(
             "UpdatedAt", TypeRef("Edm.DateTimeOffset"), nullable=False
         ),
         "RowVersion": EdmProperty("RowVersion", TypeRef("Edm.Int64"), nullable=False),
-        "TenantId": EdmProperty("TenantId", TypeRef("Edm.Guid"), nullable=False),
         "Code": EdmProperty("Code", TypeRef("Edm.String"), nullable=False),
         "Name": EdmProperty("Name", TypeRef("Edm.String"), nullable=False),
         "Description": EdmProperty(
@@ -39,11 +38,6 @@ product_type = EdmType(
         "DeletedByUserId": EdmProperty("DeletedByUserId", TypeRef("Edm.Guid")),
     },
     nav_properties={
-        "Tenant": EdmNavigationProperty(
-            "Tenant",
-            target_type=TypeRef("ACP.Tenant"),
-            source_fk="TenantId",
-        ),
         "DeletedByUser": EdmNavigationProperty(
             "DeletedByUser",
             target_type=TypeRef("ACP.User"),

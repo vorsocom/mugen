@@ -114,6 +114,7 @@ class AdminBehavior:
     rgql_enabled: bool = True
     rgql_max_expand_depth: Optional[int] = None
     search_fields: tuple[str, ...] = ()
+    resolve_soft_deleted_references: bool = False
 
 
 @dataclass(frozen=True)
