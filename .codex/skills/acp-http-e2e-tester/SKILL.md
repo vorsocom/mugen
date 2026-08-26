@@ -56,6 +56,8 @@ Key fields:
   `__ROW_VERSION__`, `__ENTITY_ID__`, `__TENANT_ID__`, `__USER_ID__`.
 - `assertions`: optional final checks (`final_status`, expected event sequence).
 - `negative_creates` and `positive_creates`: optional create-path checks on any entity set.
+- `collection_queries`: optional collection GET checks with encoded `params`, expected
+  HTTP status/count, and partial `expect_first` field assertions.
 
 ## Output Expectations
 
