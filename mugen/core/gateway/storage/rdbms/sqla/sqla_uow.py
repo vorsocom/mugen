@@ -6,7 +6,10 @@ from collections.abc import Iterable
 from typing import Any, Mapping, MutableMapping, Sequence
 
 from sqlalchemy import (
+    Enum as SAEnum,
+    String,
     and_,
+    cast as sa_cast,
     or_,
     delete as sa_delete,
     false as sa_false,
@@ -225,7 +228,8 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         if not fk_values:
             return []
 
-        # Normalize / dedupe FK values to reduce IN(...) size and improve plan stability.
+        # Normalize / dedupe FK values to reduce IN(...) size and improve plan
+        # stability.
         # Preserve order when values are hashable; fall back to raw list if not.
         try:
             fk_values_list = list(dict.fromkeys(fk_values))
@@ -428,7 +432,7 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         tbl: Table,
         where: Mapping[str, Any],
     ) -> None:
-        """Raise RowVersionConflict if the row exists but the row_version predicate failed.
+        """Raise if the row exists but the row_version predicate failed.
 
         If the base row (identified by predicates excluding row_version) does not exist,
         treat the condition as "not found" and do not raise.
@@ -489,24 +493,14 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
         if text_filters:
             for tf in text_filters:
                 col = getattr(table.c, tf.field)
-
-                if tf.case_sensitive:
-                    col_expr = col
-                    pattern_value = str(tf.value)
-                else:
-                    col_expr = sa_func.lower(col)
-                    pattern_value = str(tf.value).lower()
-
-                if tf.op is TextFilterOp.CONTAINS:
-                    pattern = f"%{pattern_value}%"
-                elif tf.op is TextFilterOp.STARTSWITH:
-                    pattern = f"{pattern_value}%"
-                elif tf.op is TextFilterOp.ENDSWITH:
-                    pattern = f"%{pattern_value}"
-                else:
-                    raise ValueError(f"Unsupported TextFilterOp: {tf.op!r}")
-
-                clauses.append(col_expr.like(pattern))
+                clauses.append(
+                    self._text_clause_for_op(
+                        col=col,
+                        op=tf.op,
+                        val=tf.value,
+                        case_sensitive=tf.case_sensitive,
+                    )
+                )
 
         # Scalar filters (<, >, BETWEEN, IN, etc.)
         if scalar_filters:
@@ -522,30 +516,20 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
 
         if related_text_filters:
             for idx, rtf in enumerate(related_text_filters):
-                from_clause, correlation_clause, terminal_alias = self._resolve_related_path(
-                    table=table,
-                    path_hops=rtf.path_hops,
-                    alias_prefix=f"rtf_{idx}",
+                from_clause, correlation_clause, terminal_alias = (
+                    self._resolve_related_path(
+                        table=table,
+                        path_hops=rtf.path_hops,
+                        alias_prefix=f"rtf_{idx}",
+                    )
                 )
                 col = getattr(terminal_alias.c, rtf.field)
-
-                if rtf.case_sensitive:
-                    col_expr = col
-                    pattern_value = str(rtf.value)
-                else:
-                    col_expr = sa_func.lower(col)
-                    pattern_value = str(rtf.value).lower()
-
-                if rtf.op is TextFilterOp.CONTAINS:
-                    pattern = f"%{pattern_value}%"
-                elif rtf.op is TextFilterOp.STARTSWITH:
-                    pattern = f"{pattern_value}%"
-                elif rtf.op is TextFilterOp.ENDSWITH:
-                    pattern = f"%{pattern_value}"
-                else:
-                    raise ValueError(f"Unsupported TextFilterOp: {rtf.op!r}")
-
-                terminal_predicate = col_expr.like(pattern)
+                terminal_predicate = self._text_clause_for_op(
+                    col=col,
+                    op=rtf.op,
+                    val=rtf.value,
+                    case_sensitive=rtf.case_sensitive,
+                )
                 clauses.append(
                     self._related_exists_clause(
                         from_clause=from_clause,
@@ -556,10 +540,12 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
 
         if related_scalar_filters:
             for idx, rsf in enumerate(related_scalar_filters):
-                from_clause, correlation_clause, terminal_alias = self._resolve_related_path(
-                    table=table,
-                    path_hops=rsf.path_hops,
-                    alias_prefix=f"rsf_{idx}",
+                from_clause, correlation_clause, terminal_alias = (
+                    self._resolve_related_path(
+                        table=table,
+                        path_hops=rsf.path_hops,
+                        alias_prefix=f"rsf_{idx}",
+                    )
                 )
                 col = getattr(terminal_alias.c, rsf.field)
                 terminal_predicate = self._scalar_clause_for_op(
@@ -576,6 +562,33 @@ class SQLAlchemyRelationalUnitOfWork(IRelationalUnitOfWork):
                 )
 
         return clauses
+
+    def _text_clause_for_op(
+        self,
+        *,
+        col: Any,
+        op: TextFilterOp,
+        val: Any,
+        case_sensitive: bool,
+    ) -> Any:
+        col_expr = sa_cast(col, String) if isinstance(col.type, SAEnum) else col
+
+        if case_sensitive:
+            pattern_value = str(val)
+        else:
+            col_expr = sa_func.lower(col_expr)
+            pattern_value = str(val).lower()
+
+        if op is TextFilterOp.CONTAINS:
+            pattern = f"%{pattern_value}%"
+        elif op is TextFilterOp.STARTSWITH:
+            pattern = f"{pattern_value}%"
+        elif op is TextFilterOp.ENDSWITH:
+            pattern = f"%{pattern_value}"
+        else:
+            raise ValueError(f"Unsupported TextFilterOp: {op!r}")
+
+        return col_expr.like(pattern)
 
     def _scalar_clause_for_op(self, col: Any, op: ScalarFilterOp, val: Any) -> Any:
         if op is ScalarFilterOp.EQ:
