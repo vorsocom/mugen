@@ -497,4 +497,77 @@ if [[ "$pos_count" -gt 0 ]]; then
   done
 fi
 
+query_count="$(echo "$spec_json" | jq -r '.collection_queries | length // 0')"
+if [[ "$query_count" -gt 0 ]]; then
+  for i in $(seq 0 $((query_count - 1))); do
+    step="$(echo "$spec_json" | jq -c ".collection_queries[$i]")"
+    name="$(echo "$step" | jq -r '.name // empty')"
+    if [[ -z "$name" ]]; then
+      name="collection_query_${i}"
+    fi
+    set_name="$(echo "$step" | jq -r '.entity_set // empty')"
+    if [[ -z "$set_name" ]]; then
+      set_name="$entity_set"
+    fi
+    scope="$(echo "$step" | jq -r '.scope // "tenant"')"
+    expect_code="$(echo "$step" | jq -r '.expect_code // 200')"
+    expect_count="$(
+      echo "$step" \
+        | jq -r 'if has("expect_count") then .expect_count else empty end'
+    )"
+    expect_first="$(echo "$step" | jq -c '.expect_first // null')"
+    params_template="$(echo "$step" | jq -c '.params // {}')"
+    params="$(
+      replace_placeholders \
+        "$params_template" "$row_version" "$entity_id" "$tenant_id" "$user_id"
+    )"
+    query_string="$(echo "$params" | jq -r '
+      to_entries
+      | map(((.key | @uri) + "=" + (.value | tostring | @uri)))
+      | join("&")
+    ')"
+
+    if [[ "$scope" == "global" ]]; then
+      query_url="$base_url/$set_name"
+    else
+      query_url="$base_url/tenants/$tenant_id/$set_name"
+    fi
+    if [[ -n "$query_string" ]]; then
+      query_url="$query_url?$query_string"
+    fi
+
+    query_output_file="/tmp/acp_http_e2e_query_${i}.out"
+    code="$(curl -sk -o "$query_output_file" -w "%{http_code}" \
+      -H "$auth_header" "$query_url")"
+    echo "COLLECTION QUERY $name: $code"
+    if [[ "$code" != "$expect_code" ]]; then
+      echo "ERROR: collection query $name expected $expect_code got $code" >&2
+      cat "$query_output_file" >&2
+      exit 1
+    fi
+
+    if [[ -n "$expect_count" ]]; then
+      actual_count="$(jq -r '.value | length' "$query_output_file")"
+      echo "ASSERT COLLECTION COUNT $name: expected=$expect_count actual=$actual_count"
+      if [[ "$actual_count" != "$expect_count" ]]; then
+        echo "ERROR: collection query $name count mismatch" >&2
+        cat "$query_output_file" >&2
+        exit 1
+      fi
+    fi
+
+    if [[ "$expect_first" != "null" ]]; then
+      echo "ASSERT COLLECTION FIRST $name: expected=$expect_first"
+      if ! jq -e --argjson expected "$expect_first" '
+        .value[0] as $actual
+        | ($expected | to_entries | all(.[]; $actual[.key] == .value))
+      ' "$query_output_file" >/dev/null; then
+        echo "ERROR: collection query $name first item mismatch" >&2
+        cat "$query_output_file" >&2
+        exit 1
+      fi
+    fi
+  done
+fi
+
 echo "SUCCESS: ACP HTTP e2e checks passed"

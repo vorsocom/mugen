@@ -5,7 +5,18 @@ from __future__ import annotations
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from sqlalchemy import Column, Integer, MetaData, String, Table, select as sa_select
+from sqlalchemy import (
+    Column,
+    Enum as SAEnum,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    or_,
+    select as sa_select,
+)
+from sqlalchemy.dialects.postgresql import ENUM as PGEnum
+from sqlalchemy.dialects.postgresql import dialect as postgresql_dialect
 
 from mugen.core.contract.gateway.storage.rdbms.types import (
     FilterGroup,
@@ -88,6 +99,10 @@ class TestMugenSQLAUow(unittest.IsolatedAsyncioTestCase):
             Column("tenant_id", Integer),
             Column("person_id", Integer),
             Column("name", String(64)),
+            Column(
+                "status",
+                PGEnum("draft", "published", name="widget_status"),
+            ),
             Column("score", Integer),
             Column("row_version", Integer),
         )
@@ -97,6 +112,10 @@ class TestMugenSQLAUow(unittest.IsolatedAsyncioTestCase):
             Column("id", Integer, primary_key=True),
             Column("department_id", Integer),
             Column("first_name", String(64)),
+            Column(
+                "status",
+                SAEnum("active", "inactive", name="person_status"),
+            ),
         )
         self.departments_table = Table(
             "departments",
@@ -255,7 +274,10 @@ class TestMugenSQLAUow(unittest.IsolatedAsyncioTestCase):
             per_fk_limit=1,
             per_fk_offset=0,
         )
-        self.assertEqual(by_fk_single_group, [{"id": 4, "tenant_id": 11, "name": "Bea"}])
+        self.assertEqual(
+            by_fk_single_group,
+            [{"id": 4, "tenant_id": 11, "name": "Bea"}],
+        )
 
         by_fk_offset_only = await self.uow.find_partitioned_by_fk(
             "widgets",
@@ -304,7 +326,11 @@ class TestMugenSQLAUow(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_update_delete_and_conflict_helpers(self) -> None:
-        with patch.object(self.uow, "get_one", new=AsyncMock(return_value={"id": 1})) as get:
+        with patch.object(
+            self.uow,
+            "get_one",
+            new=AsyncMock(return_value={"id": 1}),
+        ) as get:
             row = await self.uow.update_one(
                 "widgets",
                 where={"id": 1},
@@ -337,7 +363,9 @@ class TestMugenSQLAUow(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(updated)
             raise_conflict.assert_awaited_once()
 
-        self.session.execute = AsyncMock(return_value=_FakeResult(rows=[{"id": 1, "name": "A"}]))
+        self.session.execute = AsyncMock(
+            return_value=_FakeResult(rows=[{"id": 1, "name": "A"}])
+        )
         updated_row = await self.uow.update_one(
             "widgets",
             where={"id": 1, "row_version": 1},
@@ -382,11 +410,15 @@ class TestMugenSQLAUow(unittest.IsolatedAsyncioTestCase):
         await self.uow.delete_many("widgets", where={"tenant_id": 10})
         self.session.execute.assert_awaited_once()
 
-        base_where = self.uow._where_without_row_version({"id": 5, "row_version": 9})  # pylint: disable=protected-access
+        # pylint: disable-next=protected-access
+        base_where = self.uow._where_without_row_version(
+            {"id": 5, "row_version": 9}
+        )
         self.assertEqual(base_where, {"id": 5})
 
         with self.assertRaises(RowVersionConflict):
-            await self.uow._raise_if_row_version_conflict(  # pylint: disable=protected-access
+            # pylint: disable-next=protected-access
+            await self.uow._raise_if_row_version_conflict(
                 "widgets",
                 self.table,
                 {"row_version": 4},
@@ -395,7 +427,8 @@ class TestMugenSQLAUow(unittest.IsolatedAsyncioTestCase):
         self.session.execute = AsyncMock(
             return_value=_FakeResult(scalar_one_or_none_value=None)
         )
-        no_conflict = await self.uow._raise_if_row_version_conflict(  # pylint: disable=protected-access
+        # pylint: disable-next=protected-access
+        no_conflict = await self.uow._raise_if_row_version_conflict(
             "widgets",
             self.table,
             {"id": 5, "row_version": 7},
@@ -406,13 +439,16 @@ class TestMugenSQLAUow(unittest.IsolatedAsyncioTestCase):
             return_value=_FakeResult(scalar_one_or_none_value=8)
         )
         with self.assertRaises(RowVersionConflict):
-            await self.uow._raise_if_row_version_conflict(  # pylint: disable=protected-access
+            # pylint: disable-next=protected-access
+            await self.uow._raise_if_row_version_conflict(
                 "widgets",
                 self.table,
                 {"id": 5, "row_version": 7},
             )
 
-    async def test_remaining_branch_paths_for_count_find_update_and_delete(self) -> None:
+    async def test_remaining_branch_paths_for_count_find_update_and_delete(
+        self,
+    ) -> None:
         self.session.execute = AsyncMock(return_value=_FakeResult(scalar_value=4))
         self.assertEqual(await self.uow.count("widgets"), 4)
 
@@ -512,13 +548,15 @@ class TestMugenSQLAUow(unittest.IsolatedAsyncioTestCase):
         )
         self.assertGreater(len(clauses), 1)
 
-        group_expr = self.uow._predicates_for_group(  # pylint: disable=protected-access
+        # pylint: disable-next=protected-access
+        group_expr = self.uow._predicates_for_group(
             self.table,
             FilterGroup(where={"id": 1}),
         )
         self.assertIsNotNone(group_expr)
 
-        empty_group_expr = self.uow._predicates_for_group(  # pylint: disable=protected-access
+        # pylint: disable-next=protected-access
+        empty_group_expr = self.uow._predicates_for_group(
             self.table,
             FilterGroup(),
         )
@@ -563,6 +601,140 @@ class TestMugenSQLAUow(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(KeyError):
             self.uow._get_table("missing")  # pylint: disable=protected-access
+
+    def test_enum_text_filters_cast_without_changing_string_filters(self) -> None:
+        predicates = self.uow._build_predicates(  # pylint: disable=protected-access
+            self.table,
+            text_filters=[
+                TextFilter(
+                    field="status",
+                    op=TextFilterOp.CONTAINS,
+                    value="RAF",
+                ),
+                TextFilter(
+                    field="status",
+                    op=TextFilterOp.STARTSWITH,
+                    value="dra",
+                    case_sensitive=True,
+                ),
+                TextFilter(
+                    field="status",
+                    op=TextFilterOp.ENDSWITH,
+                    value="AFT",
+                ),
+                TextFilter(
+                    field="name",
+                    op=TextFilterOp.CONTAINS,
+                    value="ADA",
+                ),
+            ],
+        )
+        statement = sa_select(self.table).where(*predicates)
+        sql = str(
+            statement.compile(
+                dialect=postgresql_dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+
+        self.assertIn(
+            "lower(CAST(widgets.status AS VARCHAR)) LIKE '%%raf%%'",
+            sql,
+        )
+        self.assertIn("CAST(widgets.status AS VARCHAR) LIKE 'dra%%'", sql)
+        self.assertIn(
+            "lower(CAST(widgets.status AS VARCHAR)) LIKE '%%aft'",
+            sql,
+        )
+        self.assertIn("lower(widgets.name) LIKE '%%ada%%'", sql)
+        self.assertNotIn("CAST(widgets.name AS VARCHAR)", sql)
+
+    def test_related_enum_text_filter_casts_before_matching(self) -> None:
+        hop = RelatedPathHop(
+            source_table="widgets",
+            source_field="person_id",
+            target_table="people",
+            target_field="id",
+        )
+        predicates = self.uow._build_predicates(  # pylint: disable=protected-access
+            self.table,
+            related_text_filters=[
+                RelatedTextFilter(
+                    path_hops=[hop],
+                    field="status",
+                    op=TextFilterOp.CONTAINS,
+                    value="ACT",
+                ),
+                RelatedTextFilter(
+                    path_hops=[hop],
+                    field="status",
+                    op=TextFilterOp.STARTSWITH,
+                    value="active",
+                    case_sensitive=True,
+                ),
+            ],
+        )
+        statement = sa_select(self.table).where(*predicates)
+        sql = str(
+            statement.compile(
+                dialect=postgresql_dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+
+        self.assertIn("EXISTS", sql)
+        self.assertIn(
+            "lower(CAST(rtf_0_h0.status AS VARCHAR)) LIKE '%%act%%'",
+            sql,
+        )
+        self.assertIn(
+            "CAST(rtf_1_h0.status AS VARCHAR) LIKE 'active%%'",
+            sql,
+        )
+
+    def test_enum_text_filter_preserves_tenant_dnf_grouping(self) -> None:
+        enum_group = self.uow._predicates_for_group(  # pylint: disable=protected-access
+            self.table,
+            FilterGroup(
+                where={"tenant_id": 10},
+                text_filters=[
+                    TextFilter(
+                        field="status",
+                        op=TextFilterOp.CONTAINS,
+                        value="draft",
+                    )
+                ],
+            ),
+        )
+        # pylint: disable-next=protected-access
+        string_group = self.uow._predicates_for_group(
+            self.table,
+            FilterGroup(
+                where={"tenant_id": 10},
+                text_filters=[
+                    TextFilter(
+                        field="name",
+                        op=TextFilterOp.CONTAINS,
+                        value="draft",
+                    )
+                ],
+            ),
+        )
+        statement = sa_select(self.table).where(or_(enum_group, string_group))
+        sql = str(
+            statement.compile(
+                dialect=postgresql_dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+
+        expected_where = (
+            "WHERE widgets.tenant_id = 10 "
+            "AND lower(CAST(widgets.status AS VARCHAR)) LIKE '%%draft%%' "
+            "OR widgets.tenant_id = 10 "
+            "AND lower(widgets.name) LIKE '%%draft%%'"
+        )
+        self.assertIn(expected_where, sql)
 
     async def test_related_filters_and_related_orderby(self) -> None:
         hop = RelatedPathHop(

@@ -48,6 +48,74 @@
         "KnowledgePackId": "__ENTITY_ID__",
         "VersionNumber": 1
       }
+    },
+    {
+      "name": "second_pack_version",
+      "entity_set": "KnowledgePackVersions",
+      "expect_code": 201,
+      "payload": {
+        "KnowledgePackId": "__ENTITY_ID__",
+        "VersionNumber": 2
+      }
+    }
+  ],
+  "collection_queries": [
+    {
+      "name": "enum_contains",
+      "entity_set": "KnowledgePackVersions",
+      "expect_code": 200,
+      "params": {
+        "$filter": "contains(Status,'RAF')",
+        "$orderby": "VersionNumber desc"
+      },
+      "expect_count": 2,
+      "expect_first": {
+        "VersionNumber": 2,
+        "Status": "draft"
+      }
+    },
+    {
+      "name": "enum_startswith",
+      "entity_set": "KnowledgePackVersions",
+      "expect_code": 200,
+      "params": {
+        "$filter": "startswith(Status,'DRA')"
+      },
+      "expect_count": 2
+    },
+    {
+      "name": "enum_endswith",
+      "entity_set": "KnowledgePackVersions",
+      "expect_code": 200,
+      "params": {
+        "$filter": "endswith(Status,'AFT')"
+      },
+      "expect_count": 2
+    },
+    {
+      "name": "enum_and_nullable_string_with_pagination",
+      "entity_set": "KnowledgePackVersions",
+      "expect_code": 200,
+      "params": {
+        "$filter": "contains(Status,'draft') or contains(Note,'searchable')",
+        "$orderby": "VersionNumber desc",
+        "$top": 1,
+        "$skip": 1
+      },
+      "expect_count": 1,
+      "expect_first": {
+        "VersionNumber": 1,
+        "Status": "draft"
+      }
+    },
+    {
+      "name": "enum_and_nullable_string_non_match",
+      "entity_set": "KnowledgePackVersions",
+      "expect_code": 200,
+      "params": {
+        "$filter": "contains(Status,'missing') or contains(Note,'missing')"
+      },
+      "expect_count": 0
     }
   ]
 }

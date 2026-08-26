@@ -40,5 +40,22 @@
     "expected_event_sequence": []
   },
   "negative_creates": [],
-  "positive_creates": []
+  "positive_creates": [],
+  "collection_queries": [
+    {
+      "name": "matching_items",
+      "entity_set": "YourEntitySet",
+      "expect_code": 200,
+      "params": {
+        "$filter": "contains(Status,'active')",
+        "$orderby": "CreatedAt desc",
+        "$top": 1,
+        "$skip": 0
+      },
+      "expect_count": 1,
+      "expect_first": {
+        "Status": "active"
+      }
+    }
+  ]
 }
