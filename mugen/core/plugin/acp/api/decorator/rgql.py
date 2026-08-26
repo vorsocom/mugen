@@ -16,11 +16,14 @@ from mugen.core.contract.gateway.storage.rdbms.types import (
     OrderClause,
     RelatedPathHop,
     RelatedTextFilter,
+    ScalarFilter,
+    ScalarFilterOp,
     TextFilter,
     TextFilterOp,
 )
 from mugen.core.plugin.acp.contract.service.authorization import IAuthorizationService
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
+from mugen.core.plugin.acp.contract.sdk.resource import SoftDeleteMode
 from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.plugin.acp.utility.rgql.nav_filter_planner import plan_related_path
 from mugen.core.plugin.acp.utility.rgql.default_where import (
@@ -64,6 +67,7 @@ _SELF_TENANT_DISCOVERY_FIELDS = {
     _EDM_TENANT_MEMBERSHIP: frozenset({"tenant_id", "status", "tenant"}),
     _EDM_TENANT: frozenset({"id", "name", "slug"}),
 }
+_DELETED_COLLECTION_VIEWS = frozenset({"active", "archived", "all"})
 
 PathPlanner = Callable[[str], tuple[Sequence[RelatedPathHop], str] | None]
 
@@ -222,6 +226,44 @@ def _registry_provider():
     return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_REGISTRY)
 
 
+def _deleted_collection_view(resource: Any, entity_id: str | None) -> str:
+    """Validate and resolve the requested soft-deleted collection view."""
+    values = request.args.getlist("$deleted")
+    if not values:
+        return "active"
+    if entity_id is not None:
+        abort(400, "$deleted is supported only on collection routes.")
+    if len(values) != 1 or values[0] not in _DELETED_COLLECTION_VIEWS:
+        abort(400, "$deleted must be one of: active, archived, all.")
+
+    policy = getattr(resource.behavior, "soft_delete", None)
+    if not bool(getattr(policy, "allow_deleted_collection_views", False)):
+        abort(400, "$deleted is not supported for this entity set.")
+    return values[0]
+
+
+def _selected_query_columns(
+    edm_type: EdmType,
+    selected_properties: Sequence[str],
+) -> list[str]:
+    """Resolve stored query columns while retaining mandatory response fields."""
+    columns = [
+        title_to_snake(name)
+        for name in selected_properties
+        if "/" not in name
+        and not bool(getattr(edm_type.properties.get(name), "computed", False))
+    ]
+    for name, prop in edm_type.properties.items():
+        if not bool(getattr(prop, "always_serialize", False)):
+            continue
+        if bool(getattr(prop, "computed", False)):
+            continue
+        column = title_to_snake(name)
+        if column not in columns:
+            columns.append(column)
+    return columns
+
+
 def rgql_enabled(
     _fn=None,
     *,
@@ -255,6 +297,7 @@ def rgql_enabled(
             resource = registry.get_resource(entity_set)
             if not resource.behavior.rgql_enabled:
                 abort(403)
+            deleted_collection_view = _deleted_collection_view(resource, entity_id)
 
             tenant_id = None
             if tenant_kw:
@@ -297,6 +340,24 @@ def rgql_enabled(
                 registry=registry,
                 tenant_id=tenant_id,
             )
+            base_reference_where_provider = make_default_where_provider(
+                registry=registry,
+                tenant_id=tenant_id,
+                include_deleted=True,
+            )
+
+            def _resolves_soft_deleted_references(type_name: str) -> bool:
+                try:
+                    target_resource = registry.get_resource_by_type(type_name)
+                except KeyError:
+                    return False
+                return bool(
+                    getattr(
+                        target_resource.behavior,
+                        "resolve_soft_deleted_references",
+                        False,
+                    )
+                )
 
             def default_where_provider(type_name: str) -> dict[str, Any]:
                 defaults = dict(base_default_where_provider(type_name))
@@ -307,6 +368,13 @@ def rgql_enabled(
                     defaults["status"] = "active"
                 return defaults
 
+            def forward_reference_where_provider(
+                type_name: str,
+            ) -> dict[str, Any]:
+                if _resolves_soft_deleted_references(type_name):
+                    return dict(base_reference_where_provider(type_name))
+                return default_where_provider(type_name)
+
             def _serialize_entity(
                 entity,
                 edm_type: EdmType,
@@ -316,8 +384,6 @@ def rgql_enabled(
                 out: dict[str, Any] = {}
                 for f in fields(entity):
                     v = getattr(entity, f.name)
-                    if v is None:
-                        continue
                     discovery_fields = None
                     if self_tenant_discovery.enabled:
                         discovery_fields = _SELF_TENANT_DISCOVERY_FIELDS.get(
@@ -328,8 +394,44 @@ def rgql_enabled(
                     title = snake_to_title(f.name)
                     if edm_type.property_redacted(title):
                         continue
-                    if columns is None or f.name in columns or title in expand_paths:
+                    prop = edm_type.properties.get(title)
+                    always_serialize = bool(
+                        getattr(prop, "always_serialize", False)
+                    )
+                    if v is None and not always_serialize:
+                        continue
+                    if (
+                        columns is None
+                        or f.name in columns
+                        or title in expand_paths
+                        or always_serialize
+                    ):
                         out[title] = v
+
+                try:
+                    serialization_resource = registry.get_resource_by_type(
+                        edm_type.name
+                    )
+                except KeyError:
+                    serialization_resource = None
+                policy = getattr(
+                    getattr(serialization_resource, "behavior", None),
+                    "soft_delete",
+                    None,
+                )
+                if bool(
+                    getattr(policy, "allow_deleted_collection_views", False)
+                ):
+                    deleted_value = getattr(
+                        entity,
+                        title_to_snake(policy.column),
+                        None,
+                    )
+                    out[policy.column] = deleted_value
+                    if policy.mode == SoftDeleteMode.TIMESTAMP:
+                        out["IsArchived"] = deleted_value is not None
+                    else:
+                        out["IsArchived"] = deleted_value == policy.deleted_value
                 return out
 
             def _self_tenant_discovery_path_permitted(
@@ -482,7 +584,9 @@ def rgql_enabled(
                     ]
 
                 query_columns = (
-                    response_columns[:] if response_columns is not None else None
+                    _selected_query_columns(edm_type, opts.select)
+                    if response_columns is not None
+                    else None
                 )
 
                 # Ensure query columns include join keys required to materialize
@@ -577,6 +681,7 @@ def rgql_enabled(
                     max_filter_terms=max_filter_terms,
                     nav_path_planner=_plan_nav_path,
                     default_where_provider=default_where_provider,
+                    forward_reference_where_provider=(forward_reference_where_provider),
                 )
 
                 # Support $expand=* by materializing wildcards into concrete navs
@@ -614,13 +719,41 @@ def rgql_enabled(
             values: list[dict[str, Any]] = []
             count: int | None = None
 
-            delete_filter = default_where_provider(edm_type.name)
+            deleted_scalars: Sequence[ScalarFilter] | None = None
+            if entity_id is not None or deleted_collection_view == "active":
+                delete_filter = (
+                    forward_reference_where_provider(edm_type.name)
+                    if entity_id is not None
+                    else default_where_provider(edm_type.name)
+                )
+            else:
+                delete_filter = dict(base_reference_where_provider(edm_type.name))
+                policy = resource.behavior.soft_delete
+                if deleted_collection_view == "archived":
+                    deleted_column = title_to_snake(policy.column)
+                    if policy.mode == SoftDeleteMode.TIMESTAMP:
+                        deleted_scalars = (
+                            ScalarFilter(
+                                field=deleted_column,
+                                op=ScalarFilterOp.NE,
+                                value=None,
+                            ),
+                        )
+                    else:
+                        delete_filter[deleted_column] = policy.deleted_value
 
             if entity_id is None:
-                filter_groups = apply_to_filter_groups(
-                    filter_groups,
-                    where=delete_filter,
-                )
+                if deleted_scalars is None:
+                    filter_groups = apply_to_filter_groups(
+                        filter_groups,
+                        where=delete_filter,
+                    )
+                else:
+                    filter_groups = apply_to_filter_groups(
+                        filter_groups,
+                        where=delete_filter,
+                        scalars=deleted_scalars,
+                    )
 
                 if filter_groups:
                     fg_sum = 0

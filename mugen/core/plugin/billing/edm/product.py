@@ -20,8 +20,12 @@ product_type = EdmType(
         "UpdatedAt": EdmProperty(
             "UpdatedAt", TypeRef("Edm.DateTimeOffset"), nullable=False
         ),
-        "RowVersion": EdmProperty("RowVersion", TypeRef("Edm.Int64"), nullable=False),
-        "TenantId": EdmProperty("TenantId", TypeRef("Edm.Guid"), nullable=False),
+        "RowVersion": EdmProperty(
+            "RowVersion",
+            TypeRef("Edm.Int64"),
+            nullable=False,
+            always_serialize=True,
+        ),
         "Code": EdmProperty("Code", TypeRef("Edm.String"), nullable=False),
         "Name": EdmProperty("Name", TypeRef("Edm.String"), nullable=False),
         "Description": EdmProperty(
@@ -35,15 +39,23 @@ product_type = EdmType(
             filterable=False,
             sortable=False,
         ),
-        "DeletedAt": EdmProperty("DeletedAt", TypeRef("Edm.DateTimeOffset")),
+        "DeletedAt": EdmProperty(
+            "DeletedAt",
+            TypeRef("Edm.DateTimeOffset"),
+            always_serialize=True,
+        ),
         "DeletedByUserId": EdmProperty("DeletedByUserId", TypeRef("Edm.Guid")),
+        "IsArchived": EdmProperty(
+            "IsArchived",
+            TypeRef("Edm.Boolean"),
+            nullable=False,
+            filterable=False,
+            sortable=False,
+            computed=True,
+            always_serialize=True,
+        ),
     },
     nav_properties={
-        "Tenant": EdmNavigationProperty(
-            "Tenant",
-            target_type=TypeRef("ACP.Tenant"),
-            source_fk="TenantId",
-        ),
         "DeletedByUser": EdmNavigationProperty(
             "DeletedByUser",
             target_type=TypeRef("ACP.User"),

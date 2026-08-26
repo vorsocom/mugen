@@ -115,6 +115,7 @@ base_url="$(echo "$spec_json" | jq -r '.base_url')"
 username="$(echo "$spec_json" | jq -r '.credentials.username')"
 password="$(echo "$spec_json" | jq -r '.credentials.password')"
 entity_set="$(echo "$spec_json" | jq -r '.entity_set')"
+scope="$(echo "$spec_json" | jq -r '.scope // "tenant"')"
 create_payload="$(echo "$spec_json" | jq -c '.create_payload')"
 lookup_field="$(echo "$spec_json" | jq -r '.lookup.field // "Title"')"
 lookup_value="$(echo "$spec_json" | jq -r '.lookup.value // empty')"
@@ -149,6 +150,10 @@ if [[ -z "$username" || "$username" == "null" || -z "$password" || "$password" =
 fi
 if [[ -z "$entity_set" || "$entity_set" == "null" ]]; then
   echo "ERROR: entity_set is required" >&2
+  exit 1
+fi
+if [[ "$scope" != "tenant" && "$scope" != "global" ]]; then
+  echo "ERROR: scope must be tenant or global." >&2
   exit 1
 fi
 if [[ "$skip_create" != "true" && "$skip_create" != "false" ]]; then
@@ -258,6 +263,12 @@ if [[ -z "$tenant_id" ]]; then
 fi
 echo "TENANT: $tenant_id"
 
+if [[ "$scope" == "global" ]]; then
+  resource_url="$base_url/$entity_set"
+else
+  resource_url="$base_url/tenants/$tenant_id/$entity_set"
+fi
+
 entity_json="{}"
 entity_id=""
 row_version=""
@@ -270,7 +281,7 @@ if [[ "$skip_create" == "true" ]]; then
 else
   create_code="$(curl -sk -o /tmp/acp_http_e2e_create.out -w "%{http_code}" \
     -H "$auth_header" -H "Content-Type: application/json" \
-    -X POST "$base_url/tenants/$tenant_id/$entity_set" \
+    -X POST "$resource_url" \
     -d "$create_payload")"
   echo "CREATE $entity_set: $create_code"
   if [[ "$create_code" != "201" ]]; then
@@ -287,7 +298,7 @@ else
     exit 1
   fi
 
-  entity_json="$(curl -sk -H "$auth_header" "$base_url/tenants/$tenant_id/$entity_set" \
+  entity_json="$(curl -sk -H "$auth_header" "$resource_url" \
     | jq -c --arg f "$lookup_field" --arg v "$lookup_value" '.value[] | select(.[$f] == $v)' \
     | tail -n1)"
   entity_id="$(echo "$entity_json" | jq -r '.Id // empty')"
@@ -298,6 +309,17 @@ else
   fi
   entity_status="$(echo "$entity_json" | jq -r --arg sf "$status_field" '.[$sf] // ""')"
   echo "ENTITY ID: $entity_id | ROW_VERSION: $row_version | ${status_field}: $entity_status"
+fi
+
+absent_field_count="$(echo "$spec_json" | jq -r '.assertions.absent_fields | length // 0')"
+if [[ "$absent_field_count" -gt 0 ]]; then
+  for i in $(seq 0 $((absent_field_count - 1))); do
+    absent_field="$(echo "$spec_json" | jq -r ".assertions.absent_fields[$i]")"
+    if echo "$entity_json" | jq -e --arg field "$absent_field" 'has($field)' >/dev/null; then
+      echo "ERROR: response unexpectedly contains field $absent_field" >&2
+      exit 1
+    fi
+  done
 fi
 
 actions_count="$(echo "$spec_json" | jq -r '.actions | length')"
@@ -314,13 +336,13 @@ if [[ "$actions_count" -gt 0 ]]; then
     payload="$(replace_placeholders "$payload_template" "$row_version" "$entity_id" "$tenant_id" "$user_id")"
 
     if [[ "$target" == "entity_set" || "$target" == "set" ]]; then
-      action_url="$base_url/tenants/$tenant_id/$entity_set/\$action/$action_name"
+      action_url="$resource_url/\$action/$action_name"
     else
       if [[ -z "$entity_id" ]]; then
         echo "ERROR: action $action_name targets entity but entity_id is empty." >&2
         exit 1
       fi
-      action_url="$base_url/tenants/$tenant_id/$entity_set/$entity_id/\$action/$action_name"
+      action_url="$resource_url/$entity_id/\$action/$action_name"
     fi
 
     action_output_file="/tmp/acp_http_e2e_action_${i}.out"
@@ -361,7 +383,7 @@ if [[ "$actions_count" -gt 0 ]]; then
         echo "ERROR: action $action_name requested entity refresh but entity_id is empty." >&2
         exit 1
       fi
-      entity_json="$(curl -sk -H "$auth_header" "$base_url/tenants/$tenant_id/$entity_set/$entity_id")"
+      entity_json="$(curl -sk -H "$auth_header" "$resource_url/$entity_id")"
       row_version="$(echo "$entity_json" | jq -r '.RowVersion // empty')"
       entity_status="$(echo "$entity_json" | jq -r --arg sf "$status_field" '.[$sf] // ""')"
       if [[ -z "$row_version" ]]; then
@@ -380,7 +402,7 @@ if [[ -n "$expected_final_status" ]]; then
     echo "ERROR: assertions.final_status requires entity_id, but none is available." >&2
     exit 1
   fi
-  entity_json="$(curl -sk -H "$auth_header" "$base_url/tenants/$tenant_id/$entity_set/$entity_id")"
+  entity_json="$(curl -sk -H "$auth_header" "$resource_url/$entity_id")"
   current_final_status="$(echo "$entity_json" | jq -r --arg sf "$status_field" '.[$sf] // ""')"
   echo "ASSERT FINAL STATUS: expected=$expected_final_status actual=$current_final_status"
   if [[ "$current_final_status" != "$expected_final_status" ]]; then

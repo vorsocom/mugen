@@ -11,19 +11,21 @@
     "password": "aDmin,123"
   },
   "tenant_id": null,
-  "entity_set": "BillingAccounts",
+  "scope": "global",
+  "entity_set": "BillingProducts",
   "create_payload": {
-    "Code": "__BILLING_ACCOUNT_CODE__",
-    "DisplayName": "Billing Account __BILLING_ACCOUNT_CODE__"
+    "Code": "__BILLING_PRODUCT_CODE__",
+    "Name": "Billing Product __BILLING_PRODUCT_CODE__"
   },
   "lookup": {
     "field": "Code",
-    "value": "__BILLING_ACCOUNT_CODE__"
+    "value": "__BILLING_PRODUCT_CODE__"
   },
   "status_field": "Code",
   "actions": [],
   "assertions": {
     "final_status": null,
+    "absent_fields": ["TenantId", "Tenant"],
     "event_entity_set": "BillingUsageEvents",
     "event_entity_id_field": "AccountId",
     "event_type_field": "Status",
@@ -31,22 +33,71 @@
   },
   "negative_creates": [
     {
-      "name": "missing_account_display_name",
-      "entity_set": "BillingAccounts",
+      "name": "missing_product_name",
+      "entity_set": "BillingProducts",
+      "scope": "global",
       "expect_code": 400,
       "payload": {
-        "Code": "__BILLING_ACCOUNT_CODE__-NEG"
+        "Code": "__BILLING_PRODUCT_CODE__-NEG"
+      }
+    },
+    {
+      "name": "tenant_product_route_rejected",
+      "entity_set": "BillingProducts",
+      "scope": "tenant",
+      "expect_code": 400,
+      "payload": {
+        "Code": "__BILLING_PRODUCT_CODE__-TENANT",
+        "Name": "Tenant route must reject"
+      }
+    },
+    {
+      "name": "tenant_id_payload_rejected",
+      "entity_set": "BillingProducts",
+      "scope": "global",
+      "expect_code": 400,
+      "payload": {
+        "TenantId": "__TENANT_ID__",
+        "Code": "__BILLING_PRODUCT_CODE__-TENANT-ID",
+        "Name": "TenantId must reject"
+      }
+    },
+    {
+      "name": "normalized_product_code_conflict",
+      "entity_set": "BillingProducts",
+      "scope": "global",
+      "expect_code": 409,
+      "payload": {
+        "Code": "  __BILLING_PRODUCT_CODE__  ",
+        "Name": "Normalized duplicate"
+      }
+    },
+    {
+      "name": "tenant_price_route_rejected",
+      "entity_set": "BillingPrices",
+      "scope": "tenant",
+      "expect_code": 400,
+      "payload": {
+        "ProductId": "__ENTITY_ID__",
+        "Code": "__BILLING_PRODUCT_CODE__-TENANT-PRICE",
+        "PriceType": "one_time",
+        "Currency": "USD",
+        "UnitAmount": 1000
       }
     }
   ],
   "positive_creates": [
     {
-      "name": "create_product",
-      "entity_set": "BillingProducts",
+      "name": "create_price",
+      "entity_set": "BillingPrices",
+      "scope": "global",
       "expect_code": 201,
       "payload": {
-        "Code": "__BILLING_PRODUCT_CODE__",
-        "Name": "Billing Product __BILLING_PRODUCT_CODE__"
+        "ProductId": "__ENTITY_ID__",
+        "Code": "__BILLING_PRODUCT_CODE__-PRICE",
+        "PriceType": "one_time",
+        "Currency": "USD",
+        "UnitAmount": 1000
       }
     }
   ]

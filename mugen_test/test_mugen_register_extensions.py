@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from quart import Quart
 
@@ -12,7 +12,12 @@ import mugen as mugen_mod
 from mugen.core.bootstrap.extensions import ExtensionTokenSpec
 from mugen.core.contract.extension.cp import ICPExtension
 from mugen.core.contract.extension.fw import IFWExtension
-from mugen import BootstrapConfigError, ExtensionLoadError, register_extensions
+from mugen import (
+    BootstrapConfigError,
+    ExtensionLoadError,
+    get_extension_statuses,
+    register_extensions,
+)
 
 
 class _RegistryStub:
@@ -131,6 +136,9 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 config_provider=lambda: config,
                 **_provider_kwargs(app),
             )
+        status = get_extension_statuses(app)["unknown.token"]
+        self.assertEqual(status["status"], "failed")
+        self.assertEqual(status["reason"], "registration_failed")
 
     async def test_register_extensions_ignores_noncritical_unknown_token(self) -> None:
         app = Quart("test_app")
@@ -148,6 +156,10 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             config_provider=lambda: config,
             **_provider_kwargs(app),
         )
+        status = get_extension_statuses(app)["unknown.token"]
+        self.assertEqual(status["status"], "failed")
+        self.assertEqual(status["reason"], "registration_failed")
+        self.assertFalse(status["available"])
 
     async def test_register_extensions_skips_disabled_entries(self) -> None:
         app = Quart("test_app")
@@ -168,6 +180,23 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             extension_registry_provider=lambda: registry,
         )
         self.assertEqual(registry.calls, [])
+        status = get_extension_statuses(app)["core.cp.clear_history"]
+        self.assertEqual(
+            status,
+            {
+                "token": "core.cp.clear_history",
+                "extension_type": "cp",
+                "configured": True,
+                "enabled": False,
+                "available": False,
+                "status": "disabled",
+                "reason": "disabled_by_configuration",
+            },
+        )
+        self.assertEqual(
+            get_extension_statuses(app)["core.fw.billing"]["status"],
+            "absent",
+        )
 
     async def test_register_extensions_passes_resolved_type_and_token_to_registry(self) -> None:
         app = Quart("test_app")
@@ -246,6 +275,66 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(report, {"cp": ["core.cp.clear_history"]})
+        status = get_extension_statuses(app)["core.cp.clear_history"]
+        self.assertTrue(status["available"])
+        self.assertEqual(status["status"], "registered")
+        self.assertIsNone(status["reason"])
+
+    async def test_register_extensions_reports_unsupported_extension(self) -> None:
+        app = Quart("test_app")
+        config = _base_cfg(
+            [SimpleNamespace(type="cp", token="core.cp.clear_history")]
+        )
+        registry = _RegistryStub(result=False)
+
+        with patch(
+            "mugen.resolve_configured_extension_spec",
+            return_value=ExtensionTokenSpec("cp", ICPExtension, _DummyCPExt),
+        ):
+            report = await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                **_provider_kwargs(app),
+                extension_registry_provider=lambda: registry,
+            )
+
+        self.assertEqual(report, {})
+        status = get_extension_statuses(app)["core.cp.clear_history"]
+        self.assertEqual(status["status"], "unsupported")
+        self.assertEqual(status["reason"], "unsupported_by_active_platforms")
+        self.assertFalse(status["available"])
+
+    async def test_register_extensions_sanitizes_noncritical_failure_status(
+        self,
+    ) -> None:
+        app = Quart("test_app")
+        config = _base_cfg(
+            [
+                SimpleNamespace(
+                    type="fw",
+                    token="core.fw.billing",
+                    critical=False,
+                )
+            ]
+        )
+        registry = _RegistryStub()
+        registry.register = AsyncMock(side_effect=RuntimeError("secret failure"))
+
+        with patch(
+            "mugen.resolve_configured_extension_spec",
+            return_value=ExtensionTokenSpec("fw", IFWExtension, _DummyFWExt),
+        ):
+            report = await register_extensions(
+                app=app,
+                config_provider=lambda: config,
+                **_provider_kwargs(app),
+                extension_registry_provider=lambda: registry,
+            )
+
+        self.assertEqual(report, {})
+        status = get_extension_statuses(app)["core.fw.billing"]
+        self.assertEqual(status["status"], "failed")
+        self.assertNotIn("secret", str(status))
 
     async def test_register_extensions_allows_unknown_downstream_fw_with_acp_metadata(
         self,

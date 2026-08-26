@@ -107,9 +107,7 @@ class UsageEvent(ModelBase, TenantScopedMixin):
         back_populates="usage_events",
     )
 
-    price: Mapped["Price | None"] = relationship(  # type: ignore
-        back_populates="usage_events",
-    )
+    price: Mapped["Price | None"] = relationship()  # type: ignore
 
     usage_allocations: Mapped[list["UsageAllocation"]] = relationship(  # type: ignore
         back_populates="usage_event",
@@ -119,20 +117,26 @@ class UsageEvent(ModelBase, TenantScopedMixin):
     __table_args__ = (
         ForeignKeyConstraint(
             ("tenant_id", "account_id"),
-            (f"{CORE_SCHEMA_TOKEN}.billing_account.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_account.id"),
+            (
+                f"{CORE_SCHEMA_TOKEN}.billing_account.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.billing_account.id",
+            ),
             name="fkx_billing_usage_event__tenant_account",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
             ("tenant_id", "subscription_id"),
-            (f"{CORE_SCHEMA_TOKEN}.billing_subscription.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_subscription.id"),
+            (
+                f"{CORE_SCHEMA_TOKEN}.billing_subscription.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.billing_subscription.id",
+            ),
             name="fkx_billing_usage_event__tenant_subscription",
             ondelete="SET NULL",
         ),
         ForeignKeyConstraint(
-            ("tenant_id", "price_id"),
-            (f"{CORE_SCHEMA_TOKEN}.billing_price.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_price.id"),
-            name="fkx_billing_usage_event__tenant_price",
+            ("price_id",),
+            (f"{CORE_SCHEMA_TOKEN}.billing_price.id",),
+            name="fk_billing_usage_event__price",
             ondelete="SET NULL",
         ),
         CheckConstraint(

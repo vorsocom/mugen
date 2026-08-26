@@ -85,21 +85,22 @@ class InvoiceLine(ModelBase, TenantScopedMixin):
         back_populates="lines",
     )
 
-    price: Mapped["Price | None"] = relationship(  # type: ignore
-        back_populates="invoice_lines",
-    )
+    price: Mapped["Price | None"] = relationship()  # type: ignore
 
     __table_args__ = (
         ForeignKeyConstraint(
             ("tenant_id", "invoice_id"),
-            (f"{CORE_SCHEMA_TOKEN}.billing_invoice.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_invoice.id"),
+            (
+                f"{CORE_SCHEMA_TOKEN}.billing_invoice.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.billing_invoice.id",
+            ),
             name="fkx_billing_invoice_line__tenant_invoice",
             ondelete="CASCADE",
         ),
         ForeignKeyConstraint(
-            ("tenant_id", "price_id"),
-            (f"{CORE_SCHEMA_TOKEN}.billing_price.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_price.id"),
-            name="fkx_billing_invoice_line__tenant_price",
+            ("price_id",),
+            (f"{CORE_SCHEMA_TOKEN}.billing_price.id",),
+            name="fk_billing_invoice_line__price",
             ondelete="SET NULL",
         ),
         CheckConstraint(

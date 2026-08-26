@@ -100,6 +100,7 @@ class SoftDeletePolicy:
     column: Optional[str] = None  # e.g., "DeletedAt" or "IsDeleted"
     deleted_value: Any | None = True  # only for FLAG, usually True
     include_deleted_default: bool = False
+    allow_deleted_collection_views: bool = False
     allow_restore: bool = False
     allow_hard_delete: bool = True
 
@@ -114,6 +115,7 @@ class AdminBehavior:
     rgql_enabled: bool = True
     rgql_max_expand_depth: Optional[int] = None
     search_fields: tuple[str, ...] = ()
+    resolve_soft_deleted_references: bool = False
 
 
 @dataclass(frozen=True)

@@ -8,6 +8,7 @@ This index groups downstream implementation notes for the `billing` plugin.
 
 ## Notes
 
+- [Billing Global Catalog](../billing-global-catalog.md)
 - [Billing ACP Integration Boundary](./billing-acp-integration-boundary.md)
 - [Billing Invoice Reconciliation Source Of Truth](./billing-invoice-reconciliation-source-of-truth.md)
 - [Billing Partial Index Governance](./billing-partial-index-governance.md)

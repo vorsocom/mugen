@@ -18,6 +18,7 @@ PHASE_B_STARTED_AT_KEY = "phase_b_started_at"
 PHASE_B_PLATFORM_STATUSES_KEY = "platform_statuses"
 PHASE_B_PLATFORM_ERRORS_KEY = "platform_errors"
 PHASE_B_PLATFORM_TASKS_KEY = "platform_tasks"
+EXTENSION_STATUSES_KEY = "extension_statuses"
 SHUTDOWN_REQUESTED_KEY = "shutdown_requested"
 
 PHASE_STATUS_STARTING = "starting"
@@ -30,3 +31,9 @@ def get_bootstrap_state(app: Quart) -> dict:
     """Get mutable bootstrap state storage from app extensions."""
     mugen_state = app.extensions.setdefault(MUGEN_EXTENSION_KEY, {})
     return mugen_state.setdefault(BOOTSTRAP_STATE_KEY, {})
+
+
+def get_extension_statuses(app: Quart) -> dict[str, dict[str, object]]:
+    """Get the authoritative post-bootstrap extension status snapshot."""
+    bootstrap_state = get_bootstrap_state(app)
+    return bootstrap_state.setdefault(EXTENSION_STATUSES_KEY, {})
