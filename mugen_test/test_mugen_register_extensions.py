@@ -390,9 +390,9 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             [
                 SimpleNamespace(
                     type="fw",
-                    token="vorsocom.fw.valet_car_rentals",
-                    name="com.vorsocomputing.mugen.valet_car_rentals",
-                    namespace="com.vorsocomputing.mugen.valet_car_rentals",
+                    token="example.fw.car_rentals",
+                    name="com.example.mugen.car_rentals",
+                    namespace="com.example.mugen.car_rentals",
                     contrib="car_rentals_extension.contrib",
                     runtime_module="car_rentals_extension.fw_ext",
                     runtime_class="CarRentalsFWExtension",
@@ -424,7 +424,7 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
                 **provider_kwargs,
             )
 
-        self.assertEqual(report, {"fw": ["vorsocom.fw.valet_car_rentals"]})
+        self.assertEqual(report, {"fw": ["example.fw.car_rentals"]})
         self.assertTrue(app.config["downstream_runtime_fw_setup"])
         self.assertEqual(_RuntimeFWExt.setup_calls, 1)
 
@@ -436,9 +436,9 @@ class TestRegisterExtensions(unittest.IsolatedAsyncioTestCase):
             [
                 SimpleNamespace(
                     type="fw",
-                    token="vorsocom.fw.valet_car_rentals",
-                    name="com.vorsocomputing.mugen.valet_car_rentals",
-                    namespace="com.vorsocomputing.mugen.valet_car_rentals",
+                    token="example.fw.car_rentals",
+                    name="com.example.mugen.car_rentals",
+                    namespace="com.example.mugen.car_rentals",
                     contrib="car_rentals_extension.contrib",
                     critical=False,
                     runtime_module="car_rentals_extension.fw_ext",

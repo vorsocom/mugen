@@ -97,12 +97,9 @@ representations and historical inspection. Clients do not author those
 snapshots. An unmetered Price omits the meter reference. Price creation rejects
 an absent or inactive meter and rejects a usage-unit mismatch.
 
-Core seeds these canonical Customer Inbox meters:
-
-| Code | Unit | Aggregation |
-| --- | --- | --- |
-| `valet.customer-inbox.minutes` | `minute` | `sum` |
-| `valet.customer-inbox.tasks` | `task` | `sum` |
+Core does not seed product- or application-specific meter definitions.
+Platform administrators and downstream provisioning workflows create them
+through the global Billing catalog and retain the returned IDs.
 
 Ops Metering Policies, Sessions, Records, and Rated Usage reference the same
 global meter IDs. They never duplicate editable Unit or Aggregation Mode fields.
@@ -221,4 +218,4 @@ tiering, and presentation behavior.
 The UI should place global definitions under Platform Configuration / Billing
 Catalog; keep Accounts, Subscriptions, Buckets, Usage, Runs, and Invoices in the
 tenant workspace; present generated buckets as operational records; and link
-Valet provisioning to the global meter and Price entitlement surfaces.
+downstream provisioning to the global meter and Price entitlement surfaces.

@@ -274,13 +274,13 @@ class TestChannelOrchestrationContribBinding(unittest.TestCase):
             channel_key=" line ",
             identifier_type=" path_token ",
             identifier_value=" token ",
-            service_route_key=" valet.core ",
+            service_route_key=" example.default ",
         )
 
         self.assertEqual(validation.channel_key, "line")
         self.assertEqual(validation.identifier_type, "path_token")
         self.assertEqual(validation.identifier_value, "token")
-        self.assertEqual(validation.service_route_key, "valet.core")
+        self.assertEqual(validation.service_route_key, "example.default")
 
     def test_channel_profile_validation_allows_omitted_service_route_default_key(
         self,
@@ -327,11 +327,11 @@ class TestChannelOrchestrationContribBinding(unittest.TestCase):
     ) -> None:
         validation = ChannelProfileUpdateValidation(
             display_name=" Default channel ",
-            service_route_default_key=" valet.core ",
+            service_route_default_key=" example.default ",
             route_default_key=" urgent ",
         )
         self.assertEqual(validation.display_name, "Default channel")
-        self.assertEqual(validation.service_route_default_key, "valet.core")
+        self.assertEqual(validation.service_route_default_key, "example.default")
         self.assertEqual(validation.route_default_key, "urgent")
 
         null_patch = ChannelProfileUpdateValidation(

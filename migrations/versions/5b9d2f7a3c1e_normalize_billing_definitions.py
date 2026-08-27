@@ -650,12 +650,6 @@ def _entitlement_plan(
 ) -> list[dict[str, Any]]:
     """Translate validated included_usage metadata into structured rules."""
     meters = {_normalize_code(row["code"]): row for row in meter_rows}
-    aliases = {
-        "cim": "valet.customer-inbox.minutes",
-        "cct": "valet.customer-inbox.tasks",
-        "minutes": "valet.customer-inbox.minutes",
-        "tasks": "valet.customer-inbox.tasks",
-    }
     rules: list[dict[str, Any]] = []
     for price in price_rows:
         attributes = price.get("attributes")
@@ -678,11 +672,8 @@ def _entitlement_plan(
             )
         if price.get("deleted_at") is not None:
             raise RuntimeError(f"Price {price['id']} has entitlements but is archived.")
-        seen: set[uuid.UUID] = set()
         for raw_meter_code, raw_quantity in sorted(included.items()):
-            code = aliases.get(
-                _normalize_code(raw_meter_code), _normalize_code(raw_meter_code)
-            )
+            code = _normalize_code(raw_meter_code)
             meter = meters.get(code)
             if meter is None or not meter.get("is_active"):
                 raise RuntimeError(
@@ -700,12 +691,6 @@ def _entitlement_plan(
                     "non-negative."
                 )
             meter_id = meter["id"]
-            if meter_id in seen:
-                raise RuntimeError(
-                    f"Price {price['id']} includes duplicate aliases for meter "
-                    f"'{code}'."
-                )
-            seen.add(meter_id)
             rule_id = uuid.uuid5(
                 _ENTITLEMENT_NAMESPACE,
                 f"{price['id']}:{meter_id}",
