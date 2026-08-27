@@ -7,31 +7,9 @@ import uuid
 from pydantic import NonNegativeInt, PositiveInt, model_validator
 
 from mugen.core.plugin.acp.api.validation.crud_builder import (
-    build_create_validation_from_pascal,
     build_update_validation_from_pascal,
 )
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
-
-MeterDefinitionCreateValidation = build_create_validation_from_pascal(
-    "MeterDefinitionCreateValidation",
-    module=__name__,
-    doc="Validate create payloads for MeterDefinition.",
-    required_fields=("TenantId", "Code", "Unit", "AggregationMode"),
-)
-
-MeterDefinitionUpdateValidation = build_update_validation_from_pascal(
-    "MeterDefinitionUpdateValidation",
-    module=__name__,
-    doc="Validate update payloads for MeterDefinition.",
-    optional_fields=(
-        "Code",
-        "Unit",
-        "AggregationMode",
-        "Description",
-        "IsActive",
-        "Attributes",
-    ),
-)
 
 
 class UsageSessionCreateValidation(IValidationBase):

@@ -6,9 +6,9 @@ import unittest
 from unittest.mock import AsyncMock, Mock
 import uuid
 
+from mugen.core.plugin.billing.domain import MeterDefinitionDE
 from mugen.core.plugin.ops_metering.api.validation import UsageRecordRateValidation
 from mugen.core.plugin.ops_metering.domain import (
-    MeterDefinitionDE,
     MeterPolicyDE,
     RatedUsageDE,
     UsageRecordDE,
@@ -62,9 +62,9 @@ class TestOpsMeteringRatingBoundaries(unittest.IsolatedAsyncioTestCase):
         svc._meter_definition_service.get = AsyncMock(
             return_value=MeterDefinitionDE(
                 id=meter_definition_id,
-                tenant_id=tenant_id,
                 code="ops.units",
                 unit="unit",
+                is_active=True,
             )
         )
         svc._meter_policy_service.list = AsyncMock(return_value=[policy])
@@ -135,9 +135,9 @@ class TestOpsMeteringRatingBoundaries(unittest.IsolatedAsyncioTestCase):
         svc._meter_definition_service.get = AsyncMock(
             return_value=MeterDefinitionDE(
                 id=meter_definition_id,
-                tenant_id=tenant_id,
                 code="ops.units",
                 unit="unit",
+                is_active=True,
             )
         )
         svc._meter_policy_service.list = AsyncMock(return_value=[policy])

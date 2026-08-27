@@ -56,6 +56,20 @@ class Invoice(ModelBase, TenantScopedMixin, SoftDeleteMixin):
         index=True,
     )
 
+    billing_run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    currency_definition_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        nullable=False,
+        index=True,
+    )
+    tax_code_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    payment_term_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    invoice_template_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    discount_definition_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        nullable=True,
+    )
+
     status: Mapped[str] = mapped_column(
         PGENUM(
             InvoiceStatus,
@@ -170,15 +184,60 @@ class Invoice(ModelBase, TenantScopedMixin, SoftDeleteMixin):
     __table_args__ = (
         ForeignKeyConstraint(
             ("tenant_id", "account_id"),
-            (f"{CORE_SCHEMA_TOKEN}.billing_account.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_account.id"),
+            (
+                f"{CORE_SCHEMA_TOKEN}.billing_account.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.billing_account.id",
+            ),
             name="fkx_billing_invoice__tenant_account",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
             ("tenant_id", "subscription_id"),
-            (f"{CORE_SCHEMA_TOKEN}.billing_subscription.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_subscription.id"),
+            (
+                f"{CORE_SCHEMA_TOKEN}.billing_subscription.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.billing_subscription.id",
+            ),
             name="fkx_billing_invoice__tenant_subscription",
             ondelete="SET NULL",
+        ),
+        ForeignKeyConstraint(
+            ("tenant_id", "billing_run_id"),
+            (
+                f"{CORE_SCHEMA_TOKEN}.billing_run.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.billing_run.id",
+            ),
+            name="fkx_billing_invoice__tenant_billing_run",
+            ondelete="SET NULL",
+        ),
+        ForeignKeyConstraint(
+            ("currency_definition_id",),
+            (f"{CORE_SCHEMA_TOKEN}.billing_currency_definition.id",),
+            name="fk_billing_invoice__currency_definition",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("tax_code_id",),
+            (f"{CORE_SCHEMA_TOKEN}.billing_tax_code.id",),
+            name="fk_billing_invoice__tax_code",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("payment_term_id",),
+            (f"{CORE_SCHEMA_TOKEN}.billing_payment_term.id",),
+            name="fk_billing_invoice__payment_term",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("invoice_template_id",),
+            (f"{CORE_SCHEMA_TOKEN}.billing_invoice_template.id",),
+            name="fk_billing_invoice__invoice_template",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("discount_definition_id",),
+            (f"{CORE_SCHEMA_TOKEN}.billing_discount_definition.id",),
+            name="fk_billing_invoice__discount_definition",
+            ondelete="RESTRICT",
         ),
         CheckConstraint(
             "length(btrim(currency)) = 3",

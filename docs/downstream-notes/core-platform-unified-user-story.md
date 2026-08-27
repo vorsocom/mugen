@@ -38,13 +38,15 @@ vertical business outcomes without re-implementing foundational infrastructure.
 
 - Core responsibilities:
   - `audit`: append-only system audit records for ACP writes/actions.
-  - `billing`: products/prices/subscriptions/usage events/invoice and payment
-    primitives for financial settlement.
+  - `billing`: global product, Price, meter, entitlement, run, currency, tax,
+    term, template, and discount definitions plus tenant subscription, usage,
+    balance, execution, invoice, and payment state.
   - `channel_orchestration`: generic intake/routing/throttle/blocklist/fallback.
   - `knowledge_pack`: approved-response versioning and publication controls.
   - `ops_case`: canonical case lifecycle, assignment, escalation, timeline.
   - `ops_governance`: consent/delegation/policy/retention metadata actions.
-  - `ops_metering`: normalized usage capture/rating primitives.
+  - `ops_metering`: normalized tenant usage capture/rating primitives referencing
+    canonical global Billing meters.
   - `ops_reporting`: deterministic aggregation and snapshot lifecycle.
   - `ops_sla`: business-hour-aware clocks and breach markers.
   - `ops_vpn`: vendor registry, lifecycle, scorecard rollup primitives.
@@ -102,8 +104,8 @@ vertical business outcomes without re-implementing foundational infrastructure.
   - policy decision/action behavior (`ops_governance`)
   - aggregation/snapshot lifecycle (`ops_reporting`)
   - intake/routing/blocklist behavior (`channel_orchestration`)
-- Billing is part of the unified platform story and should be validated with
-  billing-focused migration/service/E2E checks as those specs are expanded.
+- Billing is validated with global-catalog, tenant-isolation, exact-once
+  entitlement generation, migration, and PostgreSQL HTTP E2E checks.
 
 ## Risks / Open Questions
 

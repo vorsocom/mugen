@@ -19,6 +19,12 @@ class InvoiceDE(BaseDE, TenantScopedDEMixin, SoftDeleteDEMixin):
 
     account_id: uuid.UUID | None = None
     subscription_id: uuid.UUID | None = None
+    billing_run_id: uuid.UUID | None = None
+    currency_definition_id: uuid.UUID | None = None
+    tax_code_id: uuid.UUID | None = None
+    payment_term_id: uuid.UUID | None = None
+    invoice_template_id: uuid.UUID | None = None
+    discount_definition_id: uuid.UUID | None = None
 
     status: str | None = None  # draft / issued / paid / void / uncollectible
     number: str | None = None

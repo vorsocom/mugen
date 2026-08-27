@@ -18,6 +18,8 @@ class InvoiceLineDE(BaseDE, TenantScopedDEMixin):
 
     invoice_id: uuid.UUID | None = None
     price_id: uuid.UUID | None = None
+    tax_code_id: uuid.UUID | None = None
+    tax_rate_id: uuid.UUID | None = None
 
     description: str | None = None
     quantity: int | None = None

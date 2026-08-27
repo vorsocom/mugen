@@ -4,6 +4,7 @@ __all__ = ["UsageSessionService"]
 
 from datetime import datetime, timezone
 import math
+from typing import Any, Mapping
 import uuid
 
 from quart import abort
@@ -47,6 +48,15 @@ class UsageSessionService(
             table=self._USAGE_RECORD_TABLE,
             rsg=rsg,
         )
+
+    async def create(self, values: Mapping[str, Any]) -> UsageSessionDE:
+        meter = await self._rsg.get_one(
+            "billing_meter_definition",
+            {"id": values["meter_definition_id"]},
+        )
+        if meter is None or not meter.get("is_active"):
+            abort(400, "MeterDefinitionId must reference an active global meter.")
+        return await super().create(values)
 
     @staticmethod
     def _now_utc() -> datetime:

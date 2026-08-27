@@ -1,191 +1,224 @@
-# Billing Global Catalog
+# Billing Global Catalog and Tenant Operations
 
 - Status: active
 - Owner: core billing maintainers
-- Last Updated: 2026-08-24
+- Last Updated: 2026-08-27
 
-## Ownership and routes
+## Ownership boundary
 
-`BillingProducts` and `BillingPrices` are global platform catalog resources:
+Commercial, metering, and reusable policy definitions are global:
+
+| Entity set | Purpose |
+| --- | --- |
+| `BillingProducts` | Platform products and SKUs |
+| `BillingPrices` | Versioned commercial prices |
+| `BillingMeterDefinitions` | Canonical usage semantics |
+| `BillingPriceEntitlements` | Included usage granted by a recurring Price |
+| `BillingRunDefinitions` | Reusable billing cadence and timezone |
+| `BillingCurrencyDefinitions` | Vendored ISO 4217 codes and minor units |
+| `BillingTaxCodes`, `BillingTaxRates` | Tax classifications and effective rates |
+| `BillingPaymentTerms` | Reusable due-date rules |
+| `BillingInvoiceTemplates` | Reusable rendering definitions |
+| `BillingDiscountDefinitions` | Reusable discount and coupon definitions |
+
+These resources use global routes under `/api/core/acp/v1/{entitySet}`. Their
+payloads do not accept or return `TenantId`. Tenant-form routes return `400`
+because ACP derives scope from the EDM shape.
+
+Customer adoption, operational balances, and financial records stay tenant
+scoped:
 
 ```text
-GET|POST /api/core/acp/v1/BillingProducts
-GET|PATCH /api/core/acp/v1/BillingProducts/{productId}
+Account -> Subscription -> global Price -> global Product
+                    |              |
+                    |              +-> global Price Entitlement rules
+                    +-> generated period Entitlement Buckets
 
-GET|POST /api/core/acp/v1/BillingPrices
-GET|PATCH /api/core/acp/v1/BillingPrices/{priceId}
+global Billing Run Definition -> tenant Billing Run execution
 ```
 
-Their payloads do not accept or return `TenantId`. Tenant-form routes for these
-entity sets return `400` because ACP derives scope from the EDM shape.
+Accounts, Subscriptions, Entitlement Buckets and Adjustments, Usage Events and
+Allocations, Billing Runs, Invoices and Lines, Payments, Credits, Adjustments,
+and Ledger Entries use
+`/api/core/acp/v1/tenants/{tenantId}/{entitySet}`. Service validation prevents
+cross-tenant references.
 
-Billing Accounts and Subscriptions remain tenant-owned:
+Global `Attributes` are non-secret platform metadata. Validation rejects keys or
+nested keys that indicate tenant/customer identifiers, contacts, credentials,
+tokens, or financial transaction data.
+
+## Permissions, concurrency, and lifecycle
+
+The global `<billing-namespace>:catalog_reader` role receives read permission
+for every global billing definition. Create, update, archive, restore, activate,
+and deactivate operations remain platform-administrator operations. Backend
+permissions are authoritative.
+
+Every update, archive/restore operation, and lifecycle action requires the
+current `RowVersion`. Stale versions and semantic conflicts return `409`.
+Definitions do not support hard delete.
+
+Products, Prices, and Price Entitlements use archive semantics. Other reusable
+definitions use explicit lifecycle actions:
 
 ```text
-tenant Billing Account -> tenant Subscription -> global Price -> global Product
-```
-
-A Subscription create request uses the tenant route and global `PriceId`:
-
-```http
-POST /api/core/acp/v1/tenants/{tenantId}/BillingSubscriptions
+POST /api/core/acp/v1/{entitySet}/{id}/$action/activate
+POST /api/core/acp/v1/{entitySet}/{id}/$action/deactivate
 ```
 
 ```json
 {
-  "AccountId": "<tenant-account-uuid>",
-  "PriceId": "<global-price-uuid>"
+  "RowVersion": 1
 }
 ```
 
-The service rejects an Account from another tenant, an archived Price or
-Product, and invalid metering capability. Two tenants may reference the same
-global Price.
+Deactivation returns `409` while an active resource requires the definition.
+Products, Prices, and Price Entitlements retain historical resolution after
+archive. Archived Products and Prices remain available through direct reads and
+tenant-record navigation, but cannot be selected by new Subscriptions.
 
-## Permissions and lifecycle
-
-Clients determine Billing availability from the authenticated runtime extension
-contract instead of probing catalog routes:
+Clients determine Billing availability through the authenticated runtime
+extension contract:
 
 ```text
-GET /api/core/acp/v1/runtime/extensions
 GET /api/core/acp/v1/runtime/extensions/core.fw.billing
 ```
 
-The collection returns `{"value": [...]}` sorted by extension token. It includes
-every known built-in extension and every configured downstream extension. A detail
-lookup returns `404` only when the token is wholly unknown. Any authenticated user
-may read this client-safe state, including a user whose only Billing role is
-`catalog_reader`.
+## Canonical meter contract
 
-```json
-{
-  "token": "core.fw.billing",
-  "extension_type": "fw",
-  "configured": true,
-  "enabled": true,
-  "available": true,
-  "status": "registered",
-  "reason": null
-}
-```
+`BillingMeterDefinitions.Code` is trimmed, compared case-insensitively, and
+globally unique. `Unit` and `AggregationMode` define stable semantics. Once a
+meter has references, Code, Unit, and Aggregation Mode cannot change
+incompatibly.
 
-`status` is one of `absent`, `disabled`, `registered`, `unsupported`, or `failed`.
-Only `registered` has `available: true`. The corresponding safe failure reasons are
-`not_configured`, `disabled_by_configuration`,
-`unsupported_by_active_platforms`, and `registration_failed`; raw bootstrap errors
-and configuration details are never returned. The state reflects the completed
-runtime registration sweep and remains available when a non-critical extension
-fails, provided ACP itself started successfully.
+A metered Price requires `MeterDefinitionId`; the service resolves the active
+canonical meter and stores `MeterCode` and `UsageUnit` snapshots for compatible
+representations and historical inspection. Clients do not author those
+snapshots. An unmetered Price omits the meter reference. Price creation rejects
+an absent or inactive meter and rejects a usage-unit mismatch.
 
-The global `<billing-namespace>:catalog_reader` role receives `read` permission
-for Products and Prices only. Catalog create, update, archive, and restore remain
-administrator operations. Archive uses:
+Core seeds these canonical Customer Inbox meters:
 
-```text
-POST /api/core/acp/v1/BillingProducts/{productId}/$action/archive
-POST /api/core/acp/v1/BillingPrices/{priceId}/$action/archive
-```
+| Code | Unit | Aggregation |
+| --- | --- | --- |
+| `valet.customer-inbox.minutes` | `minute` | `sum` |
+| `valet.customer-inbox.tasks` | `task` | `sum` |
 
-with a `RowVersion` payload. Restore uses ACP's standard global `$restore`
-endpoint.
+Ops Metering Policies, Sessions, Records, and Rated Usage reference the same
+global meter IDs. They never duplicate editable Unit or Aggregation Mode fields.
 
-Product and Price collections support explicit lifecycle views on their global
-routes only:
+## Price entitlement rules and generated buckets
+
+`BillingPriceEntitlements` is the authoritative structured package-allowance
+contract. A rule binds one active recurring package Price to one active meter
+and declares a non-negative whole `IncludedQuantity`. Only one active rule may
+exist for a Price/meter pair. `RolloverPolicy` is currently `none`.
+
+Rules used by active Subscriptions cannot be mutated or archived. Publish a new
+Price for a commercial package revision. `Price.Attributes.included_usage` is
+accepted only as migration input and is not authoritative at runtime.
+
+Creating an active Subscription generates its current-period buckets. Buckets
+are also generated by `advance_period`, Billing Run period opening, and the
+authorized `reconcile_entitlements` actions. The idempotency boundary is:
 
 ```text
-GET /api/core/acp/v1/BillingProducts?$deleted=active
-GET /api/core/acp/v1/BillingProducts?$deleted=archived
-GET /api/core/acp/v1/BillingProducts?$deleted=all
-GET /api/core/acp/v1/BillingPrices?$deleted=archived&$filter=ProductId eq guid'<uuid>'
+TenantId + AccountId + SubscriptionId + PriceEntitlementId
+         + PeriodStart + PeriodEnd
 ```
 
-Omitting `$deleted` is equivalent to `active`. The option composes with existing
-pagination, ordering, filtering, selection, and count options. Invalid, repeated,
-entity-route, tenant-route, or non-catalog uses return `400`.
+Each bucket snapshots Price, rule, meter ID and code, included quantity, period,
+generation source, and optional Billing Run provenance. Historical buckets are
+never recalculated when catalog definitions change. Reconciliation creates only
+genuinely missing rows.
 
-Every Product and Price response includes `DeletedAt`, `IsArchived`, and
-`RowVersion`, even when `$select` is used. `DeletedAt` is `null` for active rows,
-and `IsArchived` is a computed, read-only boolean. Payloads and routes never accept
-or return `TenantId`.
-
-Archived rows remain resolvable by direct ID and through tenant-resource forward
-navigation so historical billing records do not lose their Product or Price
-meaning. Restore uses the archived row's current version:
+Direct create, update, and delete are disabled for buckets. Administrators use
+the guarded action:
 
 ```text
-POST /api/core/acp/v1/BillingProducts/{productId}/$restore
-POST /api/core/acp/v1/BillingPrices/{priceId}/$restore
+POST /api/core/acp/v1/tenants/{tenantId}/BillingEntitlementBuckets/{id}/$action/adjust
 ```
 
-```json
-{
-  "RowVersion": 2
-}
-```
+with `RowVersion`, a signed `QuantityDelta`, a reason, and an idempotency key.
+The action preserves the original included quantity and writes an append-only
+`BillingEntitlementAdjustments` audit row.
 
-Catalog reads, including archived views, require Product or Price `read`
-permission. Restore continues to require `update`; stale versions return `409`.
-A global Price deliberately has no reverse Subscription, Invoice Line, Usage Event,
-or Entitlement Bucket navigation.
+## Billing Run definitions and executions
 
-Archiving does not terminate or alter a current Subscription. It prevents new
-Subscriptions and reactivation; existing current and historical references
-remain readable.
+`BillingRunDefinitions` owns the reusable Frequency, Interval Count, and IANA
+Timezone. `BillingRuns` is a tenant execution ledger that references a global
+definition plus tenant Account/Subscription scope, period boundaries, status,
+timestamps, failure detail, retry provenance, invoices, and generated bucket
+counts.
 
-## Catalog rules
+Billing Run create is idempotent within a tenant. Lifecycle actions are `start`,
+`complete`, `fail`, `cancel`, `retry`, and `reconcile_entitlements`. Calendar
+period calculations use the definition timezone and retain correct local
+boundaries across daylight-saving transitions. Retries create explicit attempts;
+services do not silently generate a new idempotency key.
 
-- Codes are trimmed before persistence and use PostgreSQL `CITEXT` comparison.
-- Product Code is unique across active and archived Products.
-- Price Code is unique within Product across active and archived Prices.
-- Restoring cannot become ambiguous through soft-deleted code reuse.
-- `Attributes` is global, non-secret catalog metadata.
+## Global reference resources
 
-After any Billing or Ops Metering row references a Price, these commercial
-fields are immutable: Product, Price Type, Currency, Unit Amount, interval,
-trial period, Usage Unit, and Meter Code. Create a new Price for a commercial
-change. Code and Attributes remain mutable.
+Currency records are seeded from a pinned official ISO 4217 snapshot; arbitrary
+currency creation and edits are disabled. Administrators activate only platform-
+supported currencies. Prices and money-bearing tenant records reference a
+Currency Definition while retaining a currency-code snapshot.
 
-## Meter contract
-
-A Price represents at most one billing meter:
-
-- `MeterCode` and `UsageUnit` are supplied together.
-- A metered Price requires both.
-- A non-metered Price may omit both.
-- Subscription create or reactivation requires a matching active tenant
-  `OpsMeterDefinition` for a metered Price.
-- Meter Code comparison trims whitespace and is case-insensitive.
-- Meter Definition Unit must match Price Usage Unit after the same
-  normalization.
-
-Several independently billed meters require a separate multi-meter model; one
-Price binding must not be treated as satisfying several operational meters.
+Tax rates belong to Tax Codes and use non-overlapping effective windows. Payment
+Terms can supply invoice due-date defaults. Invoice Templates and Discount
+Definitions are reusable global records, and tenant financial records may carry
+approved references or snapshots without moving transaction data into the global
+catalog.
 
 ## Migration and downgrade
 
-Revision `3e7c9a1b5d2f` performs the catalog consolidation transactionally while
-holding write locks over the catalog and all rewritten references. It:
+Revision `3e7c9a1b5d2f` globally consolidates Products and Prices. Revisions
+`4a8c1e6f2b9d` and `5b9d2f7a3c1e` normalize meters and the remaining billing
+definitions. The data cutover:
 
-1. Rejects non-empty legacy catalog Attributes with row IDs and attribute keys.
-2. Groups trimmed, case-insensitive Codes and rejects materially conflicting
-   Products or Prices.
-3. Selects the earliest `CreatedAt`, then lowest ID, as the canonical row.
-4. Rewrites four Core Billing foreign keys and three Ops Metering denormalized
-   Price references.
-5. Removes Product and Price tenant ownership and installs global constraints.
-6. Validates every resulting Product and Price reference.
+1. Locks affected tables and inventories every tenant meter.
+2. Groups trimmed, case-insensitive meter Codes.
+3. Collapses rows only when Unit and Aggregation Mode agree.
+4. Stops with row/tenant details on semantic conflicts, absent references, or
+   any tenant meter `Attributes` requiring explicit sensitivity review.
+5. Creates canonical meters and rewrites Price, Billing, and Ops Metering
+   references transactionally.
+6. Backfills Price Entitlement rules from validated `included_usage` metadata.
+7. Preserves legacy mapping/row backups, historical buckets, and historical
+   usage records.
+8. Seeds the pinned currency catalog and migrates Billing Runs into tenant
+   executions referencing a global definition.
 
-The migration retains legacy Product, Price, and Price-reference mapping tables
-for downgrade. Downgrade restores exact legacy IDs and rows. It refuses to run
-if post-upgrade catalog or Price-reference mutations would make exact recovery
-unsafe. PostgreSQL transactional DDL rolls back all migration work on a conflict
-or validation failure.
+Migration is transactional and safe to rerun through normal Alembic revision
+tracking. Downgrade reconstructs exact legacy meter rows only when no post-cutover
+references would be lost; otherwise it stops with a diagnostic. PostgreSQL rolls
+back the attempted downgrade on failure.
 
-## Downstream changes
+## Compatibility and deprecation
 
-Downstream applications must remove tenant filters from Product and Price
-lookups while retaining tenant filters for Accounts and Subscriptions. Each
-application seeds its global Product/Price catalog records and updates
-entitlement/readiness integrations. Multi-meter requirements remain a separate
-design decision.
+During the compatibility period, this legacy route remains available for reads:
+
+```text
+GET /api/core/acp/v1/tenants/{tenantId}/OpsMeterDefinitions
+```
+
+It is a tenant-filtered database view over the global catalog, not a second
+source of truth. Every row returns `IsDeprecated: true` and
+`SuccessorEntitySet: "BillingMeterDefinitions"`. Create, update, delete, and
+lifecycle operations are disabled. Existing consumers should move reads to
+`BillingMeterDefinitions` and write only through the global platform-admin
+surface. The compatibility route can be removed after all consumers complete
+that migration.
+
+## Downstream and UI changes
+
+Downstream applications must remove tenant filters from all global-definition
+lookups while retaining tenant filters for operational and financial records.
+They should store canonical meter IDs, treat Price Entitlement rules as package
+allowance authority, and reserve downstream policy for business-specific overage,
+tiering, and presentation behavior.
+
+The UI should place global definitions under Platform Configuration / Billing
+Catalog; keep Accounts, Subscriptions, Buckets, Usage, Runs, and Invoices in the
+tenant workspace; present generated buckets as operational records; and link
+Valet provisioning to the global meter and Price entitlement surfaces.

@@ -25,6 +25,10 @@ usage_event_type = EdmType(
         "AccountId": EdmProperty("AccountId", TypeRef("Edm.Guid"), nullable=False),
         "SubscriptionId": EdmProperty("SubscriptionId", TypeRef("Edm.Guid")),
         "PriceId": EdmProperty("PriceId", TypeRef("Edm.Guid")),
+        "MeterDefinitionId": EdmProperty(
+            "MeterDefinitionId",
+            TypeRef("Edm.Guid"),
+        ),
         "MeterCode": EdmProperty("MeterCode", TypeRef("Edm.String"), nullable=False),
         "OccurredAt": EdmProperty(
             "OccurredAt",
@@ -61,6 +65,11 @@ usage_event_type = EdmType(
             "Price",
             target_type=TypeRef("BILLING.Price"),
             source_fk="PriceId",
+        ),
+        "MeterDefinition": EdmNavigationProperty(
+            "MeterDefinition",
+            target_type=TypeRef("BILLING.MeterDefinition"),
+            source_fk="MeterDefinitionId",
         ),
         "UsageAllocations": EdmNavigationProperty(
             "UsageAllocations",

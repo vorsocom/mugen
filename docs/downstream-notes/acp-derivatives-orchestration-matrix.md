@@ -48,12 +48,12 @@ or execution state that is business-specific.
 | --- | --- | --- |
 | `acp` | Tenant-scoped CRUD/action surface, permissions, resource registration/runtime binding | Business orchestration composition, app-level policy and operator UX |
 | `audit` | Append-only write/action event ledger for ACP surfaces | Out-of-band write capture, retention/redaction operations, compliance reporting |
-| `billing` | Account/product/price/subscription/usage/invoice/payment primitives | Product packaging, billing policy, reconciliation workflows, customer-facing finance UX |
+| `billing` | Global catalog/meter/entitlement/run definitions plus tenant subscription, balance, execution, and settlement records | Overage/tiering policy, reconciliation orchestration, customer-facing finance UX |
 | `channel_orchestration` | Intake/routing/throttle/blocklist/fallback controls and event timeline | Channel adapters, sender normalization, route/escalation policy, webhook/session handling |
 | `knowledge_pack` | Knowledge pack/version lifecycle and publication metadata | Retrieval/ranking/redaction policy, search projections, channel-specific answer contracts |
 | `ops_case` | Case lifecycle, assignment, escalation, and timeline primitives | Domain routing/ownership policy, case enrichment, external integration workflows |
 | `ops_governance` | Consent/delegation/policy/retention metadata and actions | Jurisdiction-specific rule engines, enforcement workers, legal/compliance operations |
-| `ops_metering` | Usage definitions, sessions, records, and rating-ready primitives | Identity resolution, pricing policy joins, replay/backfill/reconciliation operations |
+| `ops_metering` | Tenant usage policies, sessions, records, and rating-ready primitives using global Billing meters | Identity resolution, overage-policy joins, replay/backfill/reconciliation operations |
 | `ops_reporting` | Metric definitions, aggregation, report snapshots, publication lifecycle | KPI semantics, dashboards, consumer APIs, thresholding/escalation behavior |
 | `ops_sla` | Business-hour-aware clocks and breach markers | SLA target policy, escalation ownership, notification/queue workflows |
 | `ops_vpn` | Vendor registry/lifecycle and performance scorecard primitives | Vendor selection strategy, domain score models, procurement/execution integration |

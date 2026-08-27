@@ -1,4 +1,4 @@
-"""Provides a service contract for MeterDefinitionDE-related services."""
+"""Provides the deprecated meter compatibility service contract."""
 
 __all__ = ["IMeterDefinitionService"]
 
@@ -12,4 +12,4 @@ class IMeterDefinitionService(
     ICrudService[MeterDefinitionDE],
     ABC,
 ):
-    """A service contract for MeterDefinitionDE-related services."""
+    """A compatibility contract for tenant-projected meter reads."""

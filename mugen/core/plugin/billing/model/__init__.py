@@ -3,11 +3,21 @@
 __all__ = [
     "Account",
     "BillingRun",
+    "CurrencyDefinition",
+    "DiscountDefinition",
+    "InvoiceTemplate",
+    "MeterDefinition",
+    "PaymentTerm",
+    "PriceEntitlement",
+    "RunDefinition",
+    "TaxCode",
+    "TaxRate",
     "Product",
     "Price",
     "Subscription",
     "UsageEvent",
     "EntitlementBucket",
+    "EntitlementAdjustment",
     "UsageAllocation",
     "CreditNote",
     "Adjustment",
@@ -20,11 +30,25 @@ __all__ = [
 
 from mugen.core.plugin.billing.model.account import Account
 from mugen.core.plugin.billing.model.billing_run import BillingRun
+from mugen.core.plugin.billing.model.catalog import (
+    CurrencyDefinition,
+    DiscountDefinition,
+    InvoiceTemplate,
+    MeterDefinition,
+    PaymentTerm,
+    PriceEntitlement,
+    RunDefinition,
+    TaxCode,
+    TaxRate,
+)
 from mugen.core.plugin.billing.model.product import Product
 from mugen.core.plugin.billing.model.price import Price
 from mugen.core.plugin.billing.model.subscription import Subscription
 from mugen.core.plugin.billing.model.usage_event import UsageEvent
 from mugen.core.plugin.billing.model.entitlement_bucket import EntitlementBucket
+from mugen.core.plugin.billing.model.entitlement_adjustment import (
+    EntitlementAdjustment,
+)
 from mugen.core.plugin.billing.model.usage_allocation import UsageAllocation
 from mugen.core.plugin.billing.model.credit_note import CreditNote
 from mugen.core.plugin.billing.model.adjustment import Adjustment

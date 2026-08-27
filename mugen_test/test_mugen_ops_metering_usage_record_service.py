@@ -11,12 +11,12 @@ from unittest.mock import AsyncMock, Mock, patch
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from mugen.core.contract.gateway.storage.rdbms.types import RowVersionConflict
+from mugen.core.plugin.billing.domain import MeterDefinitionDE
 from mugen.core.plugin.ops_metering.api.validation import (
     UsageRecordRateValidation,
     UsageRecordVoidValidation,
 )
 from mugen.core.plugin.ops_metering.domain import (
-    MeterDefinitionDE,
     MeterPolicyDE,
     RatedUsageDE,
     UsageRecordDE,
@@ -78,11 +78,12 @@ def _meter(
     code: str = "ops.minutes",
     unit: str = "unit",
 ) -> MeterDefinitionDE:
+    _ = tenant_id
     return MeterDefinitionDE(
         id=meter_id or uuid.uuid4(),
-        tenant_id=tenant_id or uuid.uuid4(),
         code=code,
         unit=unit,
+        is_active=True,
     )
 
 
@@ -262,6 +263,22 @@ class TestMugenOpsMeteringUsageRecordService(unittest.IsolatedAsyncioTestCase):
             }
         )
         svc = UsageRecordService(table="ops_metering_usage_record", rsg=rsg)
+        svc._meter_definition_service.get = AsyncMock(
+            return_value=MeterDefinitionDE(id=uuid.uuid4(), is_active=False)
+        )  # pylint: disable=protected-access
+        with patch.object(usage_mod, "abort", side_effect=_abort_raiser):
+            with self.assertRaises(_AbortCalled) as raised:
+                await svc.create(
+                    {
+                        "tenant_id": tenant_id,
+                        "meter_definition_id": uuid.uuid4(),
+                        "measured_units": 1,
+                    }
+                )
+        self.assertEqual(raised.exception.code, 400)
+        svc._meter_definition_service.get = AsyncMock(
+            return_value=_meter()
+        )  # pylint: disable=protected-access
 
         svc.get = AsyncMock(return_value=existing)
         reused = await svc.create(
@@ -309,6 +326,9 @@ class TestMugenOpsMeteringUsageRecordService(unittest.IsolatedAsyncioTestCase):
             table="ops_metering_usage_record",
             rsg=rsg_conflict,
         )
+        svc_conflict._meter_definition_service.get = AsyncMock(
+            return_value=_meter()
+        )  # pylint: disable=protected-access
         svc_conflict.get = AsyncMock(side_effect=[None, existing])
         resolved = await svc_conflict.create(
             {
@@ -324,6 +344,9 @@ class TestMugenOpsMeteringUsageRecordService(unittest.IsolatedAsyncioTestCase):
             table="ops_metering_usage_record",
             rsg=rsg_conflict,
         )
+        svc_raises._meter_definition_service.get = AsyncMock(
+            return_value=_meter()
+        )  # pylint: disable=protected-access
         svc_raises.get = AsyncMock(side_effect=[None, None])
         with self.assertRaises(IntegrityError):
             await svc_raises.create(
@@ -339,6 +362,9 @@ class TestMugenOpsMeteringUsageRecordService(unittest.IsolatedAsyncioTestCase):
             table="ops_metering_usage_record",
             rsg=rsg_conflict,
         )
+        svc_raises_without_idempotency._meter_definition_service.get = AsyncMock(
+            return_value=_meter()
+        )  # pylint: disable=protected-access
         svc_raises_without_idempotency.get = AsyncMock(return_value=existing)
         with self.assertRaises(IntegrityError):
             await svc_raises_without_idempotency.create(
@@ -464,7 +490,9 @@ class TestMugenOpsMeteringUsageRecordService(unittest.IsolatedAsyncioTestCase):
             effective_from=now - timedelta(hours=1),
             effective_to=now + timedelta(hours=1),
         )
-        svc._meter_policy_service.list = AsyncMock(return_value=[future, expired, valid])
+        svc._meter_policy_service.list = AsyncMock(
+            return_value=[future, expired, valid]
+        )
         resolved = await svc._resolve_policy(
             tenant_id=tenant_id,
             record=_record(
@@ -532,7 +560,9 @@ class TestMugenOpsMeteringUsageRecordService(unittest.IsolatedAsyncioTestCase):
             code="ops.units",
             unit="unit",
         )
-        policy = _policy(tenant_id=tenant_id, meter_definition_id=record.meter_definition_id)
+        policy = _policy(
+            tenant_id=tenant_id, meter_definition_id=record.meter_definition_id
+        )
         now = datetime(2026, 2, 14, 20, 30, tzinfo=timezone.utc)
         external_ref = f"ops_metering:{tenant_id}:{record.id}"
 
@@ -947,7 +977,9 @@ class TestMugenOpsMeteringUsageRecordService(unittest.IsolatedAsyncioTestCase):
         with patch.object(usage_mod, "abort", side_effect=_abort_raiser):
             svc._get_for_action = AsyncMock(return_value=active_record)
             svc._resolve_rated_usage = AsyncMock(return_value=rated)
-            svc._rated_usage_service.update = AsyncMock(side_effect=SQLAlchemyError("boom"))
+            svc._rated_usage_service.update = AsyncMock(
+                side_effect=SQLAlchemyError("boom")
+            )
             with self.assertRaises(_AbortCalled) as ex:
                 await svc.action_void_record(
                     tenant_id=tenant_id,
@@ -959,7 +991,9 @@ class TestMugenOpsMeteringUsageRecordService(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ex.exception.code, 500)
 
             svc._rated_usage_service.update = AsyncMock()
-            svc._usage_event_service.update = AsyncMock(side_effect=SQLAlchemyError("boom"))
+            svc._usage_event_service.update = AsyncMock(
+                side_effect=SQLAlchemyError("boom")
+            )
             with self.assertRaises(_AbortCalled) as ex:
                 await svc.action_void_record(
                     tenant_id=tenant_id,
@@ -989,7 +1023,9 @@ class TestMugenOpsMeteringUsageRecordService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rated_changes["void_reason"], "note")
         event_changes = svc._usage_event_service.update.await_args.kwargs["changes"]
         self.assertEqual(event_changes["status"], "void")
-        record_changes = svc._update_record_with_row_version.await_args.kwargs["changes"]
+        record_changes = svc._update_record_with_row_version.await_args.kwargs[
+            "changes"
+        ]
         self.assertEqual(record_changes["status"], "void")
         self.assertEqual(record_changes["void_reason"], "note")
 

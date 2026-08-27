@@ -44,6 +44,17 @@ class InvoiceLine(ModelBase, TenantScopedMixin):
         index=True,
     )
 
+    tax_code_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        nullable=True,
+        index=True,
+    )
+    tax_rate_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        nullable=True,
+        index=True,
+    )
+
     description: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
@@ -102,6 +113,18 @@ class InvoiceLine(ModelBase, TenantScopedMixin):
             (f"{CORE_SCHEMA_TOKEN}.billing_price.id",),
             name="fk_billing_invoice_line__price",
             ondelete="SET NULL",
+        ),
+        ForeignKeyConstraint(
+            ("tax_code_id",),
+            (f"{CORE_SCHEMA_TOKEN}.billing_tax_code.id",),
+            name="fk_billing_invoice_line__tax_code",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("tax_rate_id",),
+            (f"{CORE_SCHEMA_TOKEN}.billing_tax_rate.id",),
+            name="fk_billing_invoice_line__tax_rate",
+            ondelete="RESTRICT",
         ),
         CheckConstraint(
             "quantity >= 0",

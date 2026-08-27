@@ -54,6 +54,12 @@ class Payment(ModelBase, TenantScopedMixin):
         index=True,
     )
 
+    currency_definition_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        nullable=False,
+        index=True,
+    )
+
     status: Mapped[str] = mapped_column(
         PGENUM(
             PaymentStatus,
@@ -126,15 +132,27 @@ class Payment(ModelBase, TenantScopedMixin):
     __table_args__ = (
         ForeignKeyConstraint(
             ("tenant_id", "account_id"),
-            (f"{CORE_SCHEMA_TOKEN}.billing_account.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_account.id"),
+            (
+                f"{CORE_SCHEMA_TOKEN}.billing_account.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.billing_account.id",
+            ),
             name="fkx_billing_payment__tenant_account",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
             ("tenant_id", "invoice_id"),
-            (f"{CORE_SCHEMA_TOKEN}.billing_invoice.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_invoice.id"),
+            (
+                f"{CORE_SCHEMA_TOKEN}.billing_invoice.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.billing_invoice.id",
+            ),
             name="fkx_billing_payment__tenant_invoice",
             ondelete="SET NULL",
+        ),
+        ForeignKeyConstraint(
+            ("currency_definition_id",),
+            (f"{CORE_SCHEMA_TOKEN}.billing_currency_definition.id",),
+            name="fk_billing_payment__currency_definition",
+            ondelete="RESTRICT",
         ),
         CheckConstraint(
             "length(btrim(currency)) = 3",

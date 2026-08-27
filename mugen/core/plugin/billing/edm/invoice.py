@@ -24,6 +24,16 @@ invoice_type = EdmType(
         "TenantId": EdmProperty("TenantId", TypeRef("Edm.Guid"), nullable=False),
         "AccountId": EdmProperty("AccountId", TypeRef("Edm.Guid"), nullable=False),
         "SubscriptionId": EdmProperty("SubscriptionId", TypeRef("Edm.Guid")),
+        "BillingRunId": EdmProperty("BillingRunId", TypeRef("Edm.Guid")),
+        "CurrencyDefinitionId": EdmProperty(
+            "CurrencyDefinitionId", TypeRef("Edm.Guid"), nullable=False
+        ),
+        "TaxCodeId": EdmProperty("TaxCodeId", TypeRef("Edm.Guid")),
+        "PaymentTermId": EdmProperty("PaymentTermId", TypeRef("Edm.Guid")),
+        "InvoiceTemplateId": EdmProperty("InvoiceTemplateId", TypeRef("Edm.Guid")),
+        "DiscountDefinitionId": EdmProperty(
+            "DiscountDefinitionId", TypeRef("Edm.Guid")
+        ),
         "Status": EdmProperty("Status", TypeRef("Edm.String"), nullable=False),
         "Number": EdmProperty("Number", TypeRef("Edm.String")),
         "Currency": EdmProperty("Currency", TypeRef("Edm.String"), nullable=False),
@@ -66,6 +76,34 @@ invoice_type = EdmType(
             "Subscription",
             target_type=TypeRef("BILLING.Subscription"),
             source_fk="SubscriptionId",
+        ),
+        "BillingRun": EdmNavigationProperty(
+            "BillingRun",
+            target_type=TypeRef("BILLING.BillingRun"),
+            source_fk="BillingRunId",
+        ),
+        "CurrencyDefinition": EdmNavigationProperty(
+            "CurrencyDefinition",
+            target_type=TypeRef("BILLING.CurrencyDefinition"),
+            source_fk="CurrencyDefinitionId",
+        ),
+        "TaxCode": EdmNavigationProperty(
+            "TaxCode", target_type=TypeRef("BILLING.TaxCode"), source_fk="TaxCodeId"
+        ),
+        "PaymentTerm": EdmNavigationProperty(
+            "PaymentTerm",
+            target_type=TypeRef("BILLING.PaymentTerm"),
+            source_fk="PaymentTermId",
+        ),
+        "InvoiceTemplate": EdmNavigationProperty(
+            "InvoiceTemplate",
+            target_type=TypeRef("BILLING.InvoiceTemplate"),
+            source_fk="InvoiceTemplateId",
+        ),
+        "DiscountDefinition": EdmNavigationProperty(
+            "DiscountDefinition",
+            target_type=TypeRef("BILLING.DiscountDefinition"),
+            source_fk="DiscountDefinitionId",
         ),
         "Lines": EdmNavigationProperty(
             "Lines",

@@ -16,6 +16,8 @@ class PriceDE(BaseDE, SoftDeleteDEMixin):
     """A domain entity for the billing Price DB model."""
 
     product_id: uuid.UUID | None = None
+    currency_definition_id: uuid.UUID | None = None
+    meter_definition_id: uuid.UUID | None = None
 
     code: str | None = None
     price_type: str | None = None  # one_time / recurring / metered
@@ -32,3 +34,5 @@ class PriceDE(BaseDE, SoftDeleteDEMixin):
     attributes: dict[str, Any] | None = None
 
     product: "ProductDE | None" = None  # type: ignore
+    currency_definition: "CurrencyDefinitionDE | None" = None  # type: ignore
+    meter_definition: "MeterDefinitionDE | None" = None  # type: ignore

@@ -25,6 +25,15 @@ entitlement_bucket_type = EdmType(
         "AccountId": EdmProperty("AccountId", TypeRef("Edm.Guid"), nullable=False),
         "SubscriptionId": EdmProperty("SubscriptionId", TypeRef("Edm.Guid")),
         "PriceId": EdmProperty("PriceId", TypeRef("Edm.Guid")),
+        "PriceEntitlementId": EdmProperty(
+            "PriceEntitlementId",
+            TypeRef("Edm.Guid"),
+        ),
+        "MeterDefinitionId": EdmProperty(
+            "MeterDefinitionId",
+            TypeRef("Edm.Guid"),
+        ),
+        "BillingRunId": EdmProperty("BillingRunId", TypeRef("Edm.Guid")),
         "MeterCode": EdmProperty("MeterCode", TypeRef("Edm.String"), nullable=False),
         "PeriodStart": EdmProperty(
             "PeriodStart",
@@ -49,6 +58,16 @@ entitlement_bucket_type = EdmType(
         "RolloverQuantity": EdmProperty(
             "RolloverQuantity",
             TypeRef("Edm.Int64"),
+            nullable=False,
+        ),
+        "AdjustmentQuantity": EdmProperty(
+            "AdjustmentQuantity",
+            TypeRef("Edm.Int64"),
+            nullable=False,
+        ),
+        "GenerationSource": EdmProperty(
+            "GenerationSource",
+            TypeRef("Edm.String"),
             nullable=False,
         ),
         "ExternalRef": EdmProperty("ExternalRef", TypeRef("Edm.String")),
@@ -79,6 +98,21 @@ entitlement_bucket_type = EdmType(
             "Price",
             target_type=TypeRef("BILLING.Price"),
             source_fk="PriceId",
+        ),
+        "PriceEntitlement": EdmNavigationProperty(
+            "PriceEntitlement",
+            target_type=TypeRef("BILLING.PriceEntitlement"),
+            source_fk="PriceEntitlementId",
+        ),
+        "MeterDefinition": EdmNavigationProperty(
+            "MeterDefinition",
+            target_type=TypeRef("BILLING.MeterDefinition"),
+            source_fk="MeterDefinitionId",
+        ),
+        "BillingRun": EdmNavigationProperty(
+            "BillingRun",
+            target_type=TypeRef("BILLING.BillingRun"),
+            source_fk="BillingRunId",
         ),
         "UsageAllocations": EdmNavigationProperty(
             "UsageAllocations",

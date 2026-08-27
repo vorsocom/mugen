@@ -49,6 +49,24 @@ class EntitlementBucket(ModelBase, TenantScopedMixin):
         index=True,
     )
 
+    price_entitlement_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        nullable=True,
+        index=True,
+    )
+
+    meter_definition_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        nullable=True,
+        index=True,
+    )
+
+    billing_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        nullable=True,
+        index=True,
+    )
+
     meter_code: Mapped[str] = mapped_column(
         CITEXT(64),
         nullable=False,
@@ -83,6 +101,18 @@ class EntitlementBucket(ModelBase, TenantScopedMixin):
         BigInteger,
         nullable=False,
         server_default=sa_text("0"),
+    )
+
+    adjustment_quantity: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        server_default=sa_text("0"),
+    )
+
+    generation_source: Mapped[str] = mapped_column(
+        CITEXT(64),
+        nullable=False,
+        server_default=sa_text("'legacy'"),
     )
 
     external_ref: Mapped[str | None] = mapped_column(
@@ -136,6 +166,27 @@ class EntitlementBucket(ModelBase, TenantScopedMixin):
             name="fk_billing_entitlement_bucket__price",
             ondelete="SET NULL",
         ),
+        ForeignKeyConstraint(
+            ("price_entitlement_id",),
+            (f"{CORE_SCHEMA_TOKEN}.billing_price_entitlement.id",),
+            name="fk_billing_entitlement_bucket__price_entitlement",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("meter_definition_id",),
+            (f"{CORE_SCHEMA_TOKEN}.billing_meter_definition.id",),
+            name="fk_billing_entitlement_bucket__meter_definition",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("tenant_id", "billing_run_id"),
+            (
+                f"{CORE_SCHEMA_TOKEN}.billing_run.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.billing_run.id",
+            ),
+            name="fkx_billing_entitlement_bucket__tenant_billing_run",
+            ondelete="SET NULL",
+        ),
         CheckConstraint(
             "length(btrim(meter_code)) > 0",
             name="ck_billing_entitlement_bucket__meter_code_nonempty",
@@ -157,8 +208,19 @@ class EntitlementBucket(ModelBase, TenantScopedMixin):
             name="ck_billing_entitlement_bucket__rollover_nonneg",
         ),
         CheckConstraint(
-            "consumed_quantity <= (included_quantity + rollover_quantity)",
+            "consumed_quantity <= "
+            "(included_quantity + rollover_quantity + adjustment_quantity)",
             name="ck_billing_entitlement_bucket__consumed_within_capacity",
+        ),
+        CheckConstraint(
+            "included_quantity + rollover_quantity + adjustment_quantity >= 0",
+            name="ck_billing_entitlement_bucket__capacity_nonnegative",
+        ),
+        CheckConstraint(
+            "generation_source IN "
+            "('legacy', 'subscription_activation', 'period_advance', "
+            "'billing_run', 'reconciliation')",
+            name="ck_billing_entitlement_bucket__generation_source",
         ),
         CheckConstraint(
             "external_ref IS NULL OR length(btrim(external_ref)) > 0",
@@ -189,6 +251,19 @@ class EntitlementBucket(ModelBase, TenantScopedMixin):
             "external_ref",
             unique=True,
             postgresql_where=sa_text("external_ref IS NOT NULL"),
+        ),
+        Index(
+            "ux_billing_entitlement_bucket__generated_period",
+            "tenant_id",
+            "account_id",
+            "subscription_id",
+            "price_entitlement_id",
+            "period_start",
+            "period_end",
+            unique=True,
+            postgresql_where=sa_text(
+                "subscription_id IS NOT NULL AND price_entitlement_id IS NOT NULL"
+            ),
         ),
         {"schema": CORE_SCHEMA_TOKEN},
     )

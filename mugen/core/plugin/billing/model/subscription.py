@@ -58,6 +58,20 @@ class Subscription(ModelBase, TenantScopedMixin, SoftDeleteMixin):
         index=True,
     )
 
+    run_definition_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        nullable=True,
+        index=True,
+    )
+
+    tax_code_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    payment_term_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    invoice_template_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    discount_definition_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        nullable=True,
+    )
+
     status: Mapped[str] = mapped_column(
         PGENUM(
             SubscriptionStatus,
@@ -154,6 +168,44 @@ class Subscription(ModelBase, TenantScopedMixin, SoftDeleteMixin):
             (f"{CORE_SCHEMA_TOKEN}.billing_price.id",),
             name="fk_billing_subscription__price",
             ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("run_definition_id",),
+            (f"{CORE_SCHEMA_TOKEN}.billing_run_definition.id",),
+            name="fk_billing_subscription__run_definition",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("tax_code_id",),
+            (f"{CORE_SCHEMA_TOKEN}.billing_tax_code.id",),
+            name="fk_billing_subscription__tax_code",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("payment_term_id",),
+            (f"{CORE_SCHEMA_TOKEN}.billing_payment_term.id",),
+            name="fk_billing_subscription__payment_term",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("invoice_template_id",),
+            (f"{CORE_SCHEMA_TOKEN}.billing_invoice_template.id",),
+            name="fk_billing_subscription__invoice_template",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("discount_definition_id",),
+            (f"{CORE_SCHEMA_TOKEN}.billing_discount_definition.id",),
+            name="fk_billing_subscription__discount_definition",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "(current_period_start IS NULL) = (current_period_end IS NULL)",
+            name="ck_billing_subscription__period_pair",
+        ),
+        CheckConstraint(
+            "current_period_end IS NULL OR current_period_end > current_period_start",
+            name="ck_billing_subscription__period_bounds",
         ),
         CheckConstraint(
             "external_ref IS NULL OR length(btrim(external_ref)) > 0",

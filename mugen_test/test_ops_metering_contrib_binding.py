@@ -55,20 +55,21 @@ class TestOpsMeteringContribBinding(unittest.TestCase):
         AdminRuntimeBinder(registry=registry, rsg=fake_rsg).bind_all()
         registry.freeze()
 
-        meter_defs = registry.get_resource("OpsMeterDefinitions")
+        definitions = registry.get_resource("OpsMeterDefinitions")
         policies = registry.get_resource("OpsMeterPolicies")
         sessions = registry.get_resource("OpsUsageSessions")
         records = registry.get_resource("OpsUsageRecords")
         rated = registry.get_resource("OpsRatedUsages")
 
-        self.assertIn("ops_metering_meter_definition", fake_rsg.tables)
+        self.assertNotIn("ops_metering_meter_definition", fake_rsg.tables)
+        self.assertIn("ops_metering_meter_definition_compat", fake_rsg.tables)
         self.assertIn("ops_metering_meter_policy", fake_rsg.tables)
         self.assertIn("ops_metering_usage_session", fake_rsg.tables)
         self.assertIn("ops_metering_usage_record", fake_rsg.tables)
         self.assertIn("ops_metering_rated_usage", fake_rsg.tables)
 
         self.assertIsInstance(
-            registry.get_edm_service(meter_defs.service_key),
+            registry.get_edm_service(definitions.service_key),
             MeterDefinitionService,
         )
         self.assertIsInstance(
@@ -95,8 +96,16 @@ class TestOpsMeteringContribBinding(unittest.TestCase):
         self.assertIn("rate_record", records.capabilities.actions)
         self.assertIn("void_record", records.capabilities.actions)
 
-        meter_type = registry.schema.get_type("OPSMETERING.MeterDefinition")
-        self.assertEqual(meter_type.entity_set_name, "OpsMeterDefinitions")
+        self.assertTrue(definitions.capabilities.allow_read)
+        self.assertFalse(definitions.capabilities.allow_create)
+        self.assertFalse(definitions.capabilities.allow_update)
+        self.assertFalse(definitions.capabilities.allow_delete)
+        self.assertFalse(definitions.capabilities.allow_manage)
+
+        definition_type = registry.schema.get_type("OPSMETERING.MeterDefinition")
+        self.assertEqual(definition_type.entity_set_name, "OpsMeterDefinitions")
+        self.assertIn("IsDeprecated", definition_type.properties)
+        self.assertIn("SuccessorEntitySet", definition_type.properties)
 
         rated_type = registry.schema.get_type("OPSMETERING.RatedUsage")
         self.assertEqual(rated_type.entity_set_name, "OpsRatedUsages")

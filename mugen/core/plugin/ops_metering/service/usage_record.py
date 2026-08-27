@@ -19,6 +19,8 @@ from mugen.core.contract.gateway.storage.rdbms.types import (
     OrderBy,
     RowVersionConflict,
 )
+from mugen.core.plugin.billing.domain import MeterDefinitionDE
+from mugen.core.plugin.billing.service.catalog import MeterDefinitionService
 from mugen.core.plugin.billing.service.usage_event import UsageEventService
 from mugen.core.plugin.ops_metering.api.validation import (
     UsageRecordRateValidation,
@@ -28,13 +30,9 @@ from mugen.core.plugin.ops_metering.contract.service.usage_record import (
     IUsageRecordService,
 )
 from mugen.core.plugin.ops_metering.domain import (
-    MeterDefinitionDE,
     MeterPolicyDE,
     RatedUsageDE,
     UsageRecordDE,
-)
-from mugen.core.plugin.ops_metering.service.meter_definition import (
-    MeterDefinitionService,
 )
 from mugen.core.plugin.ops_metering.service.meter_policy import MeterPolicyService
 from mugen.core.plugin.ops_metering.service.rated_usage import RatedUsageService
@@ -46,7 +44,7 @@ class UsageRecordService(
 ):
     """A CRUD service for usage records, rating, and billing usage handoff."""
 
-    _METER_DEFINITION_TABLE = "ops_metering_meter_definition"
+    _METER_DEFINITION_TABLE = "billing_meter_definition"
     _METER_POLICY_TABLE = "ops_metering_meter_policy"
     _RATED_USAGE_TABLE = "ops_metering_rated_usage"
     _BILLING_USAGE_EVENT_TABLE = "billing_usage_event"
@@ -115,6 +113,12 @@ class UsageRecordService(
             )
             if existing is not None:
                 return existing
+
+        meter = await self._meter_definition_service.get(
+            {"id": create_values["meter_definition_id"]}
+        )
+        if meter is None or not meter.is_active:
+            abort(400, "MeterDefinitionId must reference an active global meter.")
 
         try:
             return await super().create(create_values)
@@ -339,6 +343,7 @@ class UsageRecordService(
             "account_id": record.account_id,
             "subscription_id": record.subscription_id,
             "price_id": record.price_id,
+            "meter_definition_id": record.meter_definition_id,
             "meter_code": meter.code,
             "unit": meter.unit,
             "measured_quantity": measured_quantity,
@@ -448,10 +453,7 @@ class UsageRecordService(
 
         now = self._now_utc()
         meter = await self._meter_definition_service.get(
-            {
-                "tenant_id": tenant_id,
-                "id": current.meter_definition_id,
-            }
+            {"id": current.meter_definition_id}
         )
         if meter is None:
             abort(409, "MeterDefinition does not exist for this record.")

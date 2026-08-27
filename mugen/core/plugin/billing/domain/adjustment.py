@@ -19,6 +19,7 @@ class AdjustmentDE(BaseDE, TenantScopedDEMixin):
     account_id: uuid.UUID | None = None
     invoice_id: uuid.UUID | None = None
     credit_note_id: uuid.UUID | None = None
+    currency_definition_id: uuid.UUID | None = None
 
     kind: str | None = None  # credit / debit
     currency: str | None = None

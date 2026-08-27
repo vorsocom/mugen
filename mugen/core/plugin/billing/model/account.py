@@ -3,11 +3,14 @@
 __all__ = ["Account"]
 
 from typing import TYPE_CHECKING, List
+import uuid
 
 from sqlalchemy import (
     CheckConstraint,
+    ForeignKey,
     Index,
     UniqueConstraint,
+    Uuid,
 )
 from sqlalchemy.dialects.postgresql import CITEXT, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -26,6 +29,44 @@ class Account(ModelBase, TenantScopedMixin, SoftDeleteMixin):
     """An ORM for billing accounts."""
 
     __tablename__ = "billing_account"
+
+    currency_definition_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(
+            f"{CORE_SCHEMA_TOKEN}.billing_currency_definition.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+    )
+    tax_code_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(f"{CORE_SCHEMA_TOKEN}.billing_tax_code.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    payment_term_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(
+            f"{CORE_SCHEMA_TOKEN}.billing_payment_term.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+    )
+    invoice_template_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(
+            f"{CORE_SCHEMA_TOKEN}.billing_invoice_template.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+    )
+    discount_definition_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(
+            f"{CORE_SCHEMA_TOKEN}.billing_discount_definition.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+    )
 
     code: Mapped[str] = mapped_column(
         CITEXT(128),

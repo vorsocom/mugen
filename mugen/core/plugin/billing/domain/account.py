@@ -4,6 +4,7 @@ __all__ = ["AccountDE"]
 
 from dataclasses import dataclass
 from typing import Any, Sequence
+import uuid
 
 from mugen.core.plugin.acp.domain.base import BaseDE
 from mugen.core.plugin.acp.domain.mixin.soft_delete import SoftDeleteDEMixin
@@ -30,3 +31,8 @@ class AccountDE(BaseDE, TenantScopedDEMixin, SoftDeleteDEMixin):
     usage_events: Sequence["UsageEventDE"] | None = None  # type: ignore
     ledger_entries: Sequence["LedgerEntryDE"] | None = None  # type: ignore
     entitlement_buckets: Sequence["EntitlementBucketDE"] | None = None  # type: ignore
+    currency_definition_id: uuid.UUID | None = None
+    tax_code_id: uuid.UUID | None = None
+    payment_term_id: uuid.UUID | None = None
+    invoice_template_id: uuid.UUID | None = None
+    discount_definition_id: uuid.UUID | None = None
