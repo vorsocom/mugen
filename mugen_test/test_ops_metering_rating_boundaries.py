@@ -92,7 +92,11 @@ class TestOpsMeteringRatingBoundaries(unittest.IsolatedAsyncioTestCase):
 
         billing_payload = svc._usage_event_service.create.await_args.args[0]
         self.assertEqual(billing_payload["quantity"], 12)
-        self.assertEqual(billing_payload["meter_code"], "ops.units")
+        self.assertEqual(
+            billing_payload["meter_definition_id"],
+            meter_definition_id,
+        )
+        self.assertNotIn("meter_code", billing_payload)
 
     async def test_rate_record_respects_billable_window(self) -> None:
         tenant_id = uuid.uuid4()
