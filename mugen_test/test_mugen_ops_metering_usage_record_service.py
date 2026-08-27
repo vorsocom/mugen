@@ -630,7 +630,6 @@ class TestMugenOpsMeteringUsageRecordService(unittest.IsolatedAsyncioTestCase):
             await svc._ensure_billing_usage_event(
                 tenant_id=tenant_id,
                 record=record,
-                meter=meter,
                 rated=rated_with_event,
                 billable_quantity=0,
                 occurred_at=now,
@@ -641,7 +640,6 @@ class TestMugenOpsMeteringUsageRecordService(unittest.IsolatedAsyncioTestCase):
             await svc._ensure_billing_usage_event(
                 tenant_id=tenant_id,
                 record=record,
-                meter=meter,
                 rated=rated_with_event,
                 billable_quantity=3,
                 occurred_at=now,
@@ -662,7 +660,6 @@ class TestMugenOpsMeteringUsageRecordService(unittest.IsolatedAsyncioTestCase):
         event_id = await svc._ensure_billing_usage_event(
             tenant_id=tenant_id,
             record=record,
-            meter=meter,
             rated=rated_no_event,
             billable_quantity=3,
             occurred_at=now,
@@ -678,13 +675,18 @@ class TestMugenOpsMeteringUsageRecordService(unittest.IsolatedAsyncioTestCase):
         event_id = await svc._ensure_billing_usage_event(
             tenant_id=tenant_id,
             record=record,
-            meter=meter,
             rated=rated_no_event,
             billable_quantity=3,
             occurred_at=now,
             billing_external_ref=external_ref,
         )
         self.assertEqual(event_id, created_event_id)
+        created_payload = svc._usage_event_service.create.await_args.args[0]
+        self.assertEqual(
+            created_payload["meter_definition_id"],
+            record.meter_definition_id,
+        )
+        self.assertNotIn("meter_code", created_payload)
 
         svc._usage_event_service.get = AsyncMock(
             side_effect=[None, SimpleNamespace(id=existing_event_id)]
@@ -695,7 +697,6 @@ class TestMugenOpsMeteringUsageRecordService(unittest.IsolatedAsyncioTestCase):
         event_id = await svc._ensure_billing_usage_event(
             tenant_id=tenant_id,
             record=record,
-            meter=meter,
             rated=rated_no_event,
             billable_quantity=3,
             occurred_at=now,
@@ -711,7 +712,6 @@ class TestMugenOpsMeteringUsageRecordService(unittest.IsolatedAsyncioTestCase):
             await svc._ensure_billing_usage_event(
                 tenant_id=tenant_id,
                 record=record,
-                meter=meter,
                 rated=rated_no_event,
                 billable_quantity=3,
                 occurred_at=now,
@@ -727,7 +727,6 @@ class TestMugenOpsMeteringUsageRecordService(unittest.IsolatedAsyncioTestCase):
                 await svc._ensure_billing_usage_event(
                     tenant_id=tenant_id,
                     record=record,
-                    meter=meter,
                     rated=rated_no_event,
                     billable_quantity=3,
                     occurred_at=now,
