@@ -1,4 +1,4 @@
-"""Provides a CRUD service for meter definitions."""
+"""Provides read access to deprecated tenant meter compatibility records."""
 
 __all__ = ["MeterDefinitionService"]
 
@@ -14,7 +14,7 @@ class MeterDefinitionService(  # pylint: disable=too-few-public-methods
     IRelationalService[MeterDefinitionDE],
     IMeterDefinitionService,
 ):
-    """A CRUD service for metering definition records."""
+    """A read-only-bound service for canonical meter projections."""
 
     def __init__(self, table: str, rsg: IRelationalStorageGateway, **kwargs):
         super().__init__(

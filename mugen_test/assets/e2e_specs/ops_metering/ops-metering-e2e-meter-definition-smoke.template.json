@@ -11,7 +11,8 @@
     "password": "aDmin,123"
   },
   "tenant_id": null,
-  "entity_set": "OpsMeterDefinitions",
+  "scope": "global",
+  "entity_set": "BillingMeterDefinitions",
   "create_payload": {
     "Code": "__METER_CODE__",
     "Unit": "minute",
@@ -26,6 +27,7 @@
   "actions": [],
   "assertions": {
     "final_status": null,
+    "absent_fields": ["TenantId", "Tenant"],
     "event_entity_set": "OpsUsageRecords",
     "event_entity_id_field": "MeterDefinitionId",
     "event_type_field": "Status",
@@ -35,6 +37,7 @@
     {
       "name": "usage_record_missing_measure",
       "entity_set": "OpsUsageRecords",
+      "scope": "tenant",
       "expect_code": 400,
       "payload": {
         "MeterDefinitionId": "__ENTITY_ID__",
@@ -48,6 +51,7 @@
     {
       "name": "meter_policy_for_definition",
       "entity_set": "OpsMeterPolicies",
+      "scope": "tenant",
       "expect_code": 201,
       "payload": {
         "MeterDefinitionId": "__ENTITY_ID__",
@@ -58,6 +62,7 @@
     {
       "name": "usage_session_for_definition",
       "entity_set": "OpsUsageSessions",
+      "scope": "tenant",
       "expect_code": 201,
       "payload": {
         "MeterDefinitionId": "__ENTITY_ID__",

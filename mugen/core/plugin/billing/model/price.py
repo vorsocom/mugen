@@ -55,6 +55,26 @@ class Price(ModelBase, SoftDeleteMixin):
         index=True,
     )
 
+    currency_definition_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey(
+            f"{CORE_SCHEMA_TOKEN}.billing_currency_definition.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    meter_definition_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(
+            f"{CORE_SCHEMA_TOKEN}.billing_meter_definition.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+        index=True,
+    )
+
     code: Mapped[str] = mapped_column(
         CITEXT(128),
         nullable=False,
@@ -159,15 +179,17 @@ class Price(ModelBase, SoftDeleteMixin):
             name="ck_billing_price__meter_code_nonempty_if_set",
         ),
         CheckConstraint(
-            "(meter_code IS NULL) = (usage_unit IS NULL)",
-            name="ck_billing_price__meter_pair_complete",
+            "(meter_definition_id IS NULL) = (meter_code IS NULL) AND "
+            "(meter_definition_id IS NULL) = (usage_unit IS NULL)",
+            name="ck_billing_price__meter_snapshot_complete",
         ),
         CheckConstraint(
-            (
-                "price_type <> 'metered' OR "
-                "(meter_code IS NOT NULL AND usage_unit IS NOT NULL)"
-            ),
-            name="ck_billing_price__metered_pair_required",
+            ("price_type <> 'metered' OR " "meter_definition_id IS NOT NULL"),
+            name="ck_billing_price__metered_definition_required",
+        ),
+        CheckConstraint(
+            "price_type = 'metered' OR meter_definition_id IS NULL",
+            name="ck_billing_price__unmetered_definition_omitted",
         ),
         CheckConstraint(
             "NOT (deleted_at IS NOT NULL AND deleted_by_user_id IS NULL)",

@@ -247,6 +247,30 @@ admin_login="$(login_user "$username" "$password" "$tmp_dir/login_admin.json")"
 admin_token="${admin_login%%|*}"
 admin_user_id="${admin_login##*|}"
 admin_auth_header="Authorization: Bearer $admin_token"
+usd_currency_id="e5855e26-4070-517a-9291-f6ae40dfbf10"
+
+expect_code \
+  "GET USD CURRENCY" \
+  200 \
+  "$tmp_dir/usd_currency.json" \
+  -H "$admin_auth_header" \
+  "$base_url/BillingCurrencyDefinitions/$usd_currency_id"
+usd_currency_rv="$(jq -r '.RowVersion // empty' "$tmp_dir/usd_currency.json")"
+if [[ -z "$usd_currency_rv" ]]; then
+  echo "ERROR: USD Currency Definition omitted RowVersion." >&2
+  exit 1
+fi
+activate_currency_payload="$(jq -cn \
+  --argjson row_version "$usd_currency_rv" \
+  '{RowVersion:$row_version}')"
+expect_code \
+  "ACTIVATE USD CURRENCY" \
+  204 \
+  "$tmp_dir/activate_usd_currency.json" \
+  -H "$admin_auth_header" \
+  -H "Content-Type: application/json" \
+  -X POST "$base_url/BillingCurrencyDefinitions/$usd_currency_id/\$action/activate" \
+  -d "$activate_currency_payload"
 
 expect_code \
   "RUNTIME EXTENSIONS ADMIN" \
@@ -325,11 +349,12 @@ fi
 price_payload="$(jq -cn \
   --arg product_id "$product_id" \
   --arg code "$price_code" \
+  --arg currency_definition_id "$usd_currency_id" \
   '{
     ProductId:$product_id,
     Code:$code,
     PriceType:"one_time",
-    Currency:"USD",
+    CurrencyDefinitionId:$currency_definition_id,
     UnitAmount:2500
   }')"
 expect_code \

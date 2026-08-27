@@ -1,0 +1,18 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "admin",
+    "password": "aDmin,123"
+  },
+  "catalog": {
+    "code_prefix": "__BILLING_PRODUCT_CODE__",
+    "meter_code": "__METER_CODE__",
+    "currency_definition_id": "e5855e26-4070-517a-9291-f6ae40dfbf10"
+  }
+}

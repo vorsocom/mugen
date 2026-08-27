@@ -19,6 +19,7 @@ class UsageEventDE(BaseDE, TenantScopedDEMixin):
     account_id: uuid.UUID | None = None
     subscription_id: uuid.UUID | None = None
     price_id: uuid.UUID | None = None
+    meter_definition_id: uuid.UUID | None = None
     meter_code: str | None = None
 
     occurred_at: datetime | None = None

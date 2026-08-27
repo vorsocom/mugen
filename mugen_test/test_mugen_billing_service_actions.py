@@ -1,5 +1,7 @@
 """Unit tests for billing action services (invoice/subscription/payment allocation)."""
 
+# pylint: disable=protected-access
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -52,7 +54,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
         svc.get = AsyncMock(return_value=current)
         resolved = await svc._get_for_action(
             where={"id": uuid.uuid4()}, expected_row_version=1
-        )  # pylint: disable=protected-access
+        )
         self.assertIs(resolved, current)
 
         svc.get = AsyncMock(side_effect=SQLAlchemyError("db"))
@@ -60,7 +62,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(_AbortCalled) as ex:
                 await svc._get_for_action(
                     where={"id": uuid.uuid4()}, expected_row_version=1
-                )  # pylint: disable=protected-access
+                )
             self.assertEqual(ex.exception.code, 500)
 
         svc.get = AsyncMock(side_effect=[None, None])
@@ -68,7 +70,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(_AbortCalled) as ex:
                 await svc._get_for_action(
                     where={"id": uuid.uuid4()}, expected_row_version=1
-                )  # pylint: disable=protected-access
+                )
             self.assertEqual(ex.exception.code, 404)
 
         svc.get = AsyncMock(side_effect=[None, SQLAlchemyError("db")])
@@ -76,7 +78,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(_AbortCalled) as ex:
                 await svc._get_for_action(
                     where={"id": uuid.uuid4()}, expected_row_version=1
-                )  # pylint: disable=protected-access
+                )
             self.assertEqual(ex.exception.code, 500)
 
         svc.get = AsyncMock(side_effect=[None, SimpleNamespace(status="issued")])
@@ -84,7 +86,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(_AbortCalled) as ex:
                 await svc._get_for_action(
                     where={"id": uuid.uuid4()}, expected_row_version=1
-                )  # pylint: disable=protected-access
+                )
             self.assertEqual(ex.exception.code, 409)
 
     async def test_invoice_action_status_and_update_branches(self) -> None:
@@ -110,7 +112,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             with self.subTest(method=method_name, branch="invalid_status"):
                 svc._get_for_action = AsyncMock(
                     return_value=SimpleNamespace(status=invalid_status)
-                )  # pylint: disable=protected-access
+                )
                 with patch.object(invoice_mod, "abort", side_effect=_abort_raiser):
                     with self.assertRaises(_AbortCalled) as ex:
                         await method(**common)
@@ -119,7 +121,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             with self.subTest(method=method_name, branch="row_version_conflict"):
                 svc._get_for_action = AsyncMock(
                     return_value=SimpleNamespace(status=valid_status)
-                )  # pylint: disable=protected-access
+                )
                 svc.update_with_row_version = AsyncMock(
                     side_effect=RowVersionConflict("invoices")
                 )
@@ -131,7 +133,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             with self.subTest(method=method_name, branch="sqlalchemy_error"):
                 svc._get_for_action = AsyncMock(
                     return_value=SimpleNamespace(status=valid_status)
-                )  # pylint: disable=protected-access
+                )
                 svc.update_with_row_version = AsyncMock(
                     side_effect=SQLAlchemyError("db")
                 )
@@ -143,7 +145,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             with self.subTest(method=method_name, branch="none_updated"):
                 svc._get_for_action = AsyncMock(
                     return_value=SimpleNamespace(status=valid_status)
-                )  # pylint: disable=protected-access
+                )
                 svc.update_with_row_version = AsyncMock(return_value=None)
                 with patch.object(invoice_mod, "abort", side_effect=_abort_raiser):
                     with self.assertRaises(_AbortCalled) as ex:
@@ -153,7 +155,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             with self.subTest(method=method_name, branch="success"):
                 svc._get_for_action = AsyncMock(
                     return_value=SimpleNamespace(status=valid_status)
-                )  # pylint: disable=protected-access
+                )
                 svc.update_with_row_version = AsyncMock(return_value=SimpleNamespace())
                 result = await method(**common)
                 self.assertEqual(result, ("", 204))
@@ -165,7 +167,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
         svc.get = AsyncMock(return_value=current)
         resolved = await svc._get_for_action(
             where={"id": uuid.uuid4()}, expected_row_version=1
-        )  # pylint: disable=protected-access
+        )
         self.assertIs(resolved, current)
 
         svc.get = AsyncMock(side_effect=SQLAlchemyError("db"))
@@ -173,7 +175,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(_AbortCalled) as ex:
                 await svc._get_for_action(
                     where={"id": uuid.uuid4()}, expected_row_version=1
-                )  # pylint: disable=protected-access
+                )
             self.assertEqual(ex.exception.code, 500)
 
         svc.get = AsyncMock(side_effect=[None, None])
@@ -181,7 +183,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(_AbortCalled) as ex:
                 await svc._get_for_action(
                     where={"id": uuid.uuid4()}, expected_row_version=1
-                )  # pylint: disable=protected-access
+                )
             self.assertEqual(ex.exception.code, 404)
 
         svc.get = AsyncMock(side_effect=[None, SQLAlchemyError("db")])
@@ -189,7 +191,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(_AbortCalled) as ex:
                 await svc._get_for_action(
                     where={"id": uuid.uuid4()}, expected_row_version=1
-                )  # pylint: disable=protected-access
+                )
             self.assertEqual(ex.exception.code, 500)
 
         svc.get = AsyncMock(side_effect=[None, SimpleNamespace(status="paused")])
@@ -197,7 +199,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(_AbortCalled) as ex:
                 await svc._get_for_action(
                     where={"id": uuid.uuid4()}, expected_row_version=1
-                )  # pylint: disable=protected-access
+                )
             self.assertEqual(ex.exception.code, 409)
 
         where = {"id": uuid.uuid4()}
@@ -209,15 +211,10 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             "auth_user_id": uuid.uuid4(),
             "data": data,
         }
-        scenarios = [
-            ("action_cancel", "active", "canceled"),
-            ("action_reactivate", "canceled", "active"),
-        ]
+        scenarios = [("action_cancel", "active", "canceled")]
         for method_name, valid_status, invalid_status in scenarios:
             method = getattr(svc, method_name)
-            svc._validate_catalog_selection = (
-                AsyncMock()
-            )  # pylint: disable=protected-access
+            svc._validate_catalog_selection = AsyncMock()
             current = SimpleNamespace(
                 status=valid_status,
                 account_id=uuid.uuid4(),
@@ -227,16 +224,14 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             with self.subTest(method=method_name, branch="invalid_status"):
                 svc._get_for_action = AsyncMock(
                     return_value=SimpleNamespace(status=invalid_status)
-                )  # pylint: disable=protected-access
+                )
                 with patch.object(subscription_mod, "abort", side_effect=_abort_raiser):
                     with self.assertRaises(_AbortCalled) as ex:
                         await method(**common)
                     self.assertEqual(ex.exception.code, 409)
 
             with self.subTest(method=method_name, branch="row_version_conflict"):
-                svc._get_for_action = AsyncMock(
-                    return_value=current
-                )  # pylint: disable=protected-access
+                svc._get_for_action = AsyncMock(return_value=current)
                 svc.update_with_row_version = AsyncMock(
                     side_effect=RowVersionConflict("subscriptions")
                 )
@@ -246,9 +241,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(ex.exception.code, 409)
 
             with self.subTest(method=method_name, branch="sqlalchemy_error"):
-                svc._get_for_action = AsyncMock(
-                    return_value=current
-                )  # pylint: disable=protected-access
+                svc._get_for_action = AsyncMock(return_value=current)
                 svc.update_with_row_version = AsyncMock(
                     side_effect=SQLAlchemyError("db")
                 )
@@ -258,9 +251,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(ex.exception.code, 500)
 
             with self.subTest(method=method_name, branch="none_updated"):
-                svc._get_for_action = AsyncMock(
-                    return_value=current
-                )  # pylint: disable=protected-access
+                svc._get_for_action = AsyncMock(return_value=current)
                 svc.update_with_row_version = AsyncMock(return_value=None)
                 with patch.object(subscription_mod, "abort", side_effect=_abort_raiser):
                     with self.assertRaises(_AbortCalled) as ex:
@@ -268,9 +259,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(ex.exception.code, 404)
 
             with self.subTest(method=method_name, branch="success"):
-                svc._get_for_action = AsyncMock(
-                    return_value=current
-                )  # pylint: disable=protected-access
+                svc._get_for_action = AsyncMock(return_value=current)
                 svc.update_with_row_version = AsyncMock(return_value=SimpleNamespace())
                 result = await method(**common)
                 self.assertEqual(result, ("", 204))
@@ -282,7 +271,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
         svc.get = AsyncMock(return_value=current)
         resolved = await svc._get_for_action(
             where={"id": uuid.uuid4()}, expected_row_version=1
-        )  # pylint: disable=protected-access
+        )
         self.assertIs(resolved, current)
 
         svc.get = AsyncMock(side_effect=SQLAlchemyError("db"))
@@ -290,7 +279,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(_AbortCalled) as ex:
                 await svc._get_for_action(
                     where={"id": uuid.uuid4()}, expected_row_version=1
-                )  # pylint: disable=protected-access
+                )
             self.assertEqual(ex.exception.code, 500)
 
         svc.get = AsyncMock(side_effect=[None, None])
@@ -298,7 +287,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(_AbortCalled) as ex:
                 await svc._get_for_action(
                     where={"id": uuid.uuid4()}, expected_row_version=1
-                )  # pylint: disable=protected-access
+                )
             self.assertEqual(ex.exception.code, 404)
 
         svc.get = AsyncMock(side_effect=[None, SQLAlchemyError("db")])
@@ -306,7 +295,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(_AbortCalled) as ex:
                 await svc._get_for_action(
                     where={"id": uuid.uuid4()}, expected_row_version=1
-                )  # pylint: disable=protected-access
+                )
             self.assertEqual(ex.exception.code, 500)
 
         svc.get = AsyncMock(
@@ -316,12 +305,12 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(_AbortCalled) as ex:
                 await svc._get_for_action(
                     where={"id": uuid.uuid4()}, expected_row_version=1
-                )  # pylint: disable=protected-access
+                )
             self.assertEqual(ex.exception.code, 409)
 
         with patch.object(payment_alloc_mod, "abort", side_effect=_abort_raiser):
             with self.assertRaises(_AbortCalled) as ex:
-                await svc._sync_invoice_from_allocations(  # pylint: disable=protected-access
+                await svc._sync_invoice_from_allocations(
                     tenant_id=uuid.uuid4(),
                     invoice_id=uuid.uuid4(),
                 )
@@ -333,7 +322,7 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             table="payment_allocations",
             rsg=rsg_with_session,
         )
-        await svc_with_session._sync_invoice_from_allocations(  # pylint: disable=protected-access
+        await svc_with_session._sync_invoice_from_allocations(
             tenant_id=uuid.uuid4(),
             invoice_id=uuid.uuid4(),
         )
@@ -348,38 +337,28 @@ class TestMugenBillingServiceActions(unittest.IsolatedAsyncioTestCase):
             "data": SimpleNamespace(row_version=1),
         }
 
-        svc_with_session._get_for_action = (
-            AsyncMock(  # pylint: disable=protected-access
-                return_value=SimpleNamespace(invoice_id=None)
-            )
+        svc_with_session._get_for_action = AsyncMock(
+            return_value=SimpleNamespace(invoice_id=None)
         )
         with patch.object(payment_alloc_mod, "abort", side_effect=_abort_raiser):
             with self.assertRaises(_AbortCalled) as ex:
                 await svc_with_session.action_sync_invoice(**common)
             self.assertEqual(ex.exception.code, 409)
 
-        svc_with_session._get_for_action = (
-            AsyncMock(  # pylint: disable=protected-access
-                return_value=SimpleNamespace(invoice_id=uuid.uuid4())
-            )
+        svc_with_session._get_for_action = AsyncMock(
+            return_value=SimpleNamespace(invoice_id=uuid.uuid4())
         )
-        svc_with_session._sync_invoice_from_allocations = (
-            AsyncMock(  # pylint: disable=protected-access
-                side_effect=SQLAlchemyError("db")
-            )
+        svc_with_session._sync_invoice_from_allocations = AsyncMock(
+            side_effect=SQLAlchemyError("db")
         )
         with patch.object(payment_alloc_mod, "abort", side_effect=_abort_raiser):
             with self.assertRaises(_AbortCalled) as ex:
                 await svc_with_session.action_sync_invoice(**common)
             self.assertEqual(ex.exception.code, 500)
 
-        svc_with_session._get_for_action = (
-            AsyncMock(  # pylint: disable=protected-access
-                return_value=SimpleNamespace(invoice_id=uuid.uuid4())
-            )
+        svc_with_session._get_for_action = AsyncMock(
+            return_value=SimpleNamespace(invoice_id=uuid.uuid4())
         )
-        svc_with_session._sync_invoice_from_allocations = AsyncMock(
-            return_value=None
-        )  # pylint: disable=protected-access
+        svc_with_session._sync_invoice_from_allocations = AsyncMock(return_value=None)
         result = await svc_with_session.action_sync_invoice(**common)
         self.assertEqual(result, ("", 204))

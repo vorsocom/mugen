@@ -27,6 +27,15 @@ price_type = EdmType(
             always_serialize=True,
         ),
         "ProductId": EdmProperty("ProductId", TypeRef("Edm.Guid"), nullable=False),
+        "CurrencyDefinitionId": EdmProperty(
+            "CurrencyDefinitionId",
+            TypeRef("Edm.Guid"),
+            nullable=False,
+        ),
+        "MeterDefinitionId": EdmProperty(
+            "MeterDefinitionId",
+            TypeRef("Edm.Guid"),
+        ),
         "Code": EdmProperty("Code", TypeRef("Edm.String"), nullable=False),
         "PriceType": EdmProperty("PriceType", TypeRef("Edm.String"), nullable=False),
         "Currency": EdmProperty("Currency", TypeRef("Edm.String"), nullable=False),
@@ -68,6 +77,16 @@ price_type = EdmType(
             "Product",
             target_type=TypeRef("BILLING.Product"),
             source_fk="ProductId",
+        ),
+        "CurrencyDefinition": EdmNavigationProperty(
+            "CurrencyDefinition",
+            target_type=TypeRef("BILLING.CurrencyDefinition"),
+            source_fk="CurrencyDefinitionId",
+        ),
+        "MeterDefinition": EdmNavigationProperty(
+            "MeterDefinition",
+            target_type=TypeRef("BILLING.MeterDefinition"),
+            source_fk="MeterDefinitionId",
         ),
     },
     key_properties=("Id",),

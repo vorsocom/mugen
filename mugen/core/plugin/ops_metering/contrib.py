@@ -27,8 +27,6 @@ from mugen.core.plugin.acp.contract.sdk.resource import (
 from mugen.core.plugin.acp.contract.sdk.seed import SystemFlagDef
 from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.plugin.ops_metering.api.validation import (
-    MeterDefinitionCreateValidation,
-    MeterDefinitionUpdateValidation,
     MeterPolicyCreateValidation,
     MeterPolicyUpdateValidation,
     UsageRecordCreateValidation,
@@ -75,17 +73,15 @@ def contribute(
         {
             "set": "OpsMeterDefinitions",
             "entity": "MeterDefinition",
+            "table_name": "ops_metering_meter_definition_compat",
             "description": (
-                "Tenant-scoped meter definitions (code, unit, aggregation mode)"
-                " used for generic usage normalization."
+                "Deprecated read-only tenant projection of BillingMeterDefinitions;"
+                " migrate consumers to the global catalog."
             ),
-            "allow_create": True,
-            "allow_update": True,
+            "allow_create": False,
+            "allow_update": False,
             "allow_delete": False,
-            "crud": CrudPolicy(
-                create_schema=MeterDefinitionCreateValidation,
-                update_schema=MeterDefinitionUpdateValidation,
-            ),
+            "crud": CrudPolicy(),
         },
         {
             "set": "OpsMeterPolicies",

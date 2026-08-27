@@ -24,6 +24,20 @@ subscription_type = EdmType(
         "TenantId": EdmProperty("TenantId", TypeRef("Edm.Guid"), nullable=False),
         "AccountId": EdmProperty("AccountId", TypeRef("Edm.Guid"), nullable=False),
         "PriceId": EdmProperty("PriceId", TypeRef("Edm.Guid"), nullable=False),
+        "RunDefinitionId": EdmProperty(
+            "RunDefinitionId",
+            TypeRef("Edm.Guid"),
+        ),
+        "TaxCodeId": EdmProperty("TaxCodeId", TypeRef("Edm.Guid")),
+        "PaymentTermId": EdmProperty("PaymentTermId", TypeRef("Edm.Guid")),
+        "InvoiceTemplateId": EdmProperty(
+            "InvoiceTemplateId",
+            TypeRef("Edm.Guid"),
+        ),
+        "DiscountDefinitionId": EdmProperty(
+            "DiscountDefinitionId",
+            TypeRef("Edm.Guid"),
+        ),
         "Status": EdmProperty("Status", TypeRef("Edm.String"), nullable=False),
         "StartedAt": EdmProperty(
             "StartedAt",
@@ -71,6 +85,31 @@ subscription_type = EdmType(
             "Price",
             target_type=TypeRef("BILLING.Price"),
             source_fk="PriceId",
+        ),
+        "RunDefinition": EdmNavigationProperty(
+            "RunDefinition",
+            target_type=TypeRef("BILLING.RunDefinition"),
+            source_fk="RunDefinitionId",
+        ),
+        "TaxCode": EdmNavigationProperty(
+            "TaxCode",
+            target_type=TypeRef("BILLING.TaxCode"),
+            source_fk="TaxCodeId",
+        ),
+        "PaymentTerm": EdmNavigationProperty(
+            "PaymentTerm",
+            target_type=TypeRef("BILLING.PaymentTerm"),
+            source_fk="PaymentTermId",
+        ),
+        "InvoiceTemplate": EdmNavigationProperty(
+            "InvoiceTemplate",
+            target_type=TypeRef("BILLING.InvoiceTemplate"),
+            source_fk="InvoiceTemplateId",
+        ),
+        "DiscountDefinition": EdmNavigationProperty(
+            "DiscountDefinition",
+            target_type=TypeRef("BILLING.DiscountDefinition"),
+            source_fk="DiscountDefinitionId",
         ),
         "Invoices": EdmNavigationProperty(
             "Invoices",

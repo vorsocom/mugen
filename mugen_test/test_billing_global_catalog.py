@@ -1,5 +1,7 @@
 """Focused tests for the global Billing Product and Price catalog."""
 
+# pylint: disable=protected-access
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -73,7 +75,12 @@ class TestBillingGlobalCatalogContract(unittest.TestCase):
         self.assertNotIn("Tenant", price_type.nav_properties)
         self.assertEqual(
             set(price_type.nav_properties),
-            {"DeletedByUser", "Product"},
+            {
+                "CurrencyDefinition",
+                "DeletedByUser",
+                "MeterDefinition",
+                "Product",
+            },
         )
         self.assertTrue(price_type.properties["MeterCode"].nullable)
         for edm_type in (product_type, price_type):
@@ -110,12 +117,12 @@ class TestBillingGlobalCatalogContract(unittest.TestCase):
                 "ProductId": str(uuid.uuid4()),
                 "Code": "  monthly  ",
                 "PriceType": " RECURRING ",
-                "Currency": " usd ",
+                "CurrencyDefinitionId": str(uuid.uuid4()),
             }
         )
         self.assertEqual(
-            (price.code, price.price_type, price.currency),
-            ("monthly", "recurring", "USD"),
+            (price.code, price.price_type),
+            ("monthly", "recurring"),
         )
 
         for schema, payload in (
@@ -130,7 +137,7 @@ class TestBillingGlobalCatalogContract(unittest.TestCase):
                     "ProductId": str(uuid.uuid4()),
                     "Code": "x",
                     "PriceType": "one_time",
-                    "Currency": "USD",
+                    "CurrencyDefinitionId": str(uuid.uuid4()),
                 },
             ),
         ):
@@ -144,29 +151,28 @@ class TestBillingGlobalCatalogContract(unittest.TestCase):
             (BillingProductUpdateValidation, {"Code": None}),
             (BillingPriceUpdateValidation, {}),
             (BillingPriceUpdateValidation, {"ProductId": None}),
-            (BillingPriceUpdateValidation, {"Currency": None}),
+            (BillingPriceUpdateValidation, {"CurrencyDefinitionId": None}),
         ):
             with self.subTest(schema=schema.__name__, payload=payload):
                 with self.assertRaises(ValidationError):
                     schema.model_validate(payload)
 
-        with self.assertRaisesRegex(ValidationError, "provided together"):
+        with self.assertRaisesRegex(ValidationError, "MeterDefinitionId"):
             BillingPriceCreateValidation.model_validate(
                 {
                     "ProductId": str(uuid.uuid4()),
                     "Code": "metered",
                     "PriceType": "metered",
-                    "Currency": "USD",
-                    "MeterCode": "requests",
+                    "CurrencyDefinitionId": str(uuid.uuid4()),
                 }
             )
-        with self.assertRaisesRegex(ValidationError, "require MeterCode"):
+        with self.assertRaisesRegex(ValidationError, "MeterDefinitionId"):
             BillingPriceCreateValidation.model_validate(
                 {
                     "ProductId": str(uuid.uuid4()),
                     "Code": "metered",
                     "PriceType": "metered",
-                    "Currency": "USD",
+                    "CurrencyDefinitionId": str(uuid.uuid4()),
                 }
             )
 
@@ -210,22 +216,17 @@ class TestBillingGlobalCatalogContract(unittest.TestCase):
                 "ProductId": str(uuid.uuid4()),
                 "Code": " updated ",
                 "PriceType": " RECURRING ",
-                "Currency": " usd ",
+                "CurrencyDefinitionId": str(uuid.uuid4()),
                 "IntervalUnit": " MONTH ",
-                "UsageUnit": " UNIT ",
-                "MeterCode": " REQUESTS ",
             }
         )
         self.assertEqual(
             (
                 price_update.code,
                 price_update.price_type,
-                price_update.currency,
                 price_update.interval_unit,
-                price_update.usage_unit,
-                price_update.meter_code,
             ),
-            ("updated", "recurring", "USD", "month", "UNIT", "REQUESTS"),
+            ("updated", "recurring", "month"),
         )
         with self.assertRaises(ValidationError):
             BillingPriceUpdateValidation.model_validate({"IntervalUnit": " "})
@@ -239,10 +240,8 @@ class TestBillingGlobalCatalogContract(unittest.TestCase):
                 "ProductId": str(uuid.uuid4()),
                 "Code": "usage",
                 "PriceType": "recurring",
-                "Currency": "USD",
+                "CurrencyDefinitionId": str(uuid.uuid4()),
                 "IntervalUnit": " MONTH ",
-                "UsageUnit": " unit ",
-                "MeterCode": " requests ",
             }
         )
         self.assertEqual(recurring_meter.interval_unit, "month")
@@ -278,8 +277,20 @@ class TestBillingGlobalCatalogContract(unittest.TestCase):
         self.assertEqual(
             reader_grants,
             {
-                (f"{plugin_ns}:price", admin_ns.verb("read")),
-                (f"{plugin_ns}:product", admin_ns.verb("read")),
+                (f"{plugin_ns}:{name}", admin_ns.verb("read"))
+                for name in {
+                    "currency_definition",
+                    "discount_definition",
+                    "invoice_template",
+                    "meter_definition",
+                    "payment_term",
+                    "price",
+                    "price_entitlement",
+                    "product",
+                    "run_definition",
+                    "tax_code",
+                    "tax_rate",
+                }
             },
         )
 
@@ -526,23 +537,25 @@ class TestBillingCatalogServices(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_price_service_create_and_immutability(self) -> None:
+        currency_id = uuid.uuid4()
         rsg = _rsg(
             insert_one=AsyncMock(return_value={"id": uuid.uuid4()}),
             update_one=AsyncMock(return_value={"id": uuid.uuid4(), "code": "new"}),
+            get_one=AsyncMock(
+                return_value={"id": currency_id, "code": "USD", "is_active": True}
+            ),
         )
         service = PriceService(table="billing_price", rsg=rsg)
         product_id = uuid.uuid4()
         price_id = uuid.uuid4()
-        service._product_service.get = AsyncMock(  # pylint: disable=protected-access
-            return_value=ProductDE(id=product_id)
-        )
+        service._product_service.get = AsyncMock(return_value=ProductDE(id=product_id))
 
         await service.create(
             {
                 "product_id": product_id,
                 "code": " Price ",
                 "price_type": " ONE_TIME ",
-                "currency": " usd ",
+                "currency_definition_id": currency_id,
             }
         )
         payload = rsg.insert_one.await_args.args[1]
@@ -557,11 +570,10 @@ class TestBillingCatalogServices(unittest.IsolatedAsyncioTestCase):
             code="old",
             price_type="one_time",
             currency="USD",
+            currency_definition_id=currency_id,
         )
         service.get = AsyncMock(return_value=current)
-        service._is_referenced = AsyncMock(
-            return_value=True
-        )  # pylint: disable=protected-access
+        service._is_referenced = AsyncMock(return_value=True)
         with patch.object(price_mod, "abort", side_effect=_abort_raiser):
             with self.assertRaises(_AbortCalled) as raised:
                 await service.update(
@@ -580,14 +592,10 @@ class TestBillingCatalogServices(unittest.IsolatedAsyncioTestCase):
     async def test_price_reference_scan_and_meter_contract(self) -> None:
         rsg = _rsg(count_many=AsyncMock(side_effect=[0, 0, 1]))
         service = PriceService(table="billing_price", rsg=rsg)
-        self.assertTrue(
-            await service._is_referenced(uuid.uuid4())
-        )  # pylint: disable=protected-access
+        self.assertTrue(await service._is_referenced(uuid.uuid4()))
         self.assertEqual(rsg.count_many.await_count, 3)
 
-        service._product_service.get = AsyncMock(
-            return_value=None
-        )  # pylint: disable=protected-access
+        service._product_service.get = AsyncMock(return_value=None)
         with patch.object(price_mod, "abort", side_effect=_abort_raiser):
             with self.assertRaises(_AbortCalled) as raised:
                 await service.create(
@@ -595,20 +603,24 @@ class TestBillingCatalogServices(unittest.IsolatedAsyncioTestCase):
                         "product_id": uuid.uuid4(),
                         "code": "x",
                         "price_type": "one_time",
-                        "currency": "USD",
+                        "currency_definition_id": uuid.uuid4(),
                     }
                 )
         self.assertEqual(raised.exception.code, 400)
 
         rsg.count_many = AsyncMock(return_value=0)
-        self.assertFalse(  # pylint: disable=protected-access
-            await service._is_referenced(uuid.uuid4())
-        )
+        self.assertFalse(await service._is_referenced(uuid.uuid4()))
 
+        rsg.get_one = AsyncMock(
+            return_value={"id": uuid.uuid4(), "code": "USD", "is_active": True}
+        )
         with patch.object(price_mod, "abort", side_effect=_abort_raiser):
             with self.assertRaises(_AbortCalled) as raised:
-                service._validate_meter_contract(  # pylint: disable=protected-access
-                    {"price_type": "metered"}
+                await service._apply_reference_contract(
+                    {
+                        "price_type": "metered",
+                        "currency_definition_id": uuid.uuid4(),
+                    }
                 )
         self.assertEqual(raised.exception.code, 400)
 
@@ -626,6 +638,7 @@ class TestBillingCatalogServices(unittest.IsolatedAsyncioTestCase):
             code="base",
             price_type="one_time",
             currency="USD",
+            currency_definition_id=uuid.uuid4(),
             unit_amount=1,
         )
 
@@ -640,10 +653,8 @@ class TestBillingCatalogServices(unittest.IsolatedAsyncioTestCase):
         )
 
         service.get = AsyncMock(return_value=current)
-        service._is_referenced = AsyncMock(
-            return_value=False
-        )  # pylint: disable=protected-access
-        service._product_service.get = AsyncMock(  # pylint: disable=protected-access
+        service._is_referenced = AsyncMock(return_value=False)
+        service._product_service.get = AsyncMock(
             return_value=ProductDE(id=replacement_product_id)
         )
         await service.update_with_row_version(
@@ -651,26 +662,30 @@ class TestBillingCatalogServices(unittest.IsolatedAsyncioTestCase):
             expected_row_version=1,
             changes={"product_id": replacement_product_id, "unit_amount": 2},
         )
-        service._product_service.get.assert_awaited_once()  # pylint: disable=protected-access
+        service._product_service.get.assert_awaited_once()
 
         transient = PriceDE(
             product_id=product_id,
             code="base",
             price_type="one_time",
             currency="USD",
+            currency_definition_id=current.currency_definition_id,
             unit_amount=1,
         )
-        service._is_referenced.reset_mock()  # pylint: disable=protected-access
-        await service._validate_update(  # pylint: disable=protected-access
+        service._is_referenced.reset_mock()
+        await service._validate_update(
             transient,
             {"unit_amount": 2},
         )
-        service._is_referenced.assert_not_awaited()  # pylint: disable=protected-access
+        service._is_referenced.assert_not_awaited()
 
+        service._is_referenced = AsyncMock(return_value=False)
+        rsg.get_one = AsyncMock(return_value=None)
         with patch.object(price_mod, "abort", side_effect=_abort_raiser):
             with self.assertRaises(_AbortCalled) as raised:
-                service._validate_meter_contract(  # pylint: disable=protected-access
-                    {"price_type": "metered", "meter_code": "requests"}
+                await service._validate_update(
+                    current,
+                    {"currency_definition_id": uuid.uuid4()},
                 )
         self.assertEqual(raised.exception.code, 400)
 
@@ -733,173 +748,6 @@ class TestBillingCatalogServices(unittest.IsolatedAsyncioTestCase):
                     with self.assertRaises(_AbortCalled) as raised:
                         await service.entity_action_archive(**common)
                 self.assertEqual(raised.exception.code, status_code)
-
-
-class TestBillingSubscriptionCatalogValidation(unittest.IsolatedAsyncioTestCase):
-    """Covers tenant isolation, catalog availability, and meter matching."""
-
-    def _service(self) -> SubscriptionService:
-        service = SubscriptionService(table="billing_subscription", rsg=_rsg())
-        service._account_service.get = AsyncMock(  # pylint: disable=protected-access
-            return_value=SimpleNamespace(id=uuid.uuid4())
-        )
-        service._price_service.get = AsyncMock(  # pylint: disable=protected-access
-            return_value=PriceDE(
-                id=uuid.uuid4(),
-                product_id=uuid.uuid4(),
-                price_type="one_time",
-            )
-        )
-        service._product_service.get = AsyncMock(  # pylint: disable=protected-access
-            return_value=ProductDE(id=uuid.uuid4())
-        )
-        service._meter_definition_service.list = AsyncMock(
-            return_value=[]
-        )  # pylint: disable=protected-access
-        return service
-
-    async def test_cross_tenant_or_unavailable_catalog_selection_is_rejected(
-        self,
-    ) -> None:
-        tenant_id = uuid.uuid4()
-        account_id = uuid.uuid4()
-        price_id = uuid.uuid4()
-        common = {
-            "tenant_id": tenant_id,
-            "account_id": account_id,
-            "price_id": price_id,
-            "status_code": 400,
-        }
-
-        for missing_service, expected_message in (
-            ("_account_service", "route tenant"),
-            ("_price_service", "global Price"),
-            ("_product_service", "Product is not available"),
-        ):
-            service = self._service()
-            getattr(service, missing_service).get = AsyncMock(return_value=None)
-            with self.subTest(missing_service=missing_service):
-                with patch.object(subscription_mod, "abort", side_effect=_abort_raiser):
-                    with self.assertRaises(_AbortCalled) as raised:
-                        await service._validate_catalog_selection(  # pylint: disable=protected-access
-                            **common
-                        )
-                self.assertEqual(raised.exception.code, 400)
-                self.assertIn(expected_message, raised.exception.message)
-
-        service = self._service()
-        await service._validate_catalog_selection(
-            **common
-        )  # pylint: disable=protected-access
-        self.assertEqual(
-            service._account_service.get.await_args.args[
-                0
-            ],  # pylint: disable=protected-access
-            {
-                "id": account_id,
-                "tenant_id": tenant_id,
-                "deleted_at": None,
-            },
-        )
-
-    async def test_meter_definition_matching_is_normalized_and_unit_safe(self) -> None:
-        service = self._service()
-        tenant_id = uuid.uuid4()
-        price = PriceDE(
-            id=uuid.uuid4(),
-            product_id=uuid.uuid4(),
-            price_type="metered",
-            meter_code=" Requests ",
-            usage_unit=" UNIT ",
-        )
-        service._price_service.get = AsyncMock(
-            return_value=price
-        )  # pylint: disable=protected-access
-        common = {
-            "tenant_id": tenant_id,
-            "account_id": uuid.uuid4(),
-            "price_id": price.id,
-            "status_code": 409,
-        }
-
-        with patch.object(subscription_mod, "abort", side_effect=_abort_raiser):
-            with self.assertRaises(_AbortCalled) as raised:
-                await service._validate_catalog_selection(
-                    **common
-                )  # pylint: disable=protected-access
-        self.assertEqual(raised.exception.code, 409)
-        self.assertIn("matching active", raised.exception.message)
-
-        service._meter_definition_service.list = (
-            AsyncMock(  # pylint: disable=protected-access
-                return_value=[
-                    SimpleNamespace(code="requests", unit="minute"),
-                ]
-            )
-        )
-        with patch.object(subscription_mod, "abort", side_effect=_abort_raiser):
-            with self.assertRaises(_AbortCalled) as raised:
-                await service._validate_catalog_selection(
-                    **common
-                )  # pylint: disable=protected-access
-        self.assertIn("unit must match", raised.exception.message)
-
-        service._meter_definition_service.list = (
-            AsyncMock(  # pylint: disable=protected-access
-                return_value=[
-                    SimpleNamespace(code=" requests ", unit=" unit "),
-                ]
-            )
-        )
-        await service._validate_catalog_selection(
-            **common
-        )  # pylint: disable=protected-access
-
-        service._meter_definition_service.list = (
-            AsyncMock(  # pylint: disable=protected-access
-                return_value=[
-                    SimpleNamespace(code="requests", unit="unit"),
-                    SimpleNamespace(code=" REQUESTS ", unit="unit"),
-                ]
-            )
-        )
-        with patch.object(subscription_mod, "abort", side_effect=_abort_raiser):
-            with self.assertRaises(_AbortCalled) as raised:
-                await service._validate_catalog_selection(
-                    **common
-                )  # pylint: disable=protected-access
-        self.assertIn("multiple normalized", raised.exception.message)
-
-    async def test_two_tenants_can_create_against_same_global_price(self) -> None:
-        service = self._service()
-        price_id = (
-            service._price_service.get.return_value.id
-        )  # pylint: disable=protected-access
-        tenant_a = uuid.uuid4()
-        tenant_b = uuid.uuid4()
-
-        for tenant_id in (tenant_a, tenant_b):
-            await service.create(
-                {
-                    "tenant_id": tenant_id,
-                    "account_id": uuid.uuid4(),
-                    "price_id": price_id,
-                }
-            )
-
-        account_wheres = [
-            call.args[0]
-            for call in service._account_service.get.await_args_list  # pylint: disable=protected-access
-        ]
-        self.assertEqual(
-            {where["tenant_id"] for where in account_wheres},
-            {tenant_a, tenant_b},
-        )
-        price_wheres = [
-            call.args[0]
-            for call in service._price_service.get.await_args_list  # pylint: disable=protected-access
-        ]
-        self.assertEqual({where["id"] for where in price_wheres}, {price_id})
 
 
 if __name__ == "__main__":

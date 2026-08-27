@@ -81,24 +81,10 @@
         "ProductId": "__ENTITY_ID__",
         "Code": "__BILLING_PRODUCT_CODE__-TENANT-PRICE",
         "PriceType": "one_time",
-        "Currency": "USD",
+        "CurrencyDefinitionId": "e5855e26-4070-517a-9291-f6ae40dfbf10",
         "UnitAmount": 1000
       }
     }
   ],
-  "positive_creates": [
-    {
-      "name": "create_price",
-      "entity_set": "BillingPrices",
-      "scope": "global",
-      "expect_code": 201,
-      "payload": {
-        "ProductId": "__ENTITY_ID__",
-        "Code": "__BILLING_PRODUCT_CODE__-PRICE",
-        "PriceType": "one_time",
-        "Currency": "USD",
-        "UnitAmount": 1000
-      }
-    }
-  ]
+  "positive_creates": []
 }

@@ -13,19 +13,34 @@ from mugen.core.contract.gateway.storage.rdbms.crud_base import (
     ICrudServiceWithRowVersion,
 )
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
-from mugen.core.contract.gateway.storage.rdbms.service_base import IRelationalService
 from mugen.core.contract.gateway.storage.rdbms.types import RowVersionConflict
 
 from mugen.core.plugin.acp.api.validation.generic import RowVersionValidation
 from mugen.core.plugin.billing.contract.service.invoice import IInvoiceService
 from mugen.core.plugin.billing.domain import InvoiceDE
+from mugen.core.plugin.billing.service.reference import BillingReferenceService
 
 
 class InvoiceService(
-    IRelationalService[InvoiceDE],
+    BillingReferenceService[InvoiceDE],
     IInvoiceService,
 ):
     """A CRUD service for billing invoices."""
+
+    _currency_snapshot = True
+    _active_reference_tables = {
+        "currency_definition_id": (
+            "billing_currency_definition",
+            "CurrencyDefinitionId",
+        ),
+        "tax_code_id": ("billing_tax_code", "TaxCodeId"),
+        "payment_term_id": ("billing_payment_term", "PaymentTermId"),
+        "invoice_template_id": ("billing_invoice_template", "InvoiceTemplateId"),
+        "discount_definition_id": (
+            "billing_discount_definition",
+            "DiscountDefinitionId",
+        ),
+    }
 
     def __init__(self, table: str, rsg: IRelationalStorageGateway, **kwargs):
         super().__init__(
@@ -34,6 +49,88 @@ class InvoiceService(
             rsg=rsg,
             **kwargs,
         )
+
+    async def create(self, values: Mapping[str, Any]) -> InvoiceDE:
+        payload = dict(values)
+        tenant_id = payload["tenant_id"]
+        account = await self._rsg.get_one(
+            "billing_account",
+            {
+                "tenant_id": tenant_id,
+                "id": payload["account_id"],
+                "deleted_at": None,
+            },
+        )
+        if account is None:
+            abort(400, "AccountId must reference an available account in the tenant.")
+
+        subscription = None
+        if payload.get("subscription_id") is not None:
+            subscription = await self._rsg.get_one(
+                "billing_subscription",
+                {"tenant_id": tenant_id, "id": payload["subscription_id"]},
+            )
+            if subscription is None or subscription.get("account_id") != account["id"]:
+                abort(400, "SubscriptionId must belong to the selected account.")
+
+        if payload.get("billing_run_id") is not None:
+            billing_run = await self._rsg.get_one(
+                "billing_run",
+                {"tenant_id": tenant_id, "id": payload["billing_run_id"]},
+            )
+            if billing_run is None:
+                abort(400, "BillingRunId must reference a run in the route tenant.")
+            if billing_run.get("account_id") not in (None, account["id"]):
+                abort(400, "BillingRunId does not include the selected account.")
+            if subscription is not None and billing_run.get("subscription_id") not in (
+                None,
+                subscription["id"],
+            ):
+                abort(400, "BillingRunId does not include the selected Subscription.")
+
+        for field_name in (
+            "tax_code_id",
+            "payment_term_id",
+            "invoice_template_id",
+            "discount_definition_id",
+        ):
+            if payload.get(field_name) is None:
+                if (
+                    subscription is not None
+                    and subscription.get(field_name) is not None
+                ):
+                    payload[field_name] = subscription[field_name]
+                elif account.get(field_name) is not None:
+                    payload[field_name] = account[field_name]
+
+        price = None
+        if subscription is not None:
+            price = await self._rsg.get_one(
+                "billing_price",
+                {"id": subscription["price_id"]},
+            )
+            if price is None:
+                abort(409, "Subscription Price is unavailable for invoicing.")
+        expected_currency_id = (
+            price.get("currency_definition_id") if price is not None else None
+        )
+        if payload.get("currency_definition_id") is None:
+            payload["currency_definition_id"] = expected_currency_id or account.get(
+                "currency_definition_id"
+            )
+        if payload.get("currency_definition_id") is None:
+            abort(
+                400,
+                "CurrencyDefinitionId is required when no Subscription or Account "
+                "currency default exists.",
+            )
+        if (
+            expected_currency_id is not None
+            and payload["currency_definition_id"] != expected_currency_id
+        ):
+            abort(409, "Invoice currency must match its Subscription Price.")
+
+        return await super().create(payload)
 
     async def _get_for_action(
         self,

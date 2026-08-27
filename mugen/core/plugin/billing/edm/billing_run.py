@@ -24,7 +24,17 @@ billing_run_type = EdmType(
         "TenantId": EdmProperty("TenantId", TypeRef("Edm.Guid"), nullable=False),
         "AccountId": EdmProperty("AccountId", TypeRef("Edm.Guid")),
         "SubscriptionId": EdmProperty("SubscriptionId", TypeRef("Edm.Guid")),
-        "RunType": EdmProperty("RunType", TypeRef("Edm.String"), nullable=False),
+        "DefinitionId": EdmProperty(
+            "DefinitionId",
+            TypeRef("Edm.Guid"),
+            nullable=False,
+        ),
+        "RetryOfRunId": EdmProperty("RetryOfRunId", TypeRef("Edm.Guid")),
+        "AttemptNumber": EdmProperty(
+            "AttemptNumber",
+            TypeRef("Edm.Int32"),
+            nullable=False,
+        ),
         "PeriodStart": EdmProperty(
             "PeriodStart",
             TypeRef("Edm.DateTimeOffset"),
@@ -42,9 +52,10 @@ billing_run_type = EdmType(
             nullable=False,
         ),
         "StartedAt": EdmProperty("StartedAt", TypeRef("Edm.DateTimeOffset")),
-        "FinishedAt": EdmProperty("FinishedAt", TypeRef("Edm.DateTimeOffset")),
+        "CompletedAt": EdmProperty("CompletedAt", TypeRef("Edm.DateTimeOffset")),
         "ExternalRef": EdmProperty("ExternalRef", TypeRef("Edm.String")),
-        "ErrorMessage": EdmProperty("ErrorMessage", TypeRef("Edm.String")),
+        "FailureCode": EdmProperty("FailureCode", TypeRef("Edm.String")),
+        "FailureDetail": EdmProperty("FailureDetail", TypeRef("Edm.String")),
         "Attributes": EdmProperty(
             "Attributes",
             TypeRef("Edm.String"),
@@ -67,6 +78,26 @@ billing_run_type = EdmType(
             "Subscription",
             target_type=TypeRef("BILLING.Subscription"),
             source_fk="SubscriptionId",
+        ),
+        "Definition": EdmNavigationProperty(
+            "Definition",
+            target_type=TypeRef("BILLING.RunDefinition"),
+            source_fk="DefinitionId",
+        ),
+        "RetryOfRun": EdmNavigationProperty(
+            "RetryOfRun",
+            target_type=TypeRef("BILLING.BillingRun"),
+            source_fk="RetryOfRunId",
+        ),
+        "Invoices": EdmNavigationProperty(
+            "Invoices",
+            target_type=TypeRef("BILLING.Invoice", is_collection=True),
+            target_fk="BillingRunId",
+        ),
+        "EntitlementBuckets": EdmNavigationProperty(
+            "EntitlementBuckets",
+            target_type=TypeRef("BILLING.EntitlementBucket", is_collection=True),
+            target_fk="BillingRunId",
         ),
     },
     key_properties=("Id",),

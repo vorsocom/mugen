@@ -19,6 +19,9 @@ class EntitlementBucketDE(BaseDE, TenantScopedDEMixin):
     account_id: uuid.UUID | None = None
     subscription_id: uuid.UUID | None = None
     price_id: uuid.UUID | None = None
+    price_entitlement_id: uuid.UUID | None = None
+    meter_definition_id: uuid.UUID | None = None
+    billing_run_id: uuid.UUID | None = None
 
     meter_code: str | None = None
     period_start: datetime | None = None
@@ -27,6 +30,8 @@ class EntitlementBucketDE(BaseDE, TenantScopedDEMixin):
     included_quantity: int | None = None
     consumed_quantity: int | None = None
     rollover_quantity: int | None = None
+    adjustment_quantity: int | None = None
+    generation_source: str | None = None
 
     external_ref: str | None = None
     attributes: dict[str, Any] | None = None

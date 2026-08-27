@@ -19,6 +19,11 @@ class SubscriptionDE(BaseDE, TenantScopedDEMixin, SoftDeleteDEMixin):
 
     account_id: uuid.UUID | None = None
     price_id: uuid.UUID | None = None
+    run_definition_id: uuid.UUID | None = None
+    tax_code_id: uuid.UUID | None = None
+    payment_term_id: uuid.UUID | None = None
+    invoice_template_id: uuid.UUID | None = None
+    discount_definition_id: uuid.UUID | None = None
 
     status: str | None = None  # active / trialing / paused / canceled / ended
 
