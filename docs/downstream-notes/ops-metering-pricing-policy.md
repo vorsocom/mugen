@@ -1,75 +1,65 @@
 # Ops Metering Pricing Policy
 
-- Status: draft
-- Owner: downstream plugin team
-- Last Updated: 2026-02-14
+- Status: active
+- Owner: core billing and downstream plugin teams
+- Last Updated: 2026-08-27
 
 ## Context
 
-Core `ops_metering` produces generic measured/rated usage and billing usage events.
-It intentionally does not implement product/tier pricing policy. Downstream code
-must map generic usage (`billable_quantity`, meter code, account/subscription context)
-into commercial pricing outcomes.
+Core owns canonical global meter semantics and the included quantities advertised
+by global package Prices. `ops_metering` produces generic measured/rated usage and
+Billing turns Price Entitlement rules into tenant period buckets. Downstream code
+still owns business-specific overage pricing, tier breaks, and invoice-line
+strategy.
 
-## Decision
+## Core contract
 
-- Keep pricing and package rules fully downstream.
-- Treat `OpsRatedUsages` as normalized usage input, not final money output.
-- Use downstream policy tables keyed by tenant + product/tier + meter code.
+- `BillingMeterDefinitions` owns globally stable Code, Unit, and Aggregation Mode.
+- Ops Metering Policies, Sessions, Records, and Rated Usage use
+  `MeterDefinitionId`; they do not create tenant meter semantics.
+- `BillingPrices` uses `MeterDefinitionId` for metered prices and retains Code/Unit
+  snapshots for compatibility.
+- `BillingPriceEntitlements` is the authoritative package allowance contract.
+- Subscription/Billing Run workflows generate tenant Entitlement Buckets exactly
+  once per rule and period.
+- `OpsRatedUsages` remains normalized usage input, not final money output.
+
+## Downstream responsibilities
+
+- Resolve effective overage or tiering policy by tenant, Price, and canonical
+  Meter Definition.
+- Convert rated usage beyond Core entitlements into currency amounts and invoice
+  line strategies.
 - Preserve a deterministic pricing trace reference on generated invoice lines.
+- Version business-specific policy with effective windows and make replay and
+  reconciliation deterministic.
 
-## Core vs Downstream Boundary
+Downstream policy must not redefine the meter Unit/Aggregation Mode or duplicate
+the package included quantity in an independent authority. A downstream table may
+key policy by `(tenant_id, price_id, meter_definition_id, effective_from)` and
+store only the additional pricing behavior it owns.
 
-- Core responsibilities:
-  - Measure usage and apply generic caps/multipliers/rounding/window rules.
-  - Produce `OpsRatedUsages` and billing `UsageEvents`.
-- Downstream responsibilities:
-  - Convert rated usage into currency amounts and invoice line strategies.
-  - Implement package allowances, overage policy, and tier breakpoints.
-  - Own pricing versioning and commercial rollout controls.
-- Why this boundary:
-  - Pricing semantics are business-specific and change independently of core.
+## Processing outline
 
-## Implementation Sketch
-
-### Data Model
-
-Add downstream pricing policy tables, for example:
-
-- `downstream_meter_pricing_policy`
-  - `tenant_id UUID NOT NULL`
-  - `meter_code CITEXT NOT NULL`
-  - `product_code CITEXT NULL`
-  - `tier_code CITEXT NULL`
-  - `pricing_model CITEXT NOT NULL` (`flat/per_unit/tiered/package`)
-  - `currency CITEXT NOT NULL`
-  - `config JSONB NOT NULL`
-  - `effective_from timestamptz NOT NULL`
-  - `effective_to timestamptz NULL`
-  - `is_active bool NOT NULL DEFAULT true`
-- Unique active policy key on `(tenant_id, meter_code, product_code, tier_code, effective_from)`.
-
-### Services / APIs
-
-1. Read `OpsRatedUsages` rows not yet priced downstream.
-2. Resolve effective pricing policy for each usage row.
-3. Compute line amount deterministically and attach pricing trace metadata.
-4. Create/update downstream billing line records linked by rated-usage id.
-
-### Operational Notes
-
-- Roll out policy changes with future `effective_from`.
-- Keep policy resolution deterministic and replay-safe.
-- Maintain a backfill command for repricing by time window.
+1. Read unprocessed `OpsRatedUsages` and their canonical meter IDs.
+2. Resolve the Subscription, Price, and current tenant Entitlement Bucket.
+3. Allocate included usage through Core Billing.
+4. Apply the effective downstream policy to any billable remainder.
+5. Create invoice-line data with Price, Meter Definition, and deterministic
+   pricing-trace provenance.
 
 ## Validation
 
-- Unit tests for each pricing model and boundary condition.
-- Integration test: rated usage -> priced line with expected amount/currency.
-- Replay test: same rated usage yields identical pricing output.
+- Test each pricing model and effective-window boundary.
+- Verify package allowance is taken from generated Core buckets.
+- Verify two tenants can use the same Price/meter while applying distinct allowed
+  overage policies.
+- Verify replay produces the same allocation and financial result.
+- Verify historical invoices do not change after catalog or downstream policy
+  revisions.
 
-## Risks / Open Questions
+## Compatibility
 
-- Handling retroactive policy changes on already issued invoices.
-- Multi-currency fallback behavior when policy is missing.
-- Partial migration strategy for legacy pricing models.
+Legacy tenant `OpsMeterDefinitions` is read-only and deprecated. Consumers should
+read `BillingMeterDefinitions` globally and migrate stored legacy IDs through the
+canonical mapping established by the migration.

@@ -157,12 +157,9 @@ class UsageSession(ModelBase, TenantScopedMixin):
 
     __table_args__ = (
         ForeignKeyConstraint(
-            ["tenant_id", "meter_definition_id"],
-            [
-                f"{CORE_SCHEMA_TOKEN}.ops_metering_meter_definition.tenant_id",
-                f"{CORE_SCHEMA_TOKEN}.ops_metering_meter_definition.id",
-            ],
-            name="fkx_ops_metering_usage_session__tenant_meter_definition",
+            ["meter_definition_id"],
+            [f"{CORE_SCHEMA_TOKEN}.billing_meter_definition.id"],
+            name="fk_ops_metering_usage_session__meter_definition",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(

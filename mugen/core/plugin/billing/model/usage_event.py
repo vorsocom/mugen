@@ -57,6 +57,12 @@ class UsageEvent(ModelBase, TenantScopedMixin):
         index=True,
     )
 
+    meter_definition_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        nullable=True,
+        index=True,
+    )
+
     meter_code: Mapped[str] = mapped_column(
         CITEXT(64),
         nullable=False,
@@ -138,6 +144,12 @@ class UsageEvent(ModelBase, TenantScopedMixin):
             (f"{CORE_SCHEMA_TOKEN}.billing_price.id",),
             name="fk_billing_usage_event__price",
             ondelete="SET NULL",
+        ),
+        ForeignKeyConstraint(
+            ("meter_definition_id",),
+            (f"{CORE_SCHEMA_TOKEN}.billing_meter_definition.id",),
+            name="fk_billing_usage_event__meter_definition",
+            ondelete="RESTRICT",
         ),
         CheckConstraint(
             "quantity >= 0",

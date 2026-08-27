@@ -40,13 +40,12 @@ class PriceService(  # pylint: disable=too-few-public-methods
         {
             "product_id",
             "price_type",
-            "currency",
+            "currency_definition_id",
+            "meter_definition_id",
             "unit_amount",
             "interval_unit",
             "interval_count",
             "trial_period_days",
-            "usage_unit",
-            "meter_code",
         }
     )
 
@@ -68,18 +67,13 @@ class PriceService(  # pylint: disable=too-few-public-methods
         for field_name in (
             "code",
             "price_type",
-            "currency",
             "interval_unit",
-            "usage_unit",
-            "meter_code",
         ):
             value = payload.get(field_name)
             if isinstance(value, str):
                 normalized = value.strip()
                 if field_name in {"price_type", "interval_unit"}:
                     normalized = normalized.lower()
-                if field_name == "currency":
-                    normalized = normalized.upper()
                 payload[field_name] = normalized
         return payload
 
@@ -93,16 +87,33 @@ class PriceService(  # pylint: disable=too-few-public-methods
         if product is None:
             abort(400, "ProductId must reference an available global Product.")
 
-    @staticmethod
-    def _validate_meter_contract(values: Mapping[str, Any]) -> None:
-        meter_code = values.get("meter_code")
-        usage_unit = values.get("usage_unit")
-        has_meter_code = meter_code is not None
-        has_usage_unit = usage_unit is not None
-        if has_meter_code != has_usage_unit:
-            abort(400, "MeterCode and UsageUnit must be provided together.")
-        if values.get("price_type") == "metered" and not has_meter_code:
-            abort(400, "Metered Prices require MeterCode and UsageUnit.")
+    async def _apply_reference_contract(self, values: dict[str, Any]) -> None:
+        currency = await self._rsg.get_one(
+            "billing_currency_definition",
+            {"id": values["currency_definition_id"]},
+        )
+        if currency is None or not currency.get("is_active"):
+            abort(400, "CurrencyDefinitionId must reference an active currency.")
+        values["currency"] = str(currency["code"]).upper()
+
+        meter_id = values.get("meter_definition_id")
+        if values.get("price_type") == "metered":
+            if meter_id is None:
+                abort(400, "Metered Prices require MeterDefinitionId.")
+            meter = await self._rsg.get_one(
+                "billing_meter_definition",
+                {"id": meter_id},
+            )
+            if meter is None or not meter.get("is_active"):
+                abort(400, "MeterDefinitionId must reference an active meter.")
+            values["meter_code"] = meter["code"]
+            values["usage_unit"] = meter["unit"]
+            return
+
+        if meter_id is not None:
+            abort(400, "Unmetered Prices must omit MeterDefinitionId.")
+        values["meter_code"] = None
+        values["usage_unit"] = None
 
     async def _is_referenced(self, price_id: uuid.UUID) -> bool:
         for table_name in self._REFERENCE_TABLES:
@@ -125,6 +136,8 @@ class PriceService(  # pylint: disable=too-few-public-methods
             for field_name in (
                 "product_id",
                 "price_type",
+                "currency_definition_id",
+                "meter_definition_id",
                 "currency",
                 "unit_amount",
                 "interval_unit",
@@ -151,13 +164,19 @@ class PriceService(  # pylint: disable=too-few-public-methods
 
         if "product_id" in commercial_changes:
             await self._validate_product(effective["product_id"])
-        self._validate_meter_contract(effective)
+        if commercial_changes.intersection(
+            {"currency_definition_id", "meter_definition_id", "price_type"}
+        ):
+            await self._apply_reference_contract(effective)
+            payload["currency"] = effective["currency"]
+            payload["meter_code"] = effective["meter_code"]
+            payload["usage_unit"] = effective["usage_unit"]
         return payload
 
     async def create(self, values: Mapping[str, Any]) -> PriceDE:
         payload = self._normalize_changes(values)
         await self._validate_product(payload["product_id"])
-        self._validate_meter_contract(payload)
+        await self._apply_reference_contract(payload)
         return await super().create(payload)
 
     async def update(

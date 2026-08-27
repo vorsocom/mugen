@@ -64,24 +64,44 @@ from mugen.core.plugin.billing.api.validation import (
     BillingAdjustmentUpdateValidation,
     BillingCreditNoteCreateValidation,
     BillingCreditNoteUpdateValidation,
+    BillingDiscountDefinitionCreateValidation,
+    BillingDiscountDefinitionUpdateValidation,
+    BillingEntitlementAdjustValidation,
     BillingEntitlementBucketCreateValidation,
     BillingEntitlementBucketUpdateValidation,
     BillingInvoiceCreateValidation,
+    BillingInvoiceTemplateCreateValidation,
+    BillingInvoiceTemplateUpdateValidation,
     BillingInvoiceLineCreateValidation,
     BillingInvoiceLineUpdateValidation,
     BillingInvoiceUpdateValidation,
     BillingLedgerEntryCreateValidation,
+    BillingMeterDefinitionCreateValidation,
+    BillingMeterDefinitionUpdateValidation,
     BillingPaymentAllocationCreateValidation,
     BillingPaymentCreateValidation,
+    BillingPaymentTermCreateValidation,
+    BillingPaymentTermUpdateValidation,
     BillingPaymentUpdateValidation,
     BillingPriceCreateValidation,
+    BillingPriceEntitlementCreateValidation,
+    BillingPriceEntitlementUpdateValidation,
     BillingPriceUpdateValidation,
     BillingProductCreateValidation,
     BillingProductUpdateValidation,
     BillingRunCreateValidation,
+    BillingRunDefinitionCreateValidation,
+    BillingRunDefinitionUpdateValidation,
+    BillingRunFailValidation,
+    BillingRunRetryValidation,
     BillingRunUpdateValidation,
     BillingSubscriptionCreateValidation,
+    BillingSubscriptionPeriodValidation,
     BillingSubscriptionUpdateValidation,
+    BillingTaxCodeCreateValidation,
+    BillingTaxCodeUpdateValidation,
+    BillingTaxRateCreateValidation,
+    BillingTaxRateUpdateValidation,
     BillingUsageAllocationCreateValidation,
     BillingUsageEventCreateValidation,
 )
@@ -145,6 +165,20 @@ def contribute(
     # ------------------------------------------------------------------
     # NOTE: ACP's generic DELETE endpoint is currently a hard delete. For safety,
     # billing resources default to allow_delete=False.
+    lifecycle_actions = {
+        "activate": {
+            "perm": admin_ns.verb("manage"),
+            "schema": RowVersionValidation,
+            "confirm": "Activate this global billing definition?",
+            "is_admin_action": True,
+        },
+        "deactivate": {
+            "perm": admin_ns.verb("manage"),
+            "schema": RowVersionValidation,
+            "confirm": "Deactivate this global billing definition?",
+            "is_admin_action": True,
+        },
+    }
     resources: tuple[dict[str, Any], ...] = (
         {
             "set": "BillingAccounts",
@@ -225,6 +259,153 @@ def contribute(
             },
         },
         {
+            "set": "BillingMeterDefinitions",
+            "entity": "MeterDefinition",
+            "description": "Canonical global usage-meter definitions.",
+            "allow_create": True,
+            "allow_update": True,
+            "allow_delete": False,
+            "allow_manage": True,
+            "provider_module": "catalog",
+            "crud": CrudPolicy(
+                create_schema=BillingMeterDefinitionCreateValidation,
+                update_schema=BillingMeterDefinitionUpdateValidation,
+            ),
+            "actions": lifecycle_actions,
+        },
+        {
+            "set": "BillingPriceEntitlements",
+            "entity": "PriceEntitlement",
+            "description": "Global included-usage rules owned by recurring Prices.",
+            "allow_create": True,
+            "allow_update": True,
+            "allow_delete": False,
+            "allow_manage": True,
+            "provider_module": "catalog",
+            "crud": CrudPolicy(
+                create_schema=BillingPriceEntitlementCreateValidation,
+                update_schema=BillingPriceEntitlementUpdateValidation,
+            ),
+            "soft_delete": SoftDeletePolicy(
+                mode=SoftDeleteMode.TIMESTAMP,
+                column="DeletedAt",
+                allow_deleted_collection_views=True,
+                allow_restore=False,
+                allow_hard_delete=False,
+            ),
+            "resolve_soft_deleted_references": True,
+            "actions": {
+                "archive": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": RowVersionValidation,
+                    "confirm": "Archive this unused Price entitlement rule?",
+                    "is_admin_action": True,
+                },
+            },
+        },
+        {
+            "set": "BillingRunDefinitions",
+            "entity": "RunDefinition",
+            "description": "Reusable global billing-run cadence definitions.",
+            "allow_create": True,
+            "allow_update": True,
+            "allow_delete": False,
+            "allow_manage": True,
+            "provider_module": "catalog",
+            "crud": CrudPolicy(
+                create_schema=BillingRunDefinitionCreateValidation,
+                update_schema=BillingRunDefinitionUpdateValidation,
+            ),
+            "actions": lifecycle_actions,
+        },
+        {
+            "set": "BillingCurrencyDefinitions",
+            "entity": "CurrencyDefinition",
+            "description": "Vendored ISO 4217 currencies supported by the platform.",
+            "allow_create": False,
+            "allow_update": False,
+            "allow_delete": False,
+            "allow_manage": True,
+            "provider_module": "catalog",
+            "crud": CrudPolicy(),
+            "actions": lifecycle_actions,
+        },
+        {
+            "set": "BillingTaxCodes",
+            "entity": "TaxCode",
+            "description": "Reusable global tax classifications.",
+            "allow_create": True,
+            "allow_update": True,
+            "allow_delete": False,
+            "allow_manage": True,
+            "provider_module": "catalog",
+            "crud": CrudPolicy(
+                create_schema=BillingTaxCodeCreateValidation,
+                update_schema=BillingTaxCodeUpdateValidation,
+            ),
+            "actions": lifecycle_actions,
+        },
+        {
+            "set": "BillingTaxRates",
+            "entity": "TaxRate",
+            "description": "Effective-dated global tax rates.",
+            "allow_create": True,
+            "allow_update": True,
+            "allow_delete": False,
+            "allow_manage": True,
+            "provider_module": "catalog",
+            "crud": CrudPolicy(
+                create_schema=BillingTaxRateCreateValidation,
+                update_schema=BillingTaxRateUpdateValidation,
+            ),
+            "actions": lifecycle_actions,
+        },
+        {
+            "set": "BillingPaymentTerms",
+            "entity": "PaymentTerm",
+            "description": "Reusable global payment-term definitions.",
+            "allow_create": True,
+            "allow_update": True,
+            "allow_delete": False,
+            "allow_manage": True,
+            "provider_module": "catalog",
+            "crud": CrudPolicy(
+                create_schema=BillingPaymentTermCreateValidation,
+                update_schema=BillingPaymentTermUpdateValidation,
+            ),
+            "actions": lifecycle_actions,
+        },
+        {
+            "set": "BillingInvoiceTemplates",
+            "entity": "InvoiceTemplate",
+            "description": "Reusable global invoice template definitions.",
+            "allow_create": True,
+            "allow_update": True,
+            "allow_delete": False,
+            "allow_manage": True,
+            "provider_module": "catalog",
+            "crud": CrudPolicy(
+                create_schema=BillingInvoiceTemplateCreateValidation,
+                update_schema=BillingInvoiceTemplateUpdateValidation,
+            ),
+            "actions": lifecycle_actions,
+        },
+        {
+            "set": "BillingDiscountDefinitions",
+            "entity": "DiscountDefinition",
+            "description": "Reusable global discount and coupon definitions.",
+            "allow_create": True,
+            "allow_update": True,
+            "allow_delete": False,
+            "allow_manage": True,
+            "provider_module": "catalog",
+            "crud": CrudPolicy(
+                create_schema=BillingDiscountDefinitionCreateValidation,
+                update_schema=BillingDiscountDefinitionUpdateValidation,
+            ),
+            "actions": lifecycle_actions,
+        },
+        {
             "set": "BillingSubscriptions",
             "entity": "Subscription",
             "description": (
@@ -255,6 +436,16 @@ def contribute(
                     "schema": RowVersionValidation,
                     "confirm": "Reactivate this subscription?",
                 },
+                "advance_period": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": BillingSubscriptionPeriodValidation,
+                    "confirm": "Open the next Subscription period?",
+                },
+                "reconcile_entitlements": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": BillingSubscriptionPeriodValidation,
+                    "confirm": "Reconcile missing current-period entitlements?",
+                },
             },
         },
         {
@@ -268,10 +459,43 @@ def contribute(
             "allow_create": True,
             "allow_update": True,
             "allow_delete": False,
+            "allow_manage": True,
             "crud": CrudPolicy(
                 create_schema=BillingRunCreateValidation,
                 update_schema=BillingRunUpdateValidation,
             ),
+            "actions": {
+                "start": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": RowVersionValidation,
+                    "confirm": "Start this Billing Run?",
+                },
+                "complete": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": RowVersionValidation,
+                    "confirm": "Complete this Billing Run?",
+                },
+                "fail": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": BillingRunFailValidation,
+                    "confirm": "Mark this Billing Run failed?",
+                },
+                "cancel": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": RowVersionValidation,
+                    "confirm": "Cancel this Billing Run?",
+                },
+                "retry": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": BillingRunRetryValidation,
+                    "confirm": "Create a retry attempt?",
+                },
+                "reconcile_entitlements": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": RowVersionValidation,
+                    "confirm": "Reconcile this Billing Run's entitlement buckets?",
+                },
+            },
         },
         {
             "set": "BillingUsageEvents",
@@ -291,13 +515,27 @@ def contribute(
                 "Included-usage entitlement pools by account/subscription and period"
                 " (tenant-scoped)."
             ),
-            "allow_create": True,
-            "allow_update": True,
+            "allow_create": False,
+            "allow_update": False,
             "allow_delete": False,
-            "crud": CrudPolicy(
-                create_schema=BillingEntitlementBucketCreateValidation,
-                update_schema=BillingEntitlementBucketUpdateValidation,
-            ),
+            "allow_manage": True,
+            "crud": CrudPolicy(),
+            "actions": {
+                "adjust": {
+                    "perm": admin_ns.verb("manage"),
+                    "schema": BillingEntitlementAdjustValidation,
+                    "confirm": "Apply this audited entitlement adjustment?",
+                },
+            },
+        },
+        {
+            "set": "BillingEntitlementAdjustments",
+            "entity": "EntitlementAdjustment",
+            "description": "Append-only audited entitlement capacity adjustments.",
+            "allow_create": False,
+            "allow_update": False,
+            "allow_delete": False,
+            "crud": CrudPolicy(),
         },
         {
             "set": "BillingUsageAllocations",
@@ -456,8 +694,22 @@ def contribute(
         for ptyp in admin_verb_keys
     )
     catalog_object_keys = {
-        PermissionObjectDef(plugin_ns.ns, "product").key,
-        PermissionObjectDef(plugin_ns.ns, "price").key,
+        PermissionObjectDef(plugin_ns.ns, title_to_snake(resource["entity"])).key
+        for resource in resources
+        if resource["set"]
+        in {
+            "BillingCurrencyDefinitions",
+            "BillingDiscountDefinitions",
+            "BillingInvoiceTemplates",
+            "BillingMeterDefinitions",
+            "BillingPaymentTerms",
+            "BillingPriceEntitlements",
+            "BillingPrices",
+            "BillingProducts",
+            "BillingRunDefinitions",
+            "BillingTaxCodes",
+            "BillingTaxRates",
+        }
     }
     registry.register_default_global_grants(
         DefaultGlobalGrant(
@@ -477,6 +729,7 @@ def contribute(
         entity = r["entity"]
 
         obj_name = title_to_snake(entity)
+        provider_module = str(r.get("provider_module", obj_name))
         pobj = PermissionObjectDef(plugin_ns.ns, obj_name)
 
         edm_type_name = f"BILLING.{entity}"
@@ -522,14 +775,16 @@ def contribute(
         registry.register_table_spec(
             TableSpec(
                 table_name=table_name,
-                table_provider=f"mugen.core.plugin.billing.model.{obj_name}:{entity}",
+                table_provider=(
+                    f"mugen.core.plugin.billing.model.{provider_module}:{entity}"
+                ),
             )
         )
 
         registry.register_edm_type_spec(
             EdmTypeSpec(
                 edm_type_name=edm_type_name,
-                edm_provider=f"mugen.core.plugin.billing.edm:{obj_name}_type",
+                edm_provider=("mugen.core.plugin.billing.edm:" f"{obj_name}_type"),
             )
         )
 
@@ -537,7 +792,8 @@ def contribute(
             RelationalServiceSpec(
                 service_key=service_key,
                 service_cls=(
-                    f"mugen.core.plugin.billing.service.{obj_name}:{entity}Service"
+                    "mugen.core.plugin.billing.service."
+                    f"{provider_module}:{entity}Service"
                 ),
                 init_kwargs={"table": table_name},
             )

@@ -40,3 +40,27 @@ class ISubscriptionService(
         data: IValidationBase,
     ) -> tuple[dict[str, Any], int]:
         """Reactivate a subscription."""
+
+    @abstractmethod
+    async def action_advance_period(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        entity_id: uuid.UUID,
+        where: Mapping[str, Any],
+        auth_user_id: uuid.UUID,
+        data: IValidationBase,
+    ) -> tuple[dict[str, Any], int]:
+        """Open the next subscription period."""
+
+    @abstractmethod
+    async def action_reconcile_entitlements(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        entity_id: uuid.UUID,
+        where: Mapping[str, Any],
+        auth_user_id: uuid.UUID,
+        data: IValidationBase,
+    ) -> tuple[dict[str, Any], int]:
+        """Reconcile missing current-period entitlement buckets."""

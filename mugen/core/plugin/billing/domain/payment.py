@@ -18,6 +18,7 @@ class PaymentDE(BaseDE, TenantScopedDEMixin):
 
     account_id: uuid.UUID | None = None
     invoice_id: uuid.UUID | None = None
+    currency_definition_id: uuid.UUID | None = None
 
     status: str | None = None  # pending / succeeded / failed / canceled / refunded
 

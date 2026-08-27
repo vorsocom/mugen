@@ -26,6 +26,15 @@ account_type = EdmType(
         ),
         "RowVersion": EdmProperty("RowVersion", TypeRef("Edm.Int64"), nullable=False),
         "TenantId": EdmProperty("TenantId", TypeRef("Edm.Guid"), nullable=False),
+        "CurrencyDefinitionId": EdmProperty(
+            "CurrencyDefinitionId", TypeRef("Edm.Guid")
+        ),
+        "TaxCodeId": EdmProperty("TaxCodeId", TypeRef("Edm.Guid")),
+        "PaymentTermId": EdmProperty("PaymentTermId", TypeRef("Edm.Guid")),
+        "InvoiceTemplateId": EdmProperty("InvoiceTemplateId", TypeRef("Edm.Guid")),
+        "DiscountDefinitionId": EdmProperty(
+            "DiscountDefinitionId", TypeRef("Edm.Guid")
+        ),
         "Code": EdmProperty("Code", TypeRef("Edm.String"), nullable=False),
         "DisplayName": EdmProperty(
             "DisplayName", TypeRef("Edm.String"), nullable=False
@@ -42,6 +51,29 @@ account_type = EdmType(
         "DeletedByUserId": EdmProperty("DeletedByUserId", TypeRef("Edm.Guid")),
     },
     nav_properties={
+        "CurrencyDefinition": EdmNavigationProperty(
+            "CurrencyDefinition",
+            target_type=TypeRef("BILLING.CurrencyDefinition"),
+            source_fk="CurrencyDefinitionId",
+        ),
+        "TaxCode": EdmNavigationProperty(
+            "TaxCode", target_type=TypeRef("BILLING.TaxCode"), source_fk="TaxCodeId"
+        ),
+        "PaymentTerm": EdmNavigationProperty(
+            "PaymentTerm",
+            target_type=TypeRef("BILLING.PaymentTerm"),
+            source_fk="PaymentTermId",
+        ),
+        "InvoiceTemplate": EdmNavigationProperty(
+            "InvoiceTemplate",
+            target_type=TypeRef("BILLING.InvoiceTemplate"),
+            source_fk="InvoiceTemplateId",
+        ),
+        "DiscountDefinition": EdmNavigationProperty(
+            "DiscountDefinition",
+            target_type=TypeRef("BILLING.DiscountDefinition"),
+            source_fk="DiscountDefinitionId",
+        ),
         "Tenant": EdmNavigationProperty(
             "Tenant",
             target_type=TypeRef("ACP.Tenant"),

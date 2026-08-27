@@ -24,6 +24,8 @@ invoice_line_type = EdmType(
         "TenantId": EdmProperty("TenantId", TypeRef("Edm.Guid"), nullable=False),
         "InvoiceId": EdmProperty("InvoiceId", TypeRef("Edm.Guid"), nullable=False),
         "PriceId": EdmProperty("PriceId", TypeRef("Edm.Guid")),
+        "TaxCodeId": EdmProperty("TaxCodeId", TypeRef("Edm.Guid")),
+        "TaxRateId": EdmProperty("TaxRateId", TypeRef("Edm.Guid")),
         "Description": EdmProperty(
             "Description",
             TypeRef("Edm.String"),
@@ -56,6 +58,12 @@ invoice_line_type = EdmType(
             "Price",
             target_type=TypeRef("BILLING.Price"),
             source_fk="PriceId",
+        ),
+        "TaxCode": EdmNavigationProperty(
+            "TaxCode", target_type=TypeRef("BILLING.TaxCode"), source_fk="TaxCodeId"
+        ),
+        "TaxRate": EdmNavigationProperty(
+            "TaxRate", target_type=TypeRef("BILLING.TaxRate"), source_fk="TaxRateId"
         ),
     },
     key_properties=("Id",),

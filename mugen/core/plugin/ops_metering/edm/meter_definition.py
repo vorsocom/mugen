@@ -1,4 +1,4 @@
-"""Provides the meter definition EDM type definition."""
+"""Provides the deprecated tenant meter compatibility EDM type."""
 
 __all__ = ["meter_definition_type"]
 
@@ -35,6 +35,16 @@ meter_definition_type = EdmType(
             TypeRef("Edm.String"),
             filterable=False,
             sortable=False,
+        ),
+        "IsDeprecated": EdmProperty(
+            "IsDeprecated",
+            TypeRef("Edm.Boolean"),
+            nullable=False,
+        ),
+        "SuccessorEntitySet": EdmProperty(
+            "SuccessorEntitySet",
+            TypeRef("Edm.String"),
+            nullable=False,
         ),
     },
     key_properties=("Id",),

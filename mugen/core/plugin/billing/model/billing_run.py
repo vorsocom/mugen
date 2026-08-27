@@ -11,8 +11,10 @@ import uuid
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
+    ForeignKey,
     ForeignKeyConstraint,
     Index,
+    Integer,
     Text,
     UniqueConstraint,
     Uuid,
@@ -54,10 +56,26 @@ class BillingRun(ModelBase, TenantScopedMixin):
         index=True,
     )
 
-    run_type: Mapped[str] = mapped_column(
-        CITEXT(64),
+    definition_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey(
+            f"{CORE_SCHEMA_TOKEN}.billing_run_definition.id",
+            ondelete="RESTRICT",
+        ),
         nullable=False,
         index=True,
+    )
+
+    retry_of_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        nullable=True,
+        index=True,
+    )
+
+    attempt_number: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default=sa_text("1"),
     )
 
     period_start: Mapped["datetime"] = mapped_column(  # type: ignore
@@ -95,7 +113,7 @@ class BillingRun(ModelBase, TenantScopedMixin):
         nullable=True,
     )
 
-    finished_at: Mapped["datetime | None"] = mapped_column(  # type: ignore
+    completed_at: Mapped["datetime | None"] = mapped_column(  # type: ignore
         DateTime(timezone=True),
         nullable=True,
     )
@@ -106,7 +124,12 @@ class BillingRun(ModelBase, TenantScopedMixin):
         index=True,
     )
 
-    error_message: Mapped[str | None] = mapped_column(
+    failure_code: Mapped[str | None] = mapped_column(
+        CITEXT(128),
+        nullable=True,
+    )
+
+    failure_detail: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
     )
@@ -127,19 +150,30 @@ class BillingRun(ModelBase, TenantScopedMixin):
     __table_args__ = (
         ForeignKeyConstraint(
             ("tenant_id", "account_id"),
-            (f"{CORE_SCHEMA_TOKEN}.billing_account.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_account.id"),
+            (
+                f"{CORE_SCHEMA_TOKEN}.billing_account.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.billing_account.id",
+            ),
             name="fkx_billing_run__tenant_account",
             ondelete="SET NULL",
         ),
         ForeignKeyConstraint(
             ("tenant_id", "subscription_id"),
-            (f"{CORE_SCHEMA_TOKEN}.billing_subscription.tenant_id", f"{CORE_SCHEMA_TOKEN}.billing_subscription.id"),
+            (
+                f"{CORE_SCHEMA_TOKEN}.billing_subscription.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.billing_subscription.id",
+            ),
             name="fkx_billing_run__tenant_subscription",
             ondelete="SET NULL",
         ),
-        CheckConstraint(
-            "length(btrim(run_type)) > 0",
-            name="ck_billing_run__run_type_nonempty",
+        ForeignKeyConstraint(
+            ("tenant_id", "retry_of_run_id"),
+            (
+                f"{CORE_SCHEMA_TOKEN}.billing_run.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.billing_run.id",
+            ),
+            name="fkx_billing_run__tenant_retry_of_run",
+            ondelete="RESTRICT",
         ),
         CheckConstraint(
             "period_end > period_start",
@@ -148,6 +182,14 @@ class BillingRun(ModelBase, TenantScopedMixin):
         CheckConstraint(
             "length(btrim(idempotency_key)) > 0",
             name="ck_billing_run__idempotency_key_nonempty",
+        ),
+        CheckConstraint(
+            "attempt_number > 0",
+            name="ck_billing_run__attempt_positive",
+        ),
+        CheckConstraint(
+            "failure_code IS NULL OR length(btrim(failure_code)) > 0",
+            name="ck_billing_run__failure_code_nonempty_if_set",
         ),
         CheckConstraint(
             "external_ref IS NULL OR length(btrim(external_ref)) > 0",
@@ -165,9 +207,9 @@ class BillingRun(ModelBase, TenantScopedMixin):
             unique=True,
         ),
         Index(
-            "ix_billing_run__tenant_run_type_period",
+            "ix_billing_run__tenant_definition_period",
             "tenant_id",
-            "run_type",
+            "definition_id",
             "period_start",
         ),
         Index(

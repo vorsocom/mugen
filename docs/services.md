@@ -109,12 +109,14 @@ and provide reusable platform primitives:
   graph links and business-trace observability timeline events. Evidence is
   metadata-first and references external storage rather than making ACP a blob
   store.
-- `billing`: account/product/price/subscription/usage/invoice/payment primitives.
+- `billing`: global commercial/metering/reference definitions and tenant-scoped
+  subscription, usage, entitlement, run, invoice, and payment operations.
 - `channel_orchestration`: intake, routing, throttle, blocklist, and fallback.
 - `knowledge_pack`: versioned knowledge content lifecycle and retrieval metadata.
 - `ops_case`: canonical case lifecycle, assignment, escalation, and timeline.
 - `ops_governance`: consent/delegation/policy/retention metadata and actions.
-- `ops_metering`: usage capture/rating/session primitives.
+- `ops_metering`: tenant usage capture/rating/session primitives backed by global
+  Billing meter definitions.
 - `ops_reporting`: metric definition, aggregation, and snapshot lifecycle.
 - `ops_sla`: business-hour-aware clocks and breach markers.
 - `ops_vpn`: operations vendor registry and lifecycle scorecard primitives.

@@ -24,6 +24,9 @@ payment_type = EdmType(
         "TenantId": EdmProperty("TenantId", TypeRef("Edm.Guid"), nullable=False),
         "AccountId": EdmProperty("AccountId", TypeRef("Edm.Guid"), nullable=False),
         "InvoiceId": EdmProperty("InvoiceId", TypeRef("Edm.Guid")),
+        "CurrencyDefinitionId": EdmProperty(
+            "CurrencyDefinitionId", TypeRef("Edm.Guid"), nullable=False
+        ),
         "Status": EdmProperty("Status", TypeRef("Edm.String"), nullable=False),
         "Currency": EdmProperty("Currency", TypeRef("Edm.String"), nullable=False),
         "Amount": EdmProperty("Amount", TypeRef("Edm.Int64"), nullable=False),
@@ -48,6 +51,11 @@ payment_type = EdmType(
             "Account",
             target_type=TypeRef("BILLING.Account"),
             source_fk="AccountId",
+        ),
+        "CurrencyDefinition": EdmNavigationProperty(
+            "CurrencyDefinition",
+            target_type=TypeRef("BILLING.CurrencyDefinition"),
+            source_fk="CurrencyDefinitionId",
         ),
         "Invoice": EdmNavigationProperty(
             "Invoice",
