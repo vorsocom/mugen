@@ -124,7 +124,7 @@ That means:
 - `client_profile_key` may still vary downstream context by transport account
   when needed;
 - `service_route_key` is the preferred downstream selector for business-surface
-  routing such as `valet.core` vs `valet.customer_inbox`.
+  routing such as `example.default` vs `example.customer_support`.
 
 ## Runtime Managers And Reload
 

@@ -29,7 +29,7 @@ def _resolved_route() -> IngressRouteResolution:
             channel_key="whatsapp",
             identifier_claims={"phone": "+15550000"},
             channel_profile_id=uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
-            service_route_key="valet.core",
+            service_route_key="example.default",
             route_key="default",
             binding_id=uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"),
         ),
@@ -64,7 +64,9 @@ class TestContextScopeResolution(unittest.TestCase):
             resolved.ingress_route["tenant_resolution"]["source"],
             "whatsapp.ipc",
         )
-        self.assertEqual(resolved.ingress_route["service_route_key"], "valet.core")
+        self.assertEqual(
+            resolved.ingress_route["service_route_key"], "example.default"
+        )
 
     def test_missing_binding_and_missing_identifier_fallback_to_global(self) -> None:
         for reason in (

@@ -496,9 +496,9 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         entry = SimpleNamespace(
             type="fw",
-            token="vorsocom.fw.valet_car_rentals",
-            name="com.vorsocomputing.mugen.valet_car_rentals",
-            namespace="com.vorsocomputing.mugen.valet_car_rentals",
+            token="example.fw.car_rentals",
+            name="com.example.mugen.car_rentals",
+            namespace="com.example.mugen.car_rentals",
             contrib="car_rentals_extension.contrib",
             runtime_module="car_rentals_extension.fw_ext",
             runtime_class="CarRentalsFWExtension",
@@ -508,7 +508,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
             ext_mod,
             "resolve_extension_spec",
             side_effect=RuntimeError(
-                "Unknown extension token: 'vorsocom.fw.valet_car_rentals'. "
+                "Unknown extension token: 'example.fw.car_rentals'. "
                 "Known tokens: core.fw.acp."
             ),
         ), patch(
@@ -517,7 +517,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
         ):
             spec = ext_mod.resolve_configured_extension_spec(
                 entry=entry,
-                token="vorsocom.fw.valet_car_rentals",
+                token="example.fw.car_rentals",
                 configured_type="fw",
             )
 
@@ -530,9 +530,9 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         entry = SimpleNamespace(
             type="fw",
-            token="vorsocom.fw.valet_car_rentals",
-            name="com.vorsocomputing.mugen.valet_car_rentals",
-            namespace="com.vorsocomputing.mugen.valet_car_rentals",
+            token="example.fw.car_rentals",
+            name="com.example.mugen.car_rentals",
+            namespace="com.example.mugen.car_rentals",
             contrib="car_rentals_extension.contrib",
             runtime_module="car_rentals_extension.fw_ext",
         )
@@ -542,7 +542,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
                 ext_mod,
                 "resolve_extension_spec",
                 side_effect=RuntimeError(
-                    "Unknown extension token: 'vorsocom.fw.valet_car_rentals'. "
+                    "Unknown extension token: 'example.fw.car_rentals'. "
                     "Known tokens: core.fw.acp."
                 ),
             ),
@@ -553,7 +553,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
         ):
             ext_mod.resolve_configured_extension_spec(
                 entry=entry,
-                token="vorsocom.fw.valet_car_rentals",
+                token="example.fw.car_rentals",
                 configured_type="fw",
             )
 
@@ -562,9 +562,9 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         entry = SimpleNamespace(
             type="fw",
-            token="vorsocom.fw.valet_car_rentals",
-            name="com.vorsocomputing.mugen.valet_car_rentals",
-            namespace="com.vorsocomputing.mugen.valet_car_rentals",
+            token="example.fw.car_rentals",
+            name="com.example.mugen.car_rentals",
+            namespace="com.example.mugen.car_rentals",
             contrib="car_rentals_extension.contrib",
             runtime_module="car_rentals_extension.fw_ext:CarRentalsFWExtension",
             runtime_class="CarRentalsFWExtension",
@@ -575,7 +575,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
                 ext_mod,
                 "resolve_extension_spec",
                 side_effect=RuntimeError(
-                    "Unknown extension token: 'vorsocom.fw.valet_car_rentals'. "
+                    "Unknown extension token: 'example.fw.car_rentals'. "
                     "Known tokens: core.fw.acp."
                 ),
             ),
@@ -586,7 +586,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
         ):
             ext_mod.resolve_configured_extension_spec(
                 entry=entry,
-                token="vorsocom.fw.valet_car_rentals",
+                token="example.fw.car_rentals",
                 configured_type="fw",
             )
 
@@ -595,9 +595,9 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         entry = SimpleNamespace(
             type="fw",
-            token="vorsocom.fw.valet_car_rentals",
-            name="com.vorsocomputing.mugen.valet_car_rentals",
-            namespace="com.vorsocomputing.mugen.valet_car_rentals",
+            token="example.fw.car_rentals",
+            name="com.example.mugen.car_rentals",
+            namespace="com.example.mugen.car_rentals",
             contrib="car_rentals_extension.contrib",
             runtime_module="car_rentals_extension.fw_ext",
             runtime_class="CarRentalsFWExtension",
@@ -606,7 +606,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
         def _unknown_token(_token: object, *, scope: str = "any") -> None:
             _ = scope
             raise RuntimeError(
-                "Unknown extension token: 'vorsocom.fw.valet_car_rentals'. "
+                "Unknown extension token: 'example.fw.car_rentals'. "
                 "Known tokens: core.fw.acp."
             )
 
@@ -640,7 +640,7 @@ class TestExtensionRegistryResolution(unittest.IsolatedAsyncioTestCase):
                 ):
                     ext_mod.resolve_configured_extension_spec(
                         entry=entry,
-                        token="vorsocom.fw.valet_car_rentals",
+                        token="example.fw.car_rentals",
                         configured_type="fw",
                     )
 

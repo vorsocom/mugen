@@ -258,7 +258,7 @@ class TestDISchemaValidationBranches(unittest.TestCase):
             (
                 {
                     "type": "fw",
-                    "token": "vorsocom.fw.valet_car_rentals",
+                    "token": "example.fw.car_rentals",
                     "runtime_module": "car_rentals_extension.fw_ext",
                 },
                 "mugen.modules.extensions\\[0\\].runtime_class must be a "
@@ -267,7 +267,7 @@ class TestDISchemaValidationBranches(unittest.TestCase):
             (
                 {
                     "type": "fw",
-                    "token": "vorsocom.fw.valet_car_rentals",
+                    "token": "example.fw.car_rentals",
                     "runtime_class": "CarRentalsFWExtension",
                 },
                 "mugen.modules.extensions\\[0\\].runtime_module must be a "
@@ -276,7 +276,7 @@ class TestDISchemaValidationBranches(unittest.TestCase):
             (
                 {
                     "type": "fw",
-                    "token": "vorsocom.fw.valet_car_rentals",
+                    "token": "example.fw.car_rentals",
                     "runtime_module": "car_rentals_extension.fw_ext:CarRentalsFWExtension",
                     "runtime_class": "CarRentalsFWExtension",
                 },
@@ -310,7 +310,7 @@ class TestDISchemaValidationBranches(unittest.TestCase):
         di._validate_extension_entry_schema(  # pylint: disable=protected-access
             {
                 "type": "fw",
-                "token": "vorsocom.fw.valet_car_rentals",
+                "token": "example.fw.car_rentals",
                 "runtime_module": "car_rentals_extension.fw_ext",
                 "runtime_class": "CarRentalsFWExtension",
             },
