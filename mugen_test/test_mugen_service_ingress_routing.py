@@ -79,7 +79,7 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
             identifier_claims={"identifier_type": "path_token", "identifier_value": "tok"},
             channel_profile_id=uuid.UUID("22222222-2222-2222-2222-222222222222"),
             client_profile_id=uuid.UUID("44444444-4444-4444-4444-444444444444"),
-            service_route_key="valet.customer_inbox",
+            service_route_key="example.customer_support",
             route_key="queue.line",
             binding_id=uuid.UUID("33333333-3333-3333-3333-333333333333"),
             client_profile_key="default",
@@ -88,7 +88,7 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
         context = build_ingress_route_context(result)
         self.assertEqual(context["tenant_slug"], "tenant-a")
         self.assertEqual(context["route_key"], "queue.line")
-        self.assertEqual(context["service_route_key"], "valet.customer_inbox")
+        self.assertEqual(context["service_route_key"], "example.customer_support")
         self.assertEqual(
             context["client_profile_id"],
             "44444444-4444-4444-4444-444444444444",
@@ -154,7 +154,7 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
                     "channel_key": "line",
                     "identifier_type": "path_token",
                     "identifier_value": "token-a",
-                    "service_route_key": "valet.customer_inbox",
+                    "service_route_key": "example.customer_support",
                     "is_active": True,
                     "attributes": {"route_key": "queue.line"},
                 }
@@ -164,7 +164,7 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
                     "id": channel_profile_id,
                     "tenant_id": tenant_id,
                     "is_active": True,
-                    "service_route_default_key": "valet.core",
+                    "service_route_default_key": "example.default",
                     "route_default_key": "queue.default",
                     "client_profile_id": client_profile_id,
                 }
@@ -205,7 +205,7 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolved.result.client_profile_key, "profile-a")
         self.assertEqual(
             resolved.result.service_route_key,
-            "valet.customer_inbox",
+            "example.customer_support",
         )
 
     async def test_resolve_success_uses_profile_route_key_when_binding_attrs_missing(self) -> None:
@@ -234,7 +234,7 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
                         "id": channel_profile_id,
                         "tenant_id": tenant_id,
                         "is_active": True,
-                        "service_route_default_key": "valet.core",
+                        "service_route_default_key": "example.default",
                         "route_default_key": "queue.default",
                     }
                 ],
@@ -259,7 +259,7 @@ class TestMugenServiceIngressRouting(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(resolved.ok)
         assert resolved.result is not None
         self.assertEqual(resolved.result.route_key, "queue.default")
-        self.assertEqual(resolved.result.service_route_key, "valet.core")
+        self.assertEqual(resolved.result.service_route_key, "example.default")
         self.assertIn(
             tenant_id,
             {where.get("tenant_id") for where in fake_rsg.find_many_wheres},

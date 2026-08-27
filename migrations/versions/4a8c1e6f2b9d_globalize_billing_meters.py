@@ -11,7 +11,6 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Sequence, Union
 import logging
-import uuid
 
 from alembic import context, op
 import sqlalchemy as sa
@@ -52,25 +51,6 @@ _METER_REFERENCE_TABLES = (
         "RESTRICT",
     ),
 )
-_SEED_NAMESPACE = uuid.UUID("7fa8584b-da24-48bb-830f-fb2d8e4c6494")
-_SEED_METERS = (
-    (
-        "valet.customer-inbox.minutes",
-        "minute",
-        "sum",
-        "Customer Inbox staff effort in whole minutes",
-        {"module_key": "customer_inbox", "usage_kind": "cim"},
-    ),
-    (
-        "valet.customer-inbox.tasks",
-        "task",
-        "sum",
-        "Customer Inbox completed task count",
-        {"module_key": "customer_inbox", "usage_kind": "cct"},
-    ),
-)
-
-
 def _qualified(table_name: str) -> str:
     return f'"{_SCHEMA}"."{table_name}"'
 
@@ -159,18 +139,6 @@ def _validate_price_meter_contracts(
     canonical_rows: list[dict[str, Any]],
 ) -> None:
     meters = {row["code"]: row for row in canonical_rows}
-    for code, unit, aggregation, description, attributes in _SEED_METERS:
-        meters.setdefault(
-            code,
-            {
-                "code": code,
-                "unit": unit,
-                "aggregation_mode": aggregation,
-                "description": description,
-                "attributes": attributes,
-                "is_active": True,
-            },
-        )
     conflicts: list[str] = []
     for price in price_rows:
         price_type = str(price.get("price_type"))
@@ -434,27 +402,6 @@ def upgrade() -> None:
     op.drop_table("ops_metering_meter_definition", schema=_SCHEMA)
     op.execute(f'DROP TYPE IF EXISTS "{_SCHEMA}"."ops_metering_meter_unit"')
     op.execute(f'DROP TYPE IF EXISTS "{_SCHEMA}"."ops_metering_aggregation_mode"')
-
-    for code, unit, aggregation, description, attributes in _SEED_METERS:
-        conn.execute(
-            sa.text(f"""
-                INSERT INTO {_qualified('billing_meter_definition')}
-                    (id, code, unit, aggregation_mode, description, is_active,
-                     attributes)
-                VALUES
-                    (:id, :code, :unit, :aggregation_mode, :description, true,
-                     CAST(:attributes AS jsonb))
-                ON CONFLICT (code) DO NOTHING
-            """),
-            {
-                "id": uuid.uuid5(_SEED_NAMESPACE, code),
-                "code": code,
-                "unit": unit,
-                "aggregation_mode": aggregation,
-                "description": description,
-                "attributes": __import__("json").dumps(attributes),
-            },
-        )
 
     op.add_column(
         "billing_price",

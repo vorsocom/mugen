@@ -99,6 +99,22 @@ class TestNormalizedBillingMigrationPlans(unittest.TestCase):
                 ],
                 canonical,
             )
+            try:
+                meters_mod._validate_price_meter_contracts(
+                    [
+                        {
+                            "id": uuid.uuid4(),
+                            "price_type": "metered",
+                            "meter_code": "example.usage.minutes",
+                            "usage_unit": "minute",
+                        }
+                    ],
+                    [],
+                )
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("metered Price accepted an empty meter inventory")
             invalid_prices = [
                 {
                     "price_type": "metered",
@@ -130,12 +146,12 @@ class TestNormalizedBillingMigrationPlans(unittest.TestCase):
             meter_rows = [
                 {
                     "id": minute_id,
-                    "code": "valet.customer-inbox.minutes",
+                    "code": "example.usage.minutes",
                     "is_active": True,
                 },
                 {
                     "id": task_id,
-                    "code": "valet.customer-inbox.tasks",
+                    "code": "example.usage.tasks",
                     "is_active": True,
                 },
             ]
@@ -146,7 +162,10 @@ class TestNormalizedBillingMigrationPlans(unittest.TestCase):
                 "interval_unit": "month",
                 "interval_count": 1,
                 "attributes": {
-                    "included_usage": {"cim": 150, "cct": 2},
+                    "included_usage": {
+                        " Example.Usage.Minutes ": 150,
+                        "example.usage.tasks": 2,
+                    },
                     "label": "lite",
                 },
             }
@@ -159,15 +178,43 @@ class TestNormalizedBillingMigrationPlans(unittest.TestCase):
             )
             assert definitions_mod._entitlement_plan([price], meter_rows) == rules
 
+            literal_id = uuid.uuid4()
+            literal_rules = definitions_mod._entitlement_plan(
+                [
+                    {
+                        **price,
+                        "attributes": {"included_usage": {"minutes": 1}},
+                    }
+                ],
+                [{"id": literal_id, "code": "minutes", "is_active": True}],
+            )
+            assert len(literal_rules) == 1
+            assert literal_rules[0]["meter_definition_id"] == literal_id
+
             invalid_entitlements = [
                 {**price, "attributes": {"included_usage": []}},
                 {**price, "price_type": "one_time"},
                 {**price, "deleted_at": now},
                 {**price, "attributes": {"included_usage": {"absent": 1}}},
-                {**price, "attributes": {"included_usage": {"cim": True}}},
-                {**price, "attributes": {"included_usage": {"cim": 1.5}}},
-                {**price, "attributes": {"included_usage": {"cim": -1}}},
-                {**price, "attributes": {"included_usage": {"cim": 1, "minutes": 1}}},
+                {**price, "attributes": {"included_usage": {"minutes": 1}}},
+                {
+                    **price,
+                    "attributes": {
+                        "included_usage": {"example.usage.minutes": True}
+                    },
+                },
+                {
+                    **price,
+                    "attributes": {
+                        "included_usage": {"example.usage.minutes": 1.5}
+                    },
+                },
+                {
+                    **price,
+                    "attributes": {
+                        "included_usage": {"example.usage.minutes": -1}
+                    },
+                },
             ]
             for invalid in invalid_entitlements:
                 try:

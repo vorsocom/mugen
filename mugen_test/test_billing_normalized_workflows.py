@@ -220,12 +220,12 @@ class TestNormalizedBillingWorkflows(unittest.IsolatedAsyncioTestCase):
         for meter_id, code, unit in (
             (
                 self.meter_ids[0],
-                "valet.customer-inbox.minutes",
+                "example.usage.minutes",
                 "minute",
             ),
             (
                 self.meter_ids[1],
-                "valet.customer-inbox.tasks",
+                "example.usage.tasks",
                 "task",
             ),
         ):

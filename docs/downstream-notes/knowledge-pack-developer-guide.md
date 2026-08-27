@@ -130,7 +130,7 @@ Minimal resource payloads:
   "Channel": "refund-desk",
   "Locale": "en-US",
   "Category": "refunds",
-  "ServiceRouteKey": "valet.customer_inbox",
+  "ServiceRouteKey": "example.customer_support",
   "ClientProfileKey": "vip-sms",
   "IsActive": true
 }
@@ -257,7 +257,7 @@ Expected ingress metadata:
   "locale": "en-US",
   "category": "refunds",
   "ingress_route": {
-    "service_route_key": "valet.customer_inbox",
+    "service_route_key": "example.customer_support",
     "client_profile_key": "vip-sms"
   }
 }

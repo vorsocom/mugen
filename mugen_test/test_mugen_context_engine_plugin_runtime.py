@@ -662,7 +662,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
                 SimpleNamespace(
                     platform="matrix",
                     channel_key="matrix",
-                    service_route_key="valet.core",
+                    service_route_key="example.default",
                 ),
                 _scope(),
                 "customer.inbox",
@@ -684,7 +684,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
                 SimpleNamespace(
                     platform="matrix",
                     channel_key="matrix",
-                    service_route_key="valet.core",
+                    service_route_key="example.default",
                 ),
                 _scope(),
                 "customer.inbox",
@@ -1640,7 +1640,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
                     "service_route_key": "top-level",
                     "client_profile_key": "top-profile",
                     "ingress_route": {
-                        "service_route_key": "valet.customer_inbox",
+                        "service_route_key": "example.customer_support",
                         "client_profile_key": "matrix-primary",
                     },
                 }
@@ -1659,7 +1659,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             knowledge_scope_service.list_published_revisions.await_args.kwargs[
                 "service_route_key"
             ],
-            "valet.customer_inbox",
+            "example.customer_support",
         )
         self.assertEqual(
             knowledge_scope_service.list_published_revisions.await_args.kwargs[
@@ -1723,7 +1723,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
                 return_value=[
                     SimpleNamespace(
                         status="open",
-                        service_route_key="valet.customer_inbox",
+                        service_route_key="example.customer_support",
                         route_key="route-1",
                         assigned_queue_name="support",
                         assigned_service_key="svc",
@@ -1756,7 +1756,7 @@ class TestMugenContextEnginePluginRuntime(unittest.IsolatedAsyncioTestCase):
             channel_candidates[0].artifact.content["conversation"][
                 "service_route_key"
             ],
-            "valet.customer_inbox",
+            "example.customer_support",
         )
         self.assertEqual(
             await ChannelOrchestrationContributor(

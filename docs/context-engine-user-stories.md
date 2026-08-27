@@ -146,9 +146,9 @@ policy was selected before any contributor ran.
 Tenant `Asteria Travel` serves:
 
 - browser chat for standard concierge requests;
-- a tenant workflow split between `valet.customer_inbox` and `valet.core`;
+- a tenant workflow split between `example.customer_support` and `example.default`;
 - a downstream VIP messaging bridge that stamps
-  `service_route_key="valet.customer_inbox"` and
+  `service_route_key="example.customer_support"` and
   `client_profile_key="vip-sms"` into ingress metadata.
 
 A guest on the VIP bridge expects a tighter persona, narrower evidence set, and
@@ -189,7 +189,7 @@ ingress_metadata = {
     "source": "crm_binding"
   },
   "ingress_route": {
-    "service_route_key": "valet.customer_inbox",
+    "service_route_key": "example.customer_support",
     "client_profile_key": "vip-sms"
   },
   "locale": "en-US",
@@ -1884,7 +1884,7 @@ ingress_metadata = {
     "source": "crm_binding"
   },
   "ingress_route": {
-    "service_route_key": "valet.customer_inbox",
+    "service_route_key": "example.customer_support",
     "client_profile_key": "vip-cruise"
   },
   "locale": "en-US",
@@ -1898,7 +1898,7 @@ Relevant ACP changes before the turn:
 
 ```text
 ContextProfiles:
-- { "name": "vip-cruise", "platform": "web", "channel_key": "cruise-desk", "service_route_key": "valet.customer_inbox", "client_profile_key": "vip-cruise", "policy_id": "..." }
+- { "name": "vip-cruise", "platform": "web", "channel_key": "cruise-desk", "service_route_key": "example.customer_support", "client_profile_key": "vip-cruise", "policy_id": "..." }
 
 ContextPolicies:
 - { "policy_key": "vip-cruise-tight", "contributor_allow": ["persona_policy", "recent_turns", "knowledge_pack", "ops_case"], "source_deny": ["memory_record"] }

@@ -361,7 +361,7 @@ Example resolved policy shape:
   "metadata": {
     "profile_name": "vip-sms",
     "persona": "White-glove travel desk",
-    "service_route_key": "valet.customer_inbox",
+    "service_route_key": "example.customer_support",
     "trace_policy_name": "vip-debug"
   }
 }
