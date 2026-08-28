@@ -142,7 +142,12 @@ class _FakeRegistry:
         self._service = service
         self._resource = SimpleNamespace(
             service_key="user_svc",
-            namespace="com.test.acp",
+            namespace="com.test.source",
+            edm_type_name="ACP.User",
+            permissions=SimpleNamespace(
+                permission_object="com.test.source:user",
+                read="com.test.acp:read",
+            ),
             behavior=SimpleNamespace(
                 rgql_enabled=rgql_enabled,
                 rgql_max_expand_depth=None,
@@ -153,7 +158,12 @@ class _FakeRegistry:
             "ACP.User": self._resource,
             "ACP.GlobalRole": SimpleNamespace(
                 service_key="role_svc",
-                namespace="com.test.acp",
+                namespace="com.test.target",
+                edm_type_name="ACP.GlobalRole",
+                permissions=SimpleNamespace(
+                    permission_object="com.test.custom:recognizable_role",
+                    read="com.test.acp:read",
+                ),
             ),
         }
 
@@ -199,16 +209,31 @@ class _TenantDiscoveryRegistry:
             "Users": SimpleNamespace(
                 service_key="user_svc",
                 namespace="com.test.acp",
+                edm_type_name="ACP.User",
+                permissions=SimpleNamespace(
+                    permission_object="com.test.acp:user",
+                    read="com.test.acp:read",
+                ),
                 behavior=behavior,
             ),
             "TenantMemberships": SimpleNamespace(
                 service_key="membership_svc",
                 namespace="com.test.acp",
+                edm_type_name="ACP.TenantMembership",
+                permissions=SimpleNamespace(
+                    permission_object="com.test.acp:tenant_membership",
+                    read="com.test.acp:read",
+                ),
                 behavior=behavior,
             ),
             "Tenants": SimpleNamespace(
                 service_key="tenant_svc",
                 namespace="com.test.acp",
+                edm_type_name="ACP.Tenant",
+                permissions=SimpleNamespace(
+                    permission_object="com.test.acp:tenant",
+                    read="com.test.acp:read",
+                ),
                 behavior=behavior,
             ),
         }
@@ -1035,6 +1060,7 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
             return kwargs
 
         user_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
         auth_svc = SimpleNamespace(has_permission=AsyncMock(return_value=True))
         logger = SimpleNamespace(debug=Mock(), error=Mock())
         service = SimpleNamespace(
@@ -1065,6 +1091,7 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
                 return await self._perm_provider(edm_type, path)
 
         wrapped = rgql_mod.rgql_enabled(
+            tenant_kw="tenant_id",
             config_provider=_config,
             logger_provider=lambda: logger,
             auth_provider=lambda: auth_svc,
@@ -1098,7 +1125,9 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
                 result = await wrapped(
                     entity_set="Users",
                     entity_id=None,
+                    tenant_id=str(tenant_id),
                     auth_user=str(user_id),
+                    allow_global_admin=True,
                 )
 
         self.assertEqual(len(result["rgql"].expand), 1)
@@ -1106,8 +1135,124 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
         auth_svc.has_permission.assert_awaited_once()
         self.assertEqual(
             auth_svc.has_permission.await_args.kwargs["permission_object"],
-            "com.test.acp:global_role",
+            "com.test.custom:recognizable_role",
         )
+        self.assertEqual(
+            auth_svc.has_permission.await_args.kwargs["permission_type"],
+            "com.test.acp:read",
+        )
+        self.assertEqual(
+            auth_svc.has_permission.await_args.kwargs["tenant_id"],
+            tenant_id,
+        )
+        self.assertTrue(
+            auth_svc.has_permission.await_args.kwargs["allow_global_admin"]
+        )
+        logger.debug.assert_called_once_with(
+            "Suppressing $expand ACP.User.Missing: navigation property is not "
+            "registered."
+        )
+
+    async def test_unregistered_and_unauthorized_expands_are_suppressed(self) -> None:
+        async def _endpoint(**kwargs):
+            return kwargs
+
+        user_id = uuid.uuid4()
+        service = SimpleNamespace(
+            list=AsyncMock(return_value=[_Entity(id=uuid.uuid4(), name="Alice")]),
+            count=AsyncMock(return_value=0),
+        )
+
+        class _Adapter:
+            def build_relational_query(self, _opts, **_kwargs):
+                return ([], [], None, None)
+
+        class _Ctx:
+            def __init__(self, **kwargs):
+                self.max_depth = kwargs["max_depth"]
+                self._perm_provider = kwargs["path_permission_provider"]
+
+            async def permitted(self, edm_type, path: str) -> bool:
+                return await self._perm_provider(edm_type, path)
+
+        for mode in ("unregistered", "unauthorized"):
+            with self.subTest(mode=mode):
+                registry = _FakeRegistry(service=service, rgql_enabled=True)
+                if mode == "unregistered":
+                    registry._resource_by_type.pop(  # pylint: disable=protected-access
+                        "ACP.GlobalRole"
+                    )
+                auth_svc = SimpleNamespace(
+                    has_permission=AsyncMock(return_value=False)
+                )
+                logger = SimpleNamespace(debug=Mock(), error=Mock())
+                opts = SimpleNamespace(
+                    select=["Name"],
+                    expand=[SimpleNamespace(path="Role", levels=None)],
+                    count=False,
+                )
+                expand_mock = AsyncMock(return_value=None)
+                wrapped = rgql_mod.rgql_enabled(
+                    config_provider=_config,
+                    logger_provider=lambda logger=logger: logger,
+                    auth_provider=lambda auth_svc=auth_svc: auth_svc,
+                    registry_provider=lambda registry=registry: registry,
+                )(_endpoint)
+
+                with (
+                    patch.object(
+                        rgql_mod,
+                        "SemanticChecker",
+                        new=_FakeSemanticChecker,
+                    ),
+                    patch.object(
+                        rgql_mod,
+                        "RGQLToRelationalAdapter",
+                        new=lambda: _Adapter(),
+                    ),
+                    patch.object(rgql_mod, "ExpansionContext", new=_Ctx),
+                    patch.object(
+                        rgql_mod,
+                        "parse_rgql_url",
+                        return_value=_rgql_url(opts=opts),
+                    ),
+                    patch.object(
+                        rgql_mod,
+                        "make_default_where_provider",
+                        return_value=lambda _edm_type_name: {},
+                    ),
+                    patch.object(
+                        rgql_mod,
+                        "apply_to_filter_groups",
+                        side_effect=lambda filter_groups, where: filter_groups,
+                    ),
+                    patch.object(rgql_mod, "expand_navs_bulk", new=expand_mock),
+                ):
+                    async with self.app.test_request_context(
+                        "/api/core/acp/v1/Users?$expand=Role",
+                        method="GET",
+                    ):
+                        result = await wrapped(
+                            entity_set="Users",
+                            entity_id=None,
+                            auth_user=str(user_id),
+                        )
+
+                self.assertEqual(result["rgql"].expand, [])
+                self.assertNotIn("Role", result["rgql"].values[0])
+                expand_mock.assert_not_awaited()
+                if mode == "unregistered":
+                    auth_svc.has_permission.assert_not_awaited()
+                    logger.debug.assert_called_once_with(
+                        "Suppressing $expand ACP.User.Role: target resource "
+                        "'ACP.GlobalRole' is not registered."
+                    )
+                else:
+                    auth_svc.has_permission.assert_awaited_once()
+                    logger.debug.assert_called_once_with(
+                        "Suppressing $expand ACP.User.Role: read permission denied "
+                        "for ACP.GlobalRole."
+                    )
 
     async def test_current_user_can_expand_active_tenant_memberships(self) -> None:
         async def _endpoint(**kwargs):

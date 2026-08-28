@@ -303,6 +303,28 @@ expect_code "LOOKUP PRICE ENTITLEMENT" 200 "$tmp_dir/entitlement_lookup.json" \
   -G -H "$auth_header" "$base_url/BillingPriceEntitlements" \
   --data-urlencode "\$filter=PriceId eq guid'$package_id'" --data-urlencode "\$top=1"
 entitlement_id="$(jq -r '.value[0].Id // empty' "$tmp_dir/entitlement_lookup.json")"
+expect_code "EXPAND PRICE ENTITLEMENT REFERENCES" 200 "$tmp_dir/entitlement_expand.json" \
+  -G -H "$auth_header" "$base_url/BillingPriceEntitlements" \
+  --data-urlencode "\$filter=Id eq guid'$entitlement_id'" \
+  --data-urlencode "\$top=1" \
+  --data-urlencode "\$expand=Price(\$select=Code,PriceType,Currency),MeterDefinition(\$select=Code,Unit)"
+if ! jq -e --arg price "$package_id" --arg price_code "$package_code" \
+  --arg meter "$meter_id" --arg meter_code "$meter_code" '
+  .value | length == 1
+  and .[0].PriceId == $price
+  and .[0].Price.Code == $price_code
+  and .[0].Price.PriceType == "recurring"
+  and .[0].Price.Currency == "USD"
+  and (.[0].Price | has("ProductId") | not)
+  and (.[0].Price | has("UnitAmount") | not)
+  and .[0].MeterDefinitionId == $meter
+  and .[0].MeterDefinition.Code == $meter_code
+  and .[0].MeterDefinition.Unit == "minute"
+  and (.[0].MeterDefinition | has("AggregationMode") | not)
+' "$tmp_dir/entitlement_expand.json" >/dev/null; then
+  echo "ERROR: Price Entitlement navigation expansion is incorrect." >&2
+  exit 1
+fi
 
 create_account() {
   local tenant="$1"
@@ -341,6 +363,33 @@ account_one="$(create_account "$tenant_one" one)"
 account_two="$(create_account "$tenant_two" two)"
 subscription_one="$(create_subscription "$tenant_one" "$account_one" one)"
 subscription_two="$(create_subscription "$tenant_two" "$account_two" two)"
+
+expect_code "EXPAND SUBSCRIPTION REFERENCES" 200 "$tmp_dir/subscription_expand.json" \
+  -G -H "$auth_header" "$base_url/tenants/$tenant_one/BillingSubscriptions" \
+  --data-urlencode "\$filter=Id eq guid'$subscription_one'" \
+  --data-urlencode "\$top=1" \
+  --data-urlencode "\$expand=Account(\$select=DisplayName,Code),Price(\$select=Code,PriceType,Currency)"
+if ! jq -e --arg account "$account_one" \
+  --arg account_code "${code_prefix}-account-one" \
+  --arg price "$package_id" --arg price_code "$package_code" '
+  .value | length == 1
+  and .[0].AccountId == $account
+  and .[0].Account.DisplayName == ("Account " + $account_code)
+  and .[0].Account.Code == $account_code
+  and (.[0].Account | has("CurrencyDefinitionId") | not)
+  and .[0].PriceId == $price
+  and .[0].Price.Code == $price_code
+  and .[0].Price.PriceType == "recurring"
+  and .[0].Price.Currency == "USD"
+  and (.[0].Price | has("UnitAmount") | not)
+' "$tmp_dir/subscription_expand.json" >/dev/null; then
+  echo "ERROR: Subscription navigation expansion is incorrect." >&2
+  exit 1
+fi
+expect_code "TENANT ACCOUNT ISOLATION" 404 "$tmp_dir/cross_tenant_account.json" \
+  -H "$auth_header" "$base_url/tenants/$tenant_one/BillingAccounts/$account_two"
+expect_code "TENANT SUBSCRIPTION ISOLATION" 404 "$tmp_dir/cross_tenant_subscription.json" \
+  -H "$auth_header" "$base_url/tenants/$tenant_one/BillingSubscriptions/$subscription_two"
 
 expect_code "TENANT ONE BUCKETS" 200 "$tmp_dir/buckets_one.json" \
   -G -H "$auth_header" "$base_url/tenants/$tenant_one/BillingEntitlementBuckets" \
@@ -496,5 +545,43 @@ meter_action="$(jq -cn --argjson row_version "$meter_rv" '{RowVersion:$row_versi
 expect_code "BLOCK REFERENCED METER DEACTIVATION" 409 "$tmp_dir/meter_blocked.json" \
   -H "$auth_header" -H "Content-Type: application/json" \
   -X POST "$base_url/BillingMeterDefinitions/$meter_id/\$action/deactivate" -d "$meter_action"
+
+expect_code "GET REFERENCED PACKAGE PRICE" 200 "$tmp_dir/package_referenced.json" \
+  -H "$auth_header" "$base_url/BillingPrices/$package_id"
+package_rv="$(jq -r '.RowVersion' "$tmp_dir/package_referenced.json")"
+package_action="$(jq -cn --argjson row_version "$package_rv" '{RowVersion:$row_version}')"
+expect_code "ARCHIVE REFERENCED PACKAGE PRICE" 204 "$tmp_dir/package_archive.json" \
+  -H "$auth_header" -H "Content-Type: application/json" \
+  -X POST "$base_url/BillingPrices/$package_id/\$action/archive" -d "$package_action"
+
+expect_code "EXPAND ARCHIVED ENTITLEMENT PRICE" 200 "$tmp_dir/archived_entitlement_expand.json" \
+  -G -H "$auth_header" "$base_url/BillingPriceEntitlements" \
+  --data-urlencode "\$filter=Id eq guid'$entitlement_id'" \
+  --data-urlencode "\$top=1" \
+  --data-urlencode "\$expand=Price(\$select=Code,PriceType,Currency)"
+if ! jq -e --arg price_code "$package_code" '
+  .value | length == 1
+  and .[0].Price.Code == $price_code
+  and .[0].Price.IsArchived == true
+  and .[0].Price.DeletedAt != null
+' "$tmp_dir/archived_entitlement_expand.json" >/dev/null; then
+  echo "ERROR: Price Entitlement did not resolve its archived Price." >&2
+  exit 1
+fi
+
+expect_code "EXPAND ARCHIVED SUBSCRIPTION PRICE" 200 "$tmp_dir/archived_subscription_expand.json" \
+  -G -H "$auth_header" "$base_url/tenants/$tenant_one/BillingSubscriptions" \
+  --data-urlencode "\$filter=Id eq guid'$subscription_one'" \
+  --data-urlencode "\$top=1" \
+  --data-urlencode "\$expand=Price(\$select=Code,PriceType,Currency)"
+if ! jq -e --arg price_code "$package_code" '
+  .value | length == 1
+  and .[0].Price.Code == $price_code
+  and .[0].Price.IsArchived == true
+  and .[0].Price.DeletedAt != null
+' "$tmp_dir/archived_subscription_expand.json" >/dev/null; then
+  echo "ERROR: Subscription did not resolve its archived Price." >&2
+  exit 1
+fi
 
 echo "PASS: normalized Billing global definitions and tenant operations"
