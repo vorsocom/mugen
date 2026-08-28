@@ -24,7 +24,6 @@ from mugen.core.contract.gateway.storage.rdbms.types import (
 from mugen.core.plugin.acp.contract.service.authorization import IAuthorizationService
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
 from mugen.core.plugin.acp.contract.sdk.resource import SoftDeleteMode
-from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.plugin.acp.utility.rgql.nav_filter_planner import plan_related_path
 from mugen.core.plugin.acp.utility.rgql.default_where import (
     make_default_where_provider,
@@ -462,28 +461,44 @@ def rgql_enabled(
                 resource path."""
                 nav_property = edm_type.nav_properties.get(path)
                 if nav_property is None:
+                    _logger.debug(
+                        f"Suppressing $expand {edm_type.name}.{path}: "
+                        "navigation property is not registered."
+                    )
                     return False
 
-                namespace = registry.get_resource_by_type(edm_type.name).namespace
-                ns = AdminNs(namespace)
-
                 tname = nav_property.target_type.name or ""
-                leaf = tname.split(".", 1)[1] if "." in tname else tname
-
-                perm_obj = ns.obj(title_to_snake(leaf))
-                perm_type = ns.verb("read")
+                try:
+                    target_resource = registry.get_resource_by_type(tname)
+                except KeyError:
+                    _logger.debug(
+                        f"Suppressing $expand {edm_type.name}.{path}: "
+                        f"target resource {tname!r} is not registered."
+                    )
+                    return False
 
                 permitted = await auth_svc.has_permission(
                     user_id=auth_user_id,
-                    permission_object=perm_obj,
-                    permission_type=perm_type,
+                    permission_object=(
+                        target_resource.permissions.permission_object
+                    ),
+                    permission_type=target_resource.permissions.read,
                     tenant_id=tenant_id,
                     allow_global_admin=allow_global_admin,
                 )
                 if permitted:
                     return True
 
-                return _self_tenant_discovery_path_permitted(edm_type, path)
+                self_discovery_permitted = _self_tenant_discovery_path_permitted(
+                    edm_type,
+                    path,
+                )
+                if not self_discovery_permitted:
+                    _logger.debug(
+                        f"Suppressing $expand {edm_type.name}.{path}: "
+                        f"read permission denied for {target_resource.edm_type_name}."
+                    )
+                return self_discovery_permitted
 
             admin_edm_schema = registry.schema
             semantic_checker = SemanticChecker(model=admin_edm_schema)

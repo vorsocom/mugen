@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from dataclasses import fields
 from datetime import datetime, timezone
 from types import SimpleNamespace
 import os
@@ -30,7 +31,12 @@ from mugen.core.plugin.billing.api.validation import (
     BillingProductUpdateValidation,
 )
 from mugen.core.plugin.billing.contrib import contribute
-from mugen.core.plugin.billing.domain import PriceDE, ProductDE
+from mugen.core.plugin.billing.domain import (
+    MeterDefinitionDE,
+    PriceDE,
+    PriceEntitlementDE,
+    ProductDE,
+)
 from mugen.core.plugin.billing.edm import price_type, product_type
 from mugen.core.plugin.billing.model import Price, Product
 from mugen.core.plugin.billing.service import price as price_mod
@@ -65,6 +71,31 @@ def _rsg(**overrides):
 
 class TestBillingGlobalCatalogContract(unittest.TestCase):
     """Covers EDM, validation, model, and ACP permission contracts."""
+
+    def test_price_entitlement_navigation_fields_are_serializable(self) -> None:
+        price = PriceDE(code="customer-inbox-monthly", currency="USD")
+        meter = MeterDefinitionDE(
+            code="valet.customer-inbox.minutes",
+            unit="minute",
+        )
+        entitlement = PriceEntitlementDE()
+
+        self.assertIsNone(entitlement.price)
+        self.assertIsNone(entitlement.meter_definition)
+        self.assertTrue(
+            {"price", "meter_definition"}.issubset(
+                {field.name for field in fields(entitlement)}
+            )
+        )
+
+        entitlement.price = price
+        entitlement.meter_definition = meter
+        serialized = {
+            field.name: getattr(entitlement, field.name)
+            for field in fields(entitlement)
+        }
+        self.assertIs(serialized["price"], price)
+        self.assertIs(serialized["meter_definition"], meter)
 
     def test_product_and_price_edm_are_global_and_price_has_no_tenant_reverse_navs(
         self,

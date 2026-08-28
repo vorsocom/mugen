@@ -14,11 +14,14 @@ __all__ = [
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import uuid
 
 from mugen.core.plugin.acp.domain.base import BaseDE
 from mugen.core.plugin.acp.domain.mixin.soft_delete import SoftDeleteDEMixin
+
+if TYPE_CHECKING:
+    from mugen.core.plugin.billing.domain.price import PriceDE
 
 
 @dataclass
@@ -42,6 +45,9 @@ class PriceEntitlementDE(BaseDE, SoftDeleteDEMixin):
     included_quantity: int | None = None
     rollover_policy: str | None = None
     attributes: dict[str, Any] | None = None
+
+    price: "PriceDE | None" = None
+    meter_definition: "MeterDefinitionDE | None" = None
 
 
 @dataclass
