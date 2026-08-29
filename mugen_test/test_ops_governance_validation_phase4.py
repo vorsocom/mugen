@@ -33,6 +33,7 @@ from mugen.core.plugin.ops_governance.api.validation import (
     LegalHoldPlaceHoldActionValidation,
     LegalHoldReleaseHoldActionValidation,
     RetentionClassCreateValidation,
+    RetentionClassUpdateValidation,
     RetentionPolicyRunLifecycleValidation,
 )
 
@@ -52,6 +53,9 @@ class TestOpsGovernanceValidationPhase4(unittest.TestCase):
         self.assertEqual(payload.tenant_id, tenant_id)
         self.assertEqual(payload.code, " default-audit ")
         self.assertEqual(payload.resource_type, "audit_event")
+        self.assertEqual(payload.retention_days, 0)
+        self.assertIsNone(payload.redaction_after_days)
+        self.assertEqual(payload.purge_grace_days, 30)
 
         with self.assertRaises(ValidationError):
             RetentionClassCreateValidation(
@@ -89,6 +93,34 @@ class TestOpsGovernanceValidationPhase4(unittest.TestCase):
                 name="name",
                 resource_type="not_supported",
             )
+
+    def test_retention_class_update_accepts_non_negative_day_counts(self) -> None:
+        payload = RetentionClassUpdateValidation.model_validate(
+            {
+                "RowVersion": 1,
+                "RetentionDays": 365,
+                "RedactionAfterDays": 90,
+                "PurgeGraceDays": 30,
+            }
+        )
+
+        self.assertEqual(payload.retention_days, 365)
+        self.assertEqual(payload.redaction_after_days, 90)
+        self.assertEqual(payload.purge_grace_days, 30)
+
+    def test_retention_class_update_rejects_invalid_day_counts(self) -> None:
+        fields = (
+            "RetentionDays",
+            "RedactionAfterDays",
+            "PurgeGraceDays",
+        )
+        for field_name in fields:
+            for invalid_value in (-1, 1.5, "not-an-integer"):
+                with self.subTest(field=field_name, value=invalid_value):
+                    with self.assertRaises(ValidationError):
+                        RetentionClassUpdateValidation.model_validate(
+                            {field_name: invalid_value}
+                        )
 
     def test_legal_hold_validation(self) -> None:
         tenant_id = uuid.uuid4()

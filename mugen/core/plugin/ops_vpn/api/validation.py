@@ -72,6 +72,7 @@ VendorUpdateValidation = build_update_validation_from_pascal(
         "ExternalRef",
         "Attributes",
     ),
+    optional_field_types={"ReverificationCadenceDays": PositiveInt},
 )
 
 VendorCategoryCreateValidation = build_create_validation_from_pascal(
@@ -204,6 +205,11 @@ ScorecardPolicyUpdateValidation = build_update_validation_from_pascal(
         "RequireAllMetrics",
         "Attributes",
     ),
+    optional_field_types={
+        "CompletionRateWeight": NonNegativeInt,
+        "ComplaintRateWeight": NonNegativeInt,
+        "ResponseSlaWeight": NonNegativeInt,
+    },
 )
 
 
