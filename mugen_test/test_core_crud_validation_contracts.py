@@ -2,6 +2,8 @@
 
 import unittest
 
+from pydantic import NonNegativeInt, ValidationError
+
 from mugen.core.plugin.acp.api.validation.crud_builder import (
     build_create_validation_from_pascal,
     build_update_validation_from_pascal,
@@ -12,6 +14,12 @@ from mugen.core.plugin.acp.contract.api.validation import IValidationBase
 from mugen.core.plugin.acp.sdk.registry import AdminRegistry
 from mugen.core.plugin.acp.utility.ns import AdminNs
 from mugen.core.plugin.billing.contrib import contribute as contribute_billing
+from mugen.core.plugin.channel_orchestration.api.validation import (
+    IntakeRuleUpdateValidation,
+    OrchestrationPolicyUpdateValidation,
+    RoutingRuleUpdateValidation,
+    ThrottleRuleUpdateValidation,
+)
 from mugen.core.plugin.channel_orchestration.contrib import (
     contribute as contribute_channel_orchestration,
 )
@@ -35,6 +43,13 @@ from mugen.core.plugin.ops_reporting.contrib import (
     contribute as contribute_ops_reporting,
 )
 from mugen.core.plugin.ops_sla.contrib import contribute as contribute_ops_sla
+from mugen.core.plugin.ops_sla.api.validation import (
+    SlaEscalationPolicyUpdateValidation,
+)
+from mugen.core.plugin.ops_vpn.api.validation import (
+    ScorecardPolicyUpdateValidation,
+    VendorUpdateValidation,
+)
 from mugen.core.plugin.ops_vpn.contrib import contribute as contribute_ops_vpn
 from mugen.core.plugin.ops_workflow.contrib import (
     contribute as contribute_ops_workflow,
@@ -158,6 +173,89 @@ class TestCoreCrudValidationContracts(unittest.TestCase):
             "DisplayName must be non-empty when provided.",
         ):
             update_schema(display_name=" ")
+
+        typed_update_schema = build_update_validation_from_pascal(
+            "GeneratedTypedCrudUpdateValidation",
+            module=__name__,
+            doc="Validate generated typed update payloads.",
+            optional_fields=("Priority",),
+            optional_field_types={"Priority": NonNegativeInt},
+        )
+        typed_update = typed_update_schema(Priority=3)
+        self.assertEqual(typed_update.priority, 3)
+        with self.assertRaises(ValidationError):
+            typed_update_schema(Priority=-1)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "Typed fields must be declared as optional fields: Priority.",
+        ):
+            build_update_validation_from_pascal(
+                "InvalidGeneratedTypedCrudUpdateValidation",
+                module=__name__,
+                doc="Reject undeclared typed update fields.",
+                optional_fields=("DisplayName",),
+                optional_field_types={"Priority": NonNegativeInt},
+            )
+
+    def test_generated_numeric_update_fields_match_persistence_constraints(
+        self,
+    ) -> None:
+        cases = (
+            (
+                VendorUpdateValidation,
+                {"ReverificationCadenceDays": 1},
+                {"ReverificationCadenceDays": 0},
+            ),
+            (
+                ScorecardPolicyUpdateValidation,
+                {
+                    "CompletionRateWeight": 0,
+                    "ComplaintRateWeight": 1,
+                    "ResponseSlaWeight": 2,
+                },
+                {"CompletionRateWeight": -1},
+            ),
+            (
+                IntakeRuleUpdateValidation,
+                {"Priority": 0},
+                {"Priority": -1},
+            ),
+            (
+                RoutingRuleUpdateValidation,
+                {"Priority": 0},
+                {"Priority": -1},
+            ),
+            (
+                OrchestrationPolicyUpdateValidation,
+                {"EscalationAfterSeconds": 0},
+                {"EscalationAfterSeconds": -1},
+            ),
+            (
+                ThrottleRuleUpdateValidation,
+                {
+                    "MaxMessages": 1,
+                    "BlockDurationSeconds": 0,
+                    "Priority": 0,
+                },
+                {"MaxMessages": 0},
+            ),
+            (
+                SlaEscalationPolicyUpdateValidation,
+                {"Priority": 0},
+                {"Priority": -1},
+            ),
+        )
+
+        for schema, valid_payload, invalid_payload in cases:
+            with self.subTest(schema=schema.__name__):
+                validated = schema.model_validate(valid_payload)
+                validated_payload = validated.model_dump(by_alias=True)
+                for field_name in valid_payload:
+                    value = validated_payload[field_name]
+                    self.assertIsInstance(value, int)
+                with self.assertRaises(ValidationError):
+                    schema.model_validate(invalid_payload)
 
 
 if __name__ == "__main__":

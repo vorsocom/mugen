@@ -9,6 +9,7 @@ __all__ = [
     "build_update_validation_from_pascal",
 ]
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, ClassVar
 import uuid
@@ -210,6 +211,7 @@ def _build_fields(
     optional_datetime: tuple[str, ...] = (),
     required_any: tuple[str, ...] = (),
     optional_any: tuple[str, ...] = (),
+    optional_typed: Mapping[str, Any] | None = None,
 ) -> dict[str, tuple[Any, Any]]:
     fields: dict[str, tuple[Any, Any]] = {}
     fields.update(_required_fields(str, required_text))
@@ -222,6 +224,8 @@ def _build_fields(
     fields.update(_optional_fields(datetime, optional_datetime))
     fields.update(_required_fields(Any, required_any))
     fields.update(_optional_fields(Any, optional_any))
+    for field_name, annotation in (optional_typed or {}).items():
+        fields[field_name] = (annotation | None, None)
     return fields
 
 
@@ -308,6 +312,7 @@ def build_update_validation(
     optional_bool: tuple[str, ...] = (),
     optional_datetime: tuple[str, ...] = (),
     optional_any: tuple[str, ...] = (),
+    optional_typed: Mapping[str, Any] | None = None,
     empty_update_message: str = "At least one mutable field must be provided.",
 ) -> type[IValidationBase]:
     """Build one update validator with optional fields and no-op patch rejection."""
@@ -321,6 +326,7 @@ def build_update_validation(
             optional_bool=optional_bool,
             optional_datetime=optional_datetime,
             optional_any=optional_any,
+            optional_typed=optional_typed,
         ),
     )
     model.__doc__ = doc
@@ -331,6 +337,7 @@ def build_update_validation(
         + optional_bool
         + optional_datetime
         + optional_any
+        + tuple(optional_typed or ())
     )
     model._empty_update_message = empty_update_message
     return model
@@ -370,10 +377,21 @@ def build_update_validation_from_pascal(
     module: str,
     doc: str,
     optional_fields: tuple[str, ...],
+    optional_field_types: Mapping[str, Any] | None = None,
     empty_update_message: str = "At least one mutable field must be provided.",
 ) -> type[IValidationBase]:
     """Build one update validator from ACP PascalCase field names."""
-    grouped = _group_pascal_fields(optional_fields)
+    field_types = optional_field_types or {}
+    unknown_fields = set(field_types).difference(optional_fields)
+    if unknown_fields:
+        unknown = ", ".join(sorted(unknown_fields))
+        raise ValueError(
+            f"Typed fields must be declared as optional fields: {unknown}."
+        )
+
+    grouped = _group_pascal_fields(
+        tuple(field for field in optional_fields if field not in field_types)
+    )
     return build_update_validation(
         name,
         module=module,
@@ -383,5 +401,9 @@ def build_update_validation_from_pascal(
         optional_bool=grouped["bool"],
         optional_datetime=grouped["datetime"],
         optional_any=grouped["any"],
+        optional_typed={
+            title_to_snake(field_name): annotation
+            for field_name, annotation in field_types.items()
+        },
         empty_update_message=empty_update_message,
     )

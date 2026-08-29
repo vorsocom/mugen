@@ -56,6 +56,9 @@ from mugen.core.plugin.acp.contract.sdk.resource import SoftDeleteMode
 from mugen.core.plugin.channel_orchestration.api.validation import (
     RoutingRuleCreateValidation,
 )
+from mugen.core.plugin.ops_governance.api.validation import (
+    RetentionClassUpdateValidation,
+)
 
 
 class _AbortCalled(Exception):
@@ -1225,6 +1228,7 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                         registry_provider=lambda: integrity_invalid_registry,
                     )
                 self.assertEqual(ex.exception.code, 400)
+
         self.assertEqual(emit.await_args.kwargs["outcome"], "invalid")
 
         update_tenant_fn = crud_mod.update_entity_tenant.__wrapped__
@@ -1484,6 +1488,70 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                         ),
                     )
                 self.assertEqual(ex.exception.code, 400)
+
+    async def test_retention_class_tenant_patch_preserves_integer_type(
+        self,
+    ) -> None:
+        entity_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        before = SimpleNamespace(id=entity_id, purge_grace_days=15)
+        after = SimpleNamespace(id=entity_id, purge_grace_days=30)
+        service = SimpleNamespace(
+            get=AsyncMock(return_value=before),
+            update_with_row_version=AsyncMock(return_value=after),
+        )
+        registry = _FakeRegistry(
+            resource=_resource(
+                update_schema=RetentionClassUpdateValidation,
+                edm_type_name="OPSGOVERNANCE.RetentionClass",
+            ),
+            service=service,
+            tenant_scoped=True,
+        )
+
+        update_fn = crud_mod.update_entity_tenant.__wrapped__
+        async with self.app.test_request_context(
+            (
+                f"/api/core/acp/v1/tenants/{tenant_id}/"
+                f"OpsRetentionClasses/{entity_id}"
+            ),
+            method="PATCH",
+            json={"RowVersion": 1, "PurgeGraceDays": 30},
+        ):
+            with patch.object(
+                crud_mod,
+                "emit_audit_event",
+                new=AsyncMock(return_value=None),
+            ):
+                _, status = await update_fn(
+                    tenant_id=str(tenant_id),
+                    entity_set="OpsRetentionClasses",
+                    entity_id=str(entity_id),
+                    auth_user=str(actor_id),
+                    logger_provider=_logger,
+                    registry_provider=lambda: registry,
+                )
+
+        self.assertEqual(status, 204)
+        changes = service.update_with_row_version.await_args.kwargs["changes"]
+        self.assertEqual(changes, {"purge_grace_days": 30})
+        self.assertIsInstance(changes["purge_grace_days"], int)
+
+        get_fn = crud_mod.get_entities_tenant.__wrapped__.__wrapped__
+        response = await get_fn(
+            entity_set="OpsRetentionClasses",
+            entity_id=str(entity_id),
+            edm_type_name="OPSGOVERNANCE.RetentionClass",
+            rgql=SimpleNamespace(
+                count=None,
+                values=[{"PurgeGraceDays": after.purge_grace_days}],
+            ),
+            logger_provider=_logger,
+            registry_provider=lambda: registry,
+        )
+        self.assertEqual(response["PurgeGraceDays"], 30)
+        self.assertIsInstance(response["PurgeGraceDays"], int)
 
     async def test_delete_entity_and_delete_entity_tenant_paths(self) -> None:
         entity_id = uuid.uuid4()

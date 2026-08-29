@@ -165,6 +165,7 @@ IntakeRuleUpdateValidation = build_update_validation_from_pascal(
         "IsActive",
         "Attributes",
     ),
+    optional_field_types={"Priority": NonNegativeInt},
 )
 
 class RoutingRuleCreateValidation(IValidationBase):
@@ -230,6 +231,7 @@ RoutingRuleUpdateValidation = build_update_validation_from_pascal(
         "IsActive",
         "Attributes",
     ),
+    optional_field_types={"Priority": NonNegativeInt},
 )
 
 OrchestrationPolicyCreateValidation = build_create_validation_from_pascal(
@@ -255,6 +257,7 @@ OrchestrationPolicyUpdateValidation = build_update_validation_from_pascal(
         "IsActive",
         "Attributes",
     ),
+    optional_field_types={"EscalationAfterSeconds": NonNegativeInt},
 )
 
 ConversationStateCreateValidation = build_create_validation_from_pascal(
@@ -392,6 +395,11 @@ ThrottleRuleUpdateValidation = build_update_validation_from_pascal(
         "IsActive",
         "Attributes",
     ),
+    optional_field_types={
+        "MaxMessages": PositiveInt,
+        "BlockDurationSeconds": NonNegativeInt,
+        "Priority": NonNegativeInt,
+    },
 )
 
 BlocklistEntryCreateValidation = build_create_validation_from_pascal(

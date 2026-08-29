@@ -54,6 +54,8 @@ Key fields:
 - `lookup`: identify created entity by field/value.
 - `actions`: ordered entity `$action` calls; payload supports placeholders:
   `__ROW_VERSION__`, `__ENTITY_ID__`, `__TENANT_ID__`, `__USER_ID__`.
+- `updates`: ordered entity PATCH calls with optional type-sensitive
+  `expect_entity` assertions against the refreshed entity.
 - `assertions`: optional final checks (`final_status`, expected event sequence).
 - `negative_creates` and `positive_creates`: optional create-path checks on any entity set.
 - `collection_queries`: optional collection GET checks with encoded `params`, expected
