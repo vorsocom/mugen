@@ -322,6 +322,61 @@ if [[ "$absent_field_count" -gt 0 ]]; then
   done
 fi
 
+updates_count="$(echo "$spec_json" | jq -r '.updates | length // 0')"
+if [[ "$updates_count" -gt 0 ]]; then
+  if [[ -z "$entity_id" ]]; then
+    echo "ERROR: updates require entity_id, but none is available." >&2
+    exit 1
+  fi
+
+  for i in $(seq 0 $((updates_count - 1))); do
+    step="$(echo "$spec_json" | jq -c ".updates[$i]")"
+    name="$(echo "$step" | jq -r '.name // empty')"
+    if [[ -z "$name" ]]; then
+      name="update_${i}"
+    fi
+    expect_code="$(echo "$step" | jq -r '.expect_code // 204')"
+    expect_entity="$(echo "$step" | jq -c '.expect_entity // null')"
+    payload_template="$(echo "$step" | jq -c '.payload // {}')"
+    payload="$(replace_placeholders "$payload_template" "$row_version" "$entity_id" "$tenant_id" "$user_id")"
+
+    update_output_file="/tmp/acp_http_e2e_update_${i}.out"
+    code="$(curl -sk -o "$update_output_file" -w "%{http_code}" \
+      -H "$auth_header" -H "Content-Type: application/json" \
+      -X PATCH "$resource_url/$entity_id" -d "$payload")"
+    echo "UPDATE $name: $code"
+    if [[ "$code" != "$expect_code" ]]; then
+      echo "ERROR: update $name expected $expect_code got $code" >&2
+      cat "$update_output_file" >&2
+      exit 1
+    fi
+
+    entity_json="$(curl -sk -H "$auth_header" "$resource_url/$entity_id")"
+    row_version="$(echo "$entity_json" | jq -r '.RowVersion // empty')"
+    entity_status="$(echo "$entity_json" | jq -r --arg sf "$status_field" '.[$sf] // ""')"
+    if [[ -z "$row_version" ]]; then
+      echo "ERROR: could not resolve RowVersion for entity $entity_id after update $name." >&2
+      echo "$entity_json" >&2
+      exit 1
+    fi
+    echo "STATE AFTER UPDATE $name: ROW_VERSION=$row_version ${status_field}=$entity_status"
+
+    if [[ "$expect_entity" != "null" ]]; then
+      echo "ASSERT UPDATE ENTITY $name: expected=$expect_entity"
+      if ! echo "$entity_json" | jq -e --argjson expected "$expect_entity" '
+        . as $actual
+        | $expected
+        | to_entries
+        | all(.[]; $actual[.key] == .value)
+      ' >/dev/null; then
+        echo "ERROR: update $name entity response mismatch" >&2
+        echo "$entity_json" >&2
+        exit 1
+      fi
+    fi
+  done
+fi
+
 actions_count="$(echo "$spec_json" | jq -r '.actions | length')"
 if [[ "$actions_count" -gt 0 ]]; then
   for i in $(seq 0 $((actions_count - 1))); do

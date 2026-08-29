@@ -1,0 +1,45 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "admin",
+    "password": "aDmin,123"
+  },
+  "tenant_id": null,
+  "entity_set": "OpsRetentionClasses",
+  "create_payload": {
+    "Code": "ret-__POLICY_CODE__",
+    "Name": "Retention Class __POLICY_CODE__",
+    "ResourceType": "audit_event",
+    "PurgeGraceDays": 15
+  },
+  "lookup": {
+    "field": "Code",
+    "value": "ret-__POLICY_CODE__"
+  },
+  "status_field": "PurgeGraceDays",
+  "updates": [
+    {
+      "name": "purge_grace_days_integer",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "PurgeGraceDays": 30
+      },
+      "expect_entity": {
+        "PurgeGraceDays": 30
+      }
+    }
+  ],
+  "actions": [],
+  "assertions": {
+    "final_status": null
+  },
+  "negative_creates": [],
+  "positive_creates": []
+}

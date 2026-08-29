@@ -287,4 +287,5 @@ SlaEscalationPolicyUpdateValidation = build_update_validation_from_pascal(
         "IsActive",
         "Attributes",
     ),
+    optional_field_types={"Priority": NonNegativeInt},
 )

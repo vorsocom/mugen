@@ -21,6 +21,19 @@
     "value": "Unique test title"
   },
   "status_field": "Status",
+  "updates": [
+    {
+      "name": "update_status",
+      "expect_code": 204,
+      "payload": {
+        "RowVersion": "__ROW_VERSION__",
+        "Status": "updated"
+      },
+      "expect_entity": {
+        "Status": "updated"
+      }
+    }
+  ],
   "actions": [
     {
       "name": "first_action",

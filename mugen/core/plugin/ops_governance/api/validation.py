@@ -7,6 +7,7 @@ import uuid
 from pydantic import Field, NonNegativeInt, PositiveInt, model_validator
 
 from mugen.core.plugin.acp.api.validation.crud_builder import (
+    build_update_validation,
     build_update_validation_from_pascal,
 )
 from mugen.core.plugin.acp.contract.api.validation import IValidationBase
@@ -439,22 +440,18 @@ class RetentionClassCreateValidation(IValidationBase):
         return self
 
 
-RetentionClassUpdateValidation = build_update_validation_from_pascal(
+RetentionClassUpdateValidation = build_update_validation(
     "RetentionClassUpdateValidation",
     module=__name__,
     doc="Validate update payloads for RetentionClass.",
-    optional_fields=(
-        "Code",
-        "Name",
-        "ResourceType",
-        "RetentionDays",
-        "RedactionAfterDays",
-        "PurgeGraceDays",
-        "LegalHoldAllowed",
-        "IsActive",
-        "Description",
-        "Attributes",
-    ),
+    optional_text=("code", "name", "resource_type", "description"),
+    optional_bool=("legal_hold_allowed", "is_active"),
+    optional_any=("attributes",),
+    optional_typed={
+        "retention_days": NonNegativeInt,
+        "redaction_after_days": NonNegativeInt,
+        "purge_grace_days": NonNegativeInt,
+    },
 )
 
 
