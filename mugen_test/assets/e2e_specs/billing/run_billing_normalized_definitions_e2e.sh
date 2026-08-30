@@ -363,6 +363,7 @@ account_one="$(create_account "$tenant_one" one)"
 account_two="$(create_account "$tenant_two" two)"
 subscription_one="$(create_subscription "$tenant_one" "$account_one" one)"
 subscription_two="$(create_subscription "$tenant_two" "$account_two" two)"
+bucket_expand='PriceEntitlement($select=IncludedQuantity,PriceId,MeterDefinitionId;$expand=Price($select=Code,ProductId;$expand=Product($select=Name)),MeterDefinition($select=Code,Description,Unit)),MeterDefinition($select=Code,Description,Unit)'
 
 expect_code "EXPAND SUBSCRIPTION REFERENCES" 200 "$tmp_dir/subscription_expand.json" \
   -G -H "$auth_header" "$base_url/tenants/$tenant_one/BillingSubscriptions" \
@@ -393,29 +394,68 @@ expect_code "TENANT SUBSCRIPTION ISOLATION" 404 "$tmp_dir/cross_tenant_subscript
 
 expect_code "TENANT ONE BUCKETS" 200 "$tmp_dir/buckets_one.json" \
   -G -H "$auth_header" "$base_url/tenants/$tenant_one/BillingEntitlementBuckets" \
-  --data-urlencode "\$filter=SubscriptionId eq guid'$subscription_one'"
+  --data-urlencode "\$filter=SubscriptionId eq guid'$subscription_one'" \
+  --data-urlencode "\$expand=$bucket_expand"
 expect_code "TENANT TWO BUCKETS" 200 "$tmp_dir/buckets_two.json" \
   -G -H "$auth_header" "$base_url/tenants/$tenant_two/BillingEntitlementBuckets" \
-  --data-urlencode "\$filter=SubscriptionId eq guid'$subscription_two'"
-if ! jq -e --arg entitlement "$entitlement_id" --arg meter "$meter_id" '
+  --data-urlencode "\$filter=SubscriptionId eq guid'$subscription_two'" \
+  --data-urlencode "\$expand=$bucket_expand"
+if ! jq -e --arg entitlement "$entitlement_id" --arg meter "$meter_id" \
+  --arg price_code "$package_code" --arg product_name "Normalized package" \
+  --arg meter_code "$meter_code" '
   .value | length == 1
   and .[0].PriceEntitlementId == $entitlement
   and .[0].MeterDefinitionId == $meter
   and .[0].IncludedQuantity == 150
   and .[0].GenerationSource == "subscription_activation"
+  and .[0].PriceEntitlement.IncludedQuantity == 150
+  and .[0].PriceEntitlement.Price.Code == $price_code
+  and .[0].PriceEntitlement.Price.Product.Name == $product_name
+  and .[0].PriceEntitlement.MeterDefinition.Code == $meter_code
+  and .[0].PriceEntitlement.MeterDefinition.Description == "Normalized Billing E2E meter"
+  and .[0].PriceEntitlement.MeterDefinition.Unit == "minute"
+  and .[0].MeterDefinition.Code == $meter_code
+  and .[0].MeterDefinition.Description == "Normalized Billing E2E meter"
+  and .[0].MeterDefinition.Unit == "minute"
 ' "$tmp_dir/buckets_one.json" >/dev/null; then
-  echo "ERROR: tenant one generated bucket provenance is incorrect." >&2
+  echo "ERROR: tenant one generated bucket expansion is incorrect." >&2
   exit 1
 fi
-if ! jq -e '.value | length == 1 and .[0].IncludedQuantity == 150' "$tmp_dir/buckets_two.json" >/dev/null; then
+if ! jq -e --arg entitlement "$entitlement_id" --arg meter "$meter_id" \
+  --arg price_code "$package_code" --arg meter_code "$meter_code" '
+  .value | length == 1
+  and .[0].PriceEntitlementId == $entitlement
+  and .[0].MeterDefinitionId == $meter
+  and .[0].IncludedQuantity == 150
+  and .[0].PriceEntitlement.Price.Code == $price_code
+  and .[0].PriceEntitlement.MeterDefinition.Code == $meter_code
+  and .[0].MeterDefinition.Code == $meter_code
+' "$tmp_dir/buckets_two.json" >/dev/null; then
   echo "ERROR: tenant two did not reuse the global entitlement contract." >&2
   exit 1
 fi
 bucket_one="$(jq -r '.value[0].Id' "$tmp_dir/buckets_one.json")"
 bucket_two="$(jq -r '.value[0].Id' "$tmp_dir/buckets_two.json")"
 bucket_one_rv="$(jq -r '.value[0].RowVersion' "$tmp_dir/buckets_one.json")"
+expect_code "GET EXPANDED BUCKET" 200 "$tmp_dir/bucket_expanded.json" \
+  -G -H "$auth_header" \
+  "$base_url/tenants/$tenant_one/BillingEntitlementBuckets/$bucket_one" \
+  --data-urlencode "\$expand=$bucket_expand"
+if ! jq -e --arg entitlement "$entitlement_id" --arg meter "$meter_id" \
+  --arg price_code "$package_code" --arg meter_code "$meter_code" '
+  .PriceEntitlementId == $entitlement
+  and .MeterDefinitionId == $meter
+  and .PriceEntitlement.Price.Code == $price_code
+  and .PriceEntitlement.MeterDefinition.Code == $meter_code
+  and .MeterDefinition.Code == $meter_code
+' "$tmp_dir/bucket_expanded.json" >/dev/null; then
+  echo "ERROR: entity-by-ID bucket expansion is incorrect." >&2
+  exit 1
+fi
 expect_code "TENANT ISOLATION" 404 "$tmp_dir/cross_tenant_bucket.json" \
-  -H "$auth_header" "$base_url/tenants/$tenant_one/BillingEntitlementBuckets/$bucket_two"
+  -G -H "$auth_header" \
+  "$base_url/tenants/$tenant_one/BillingEntitlementBuckets/$bucket_two" \
+  --data-urlencode "\$expand=$bucket_expand"
 
 adjust_payload="$(jq -cn --argjson rv "$bucket_one_rv" \
   '{RowVersion:$rv,QuantityDelta:5,Reason:"E2E correction",IdempotencyKey:"normalized-e2e-adjust"}')"
@@ -450,8 +490,15 @@ expect_code "RECONCILE SUBSCRIPTION" 204 "$tmp_dir/reconcile.json" \
   -d "$reconcile_payload"
 expect_code "BUCKETS AFTER RECONCILE" 200 "$tmp_dir/buckets_reconciled.json" \
   -G -H "$auth_header" "$base_url/tenants/$tenant_one/BillingEntitlementBuckets" \
-  --data-urlencode "\$filter=SubscriptionId eq guid'$subscription_one'"
-if ! jq -e '.value | length == 1 and .[0].IncludedQuantity == 150' "$tmp_dir/buckets_reconciled.json" >/dev/null; then
+  --data-urlencode "\$filter=SubscriptionId eq guid'$subscription_one'" \
+  --data-urlencode "\$expand=$bucket_expand"
+if ! jq -e --arg price_code "$package_code" --arg meter_code "$meter_code" '
+  .value | length == 1
+  and .[0].IncludedQuantity == 150
+  and .[0].PriceEntitlement.Price.Code == $price_code
+  and .[0].PriceEntitlement.MeterDefinition.Code == $meter_code
+  and .[0].MeterDefinition.Code == $meter_code
+' "$tmp_dir/buckets_reconciled.json" >/dev/null; then
   echo "ERROR: reconciliation duplicated or mutated a historical allowance." >&2
   exit 1
 fi
@@ -581,6 +628,25 @@ if ! jq -e --arg price_code "$package_code" '
   and .[0].Price.DeletedAt != null
 ' "$tmp_dir/archived_subscription_expand.json" >/dev/null; then
   echo "ERROR: Subscription did not resolve its archived Price." >&2
+  exit 1
+fi
+
+expect_code "EXPAND BUCKET ARCHIVED CATALOG REFERENCES" 200 \
+  "$tmp_dir/bucket_archived_catalog_expand.json" \
+  -G -H "$auth_header" \
+  "$base_url/tenants/$tenant_one/BillingEntitlementBuckets/$bucket_one" \
+  --data-urlencode "\$expand=$bucket_expand"
+if ! jq -e --arg entitlement "$entitlement_id" --arg meter "$meter_id" \
+  --arg price_code "$package_code" --arg meter_code "$meter_code" '
+  .PriceEntitlementId == $entitlement
+  and .MeterDefinitionId == $meter
+  and .PriceEntitlement.Price.Code == $price_code
+  and .PriceEntitlement.Price.IsArchived == true
+  and .PriceEntitlement.Price.DeletedAt != null
+  and .PriceEntitlement.MeterDefinition.Code == $meter_code
+  and .MeterDefinition.Code == $meter_code
+' "$tmp_dir/bucket_archived_catalog_expand.json" >/dev/null; then
+  echo "ERROR: bucket did not resolve its historical global catalog references." >&2
   exit 1
 fi
 

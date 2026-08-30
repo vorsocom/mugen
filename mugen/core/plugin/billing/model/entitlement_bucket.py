@@ -5,6 +5,7 @@ from __future__ import annotations
 __all__ = ["EntitlementBucket"]
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 import uuid
 
 from sqlalchemy import (
@@ -23,6 +24,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from mugen.core.gateway.storage.rdbms.sqla.base import ModelBase
 from mugen.core.plugin.acp.model.mixin.tenant_scoped import TenantScopedMixin
 from mugen.core.utility.rdbms_schema import CORE_SCHEMA_TOKEN
+
+if TYPE_CHECKING:
+    from mugen.core.plugin.billing.model.catalog import (
+        MeterDefinition,
+        PriceEntitlement,
+    )
 
 
 # pylint: disable=too-few-public-methods
@@ -135,6 +142,10 @@ class EntitlementBucket(ModelBase, TenantScopedMixin):
     )
 
     price: Mapped["Price | None"] = relationship()  # type: ignore
+
+    price_entitlement: Mapped["PriceEntitlement | None"] = relationship()
+
+    meter_definition: Mapped["MeterDefinition | None"] = relationship()
 
     usage_allocations: Mapped[list["UsageAllocation"]] = relationship(  # type: ignore
         back_populates="entitlement_bucket",

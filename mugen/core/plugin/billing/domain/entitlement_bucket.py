@@ -39,4 +39,6 @@ class EntitlementBucketDE(BaseDE, TenantScopedDEMixin):
     account: "AccountDE | None" = None  # type: ignore
     subscription: "SubscriptionDE | None" = None  # type: ignore
     price: "PriceDE | None" = None  # type: ignore
+    price_entitlement: "PriceEntitlementDE | None" = None  # type: ignore
+    meter_definition: "MeterDefinitionDE | None" = None  # type: ignore
     usage_allocations: Sequence["UsageAllocationDE"] | None = None  # type: ignore
