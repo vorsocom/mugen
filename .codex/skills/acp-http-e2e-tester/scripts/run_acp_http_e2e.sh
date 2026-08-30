@@ -117,8 +117,6 @@ password="$(echo "$spec_json" | jq -r '.credentials.password')"
 entity_set="$(echo "$spec_json" | jq -r '.entity_set')"
 scope="$(echo "$spec_json" | jq -r '.scope // "tenant"')"
 create_payload="$(echo "$spec_json" | jq -c '.create_payload')"
-lookup_field="$(echo "$spec_json" | jq -r '.lookup.field // "Title"')"
-lookup_value="$(echo "$spec_json" | jq -r '.lookup.value // empty')"
 status_field="$(echo "$spec_json" | jq -r '.status_field // "Status"')"
 skip_create="$(echo "$spec_json" | jq -r '.skip_create // false')"
 seed_entity_id="$(echo "$spec_json" | jq -r '.seed_entity_id // empty')"
@@ -279,7 +277,8 @@ if [[ "$skip_create" == "true" ]]; then
   row_version="$seed_row_version"
   echo "SKIP CREATE: true | ENTITY ID: ${entity_id:-<unset>} | ROW_VERSION: ${row_version:-<unset>}"
 else
-  create_code="$(curl -sk -o /tmp/acp_http_e2e_create.out -w "%{http_code}" \
+  create_code="$(curl -sk -D /tmp/acp_http_e2e_create.headers \
+    -o /tmp/acp_http_e2e_create.out -w "%{http_code}" \
     -H "$auth_header" -H "Content-Type: application/json" \
     -X POST "$resource_url" \
     -d "$create_payload")"
@@ -290,23 +289,69 @@ else
     exit 1
   fi
 
-  if [[ -z "$lookup_value" || "$lookup_value" == "null" ]]; then
-    lookup_value="$(echo "$create_payload" | jq -r --arg f "$lookup_field" '.[$f] // empty')"
-  fi
-  if [[ -z "$lookup_value" ]]; then
-    echo "ERROR: could not determine lookup.value; set lookup.value in spec" >&2
+  create_content_type="$(awk '
+    tolower($0) ~ /^content-type:/ {
+      sub(/^[^:]+:[[:space:]]*/, "")
+      sub(/\r$/, "")
+      print
+      exit
+    }
+  ' /tmp/acp_http_e2e_create.headers)"
+  if [[ "$create_content_type" != application/json* ]]; then
+    echo "ERROR: create response is not application/json: $create_content_type" >&2
     exit 1
   fi
 
-  entity_json="$(curl -sk -H "$auth_header" "$resource_url" \
-    | jq -c --arg f "$lookup_field" --arg v "$lookup_value" '.value[] | select(.[$f] == $v)' \
-    | tail -n1)"
-  entity_id="$(echo "$entity_json" | jq -r '.Id // empty')"
-  row_version="$(echo "$entity_json" | jq -r '.RowVersion // empty')"
-  if [[ -z "$entity_id" || -z "$row_version" ]]; then
-    echo "ERROR: could not resolve created entity via lookup ${lookup_field}=${lookup_value}" >&2
+  entity_id="$(jq -r '.Id // empty' /tmp/acp_http_e2e_create.out)"
+  row_version="$(jq -r '.RowVersion // empty' /tmp/acp_http_e2e_create.out)"
+  if [[ -z "$entity_id" ]]; then
+    echo "ERROR: create response did not contain Id" >&2
+    cat /tmp/acp_http_e2e_create.out >&2
     exit 1
   fi
+
+  create_location="$(awk '
+    tolower($0) ~ /^location:/ {
+      sub(/^[^:]+:[[:space:]]*/, "")
+      sub(/\r$/, "")
+      print
+      exit
+    }
+  ' /tmp/acp_http_e2e_create.headers)"
+  expected_location="$(jq -rn --arg url "$resource_url/$entity_id" \
+    '$url | sub("^[A-Za-z][A-Za-z0-9+.-]*://[^/]+"; "")')"
+  if [[ "$create_location" != "$expected_location" ]]; then
+    echo "ERROR: create Location mismatch" >&2
+    echo "Expected: $expected_location" >&2
+    echo "Actual:   ${create_location:-<missing>}" >&2
+    exit 1
+  fi
+
+  fetch_code="$(curl -sk -o /tmp/acp_http_e2e_created_entity.out \
+    -w "%{http_code}" -H "$auth_header" "$resource_url/$entity_id")"
+  echo "FETCH CREATED $entity_set: $fetch_code"
+  if [[ "$fetch_code" != "200" ]]; then
+    echo "ERROR: could not fetch entity returned by create" >&2
+    cat /tmp/acp_http_e2e_created_entity.out >&2
+    exit 1
+  fi
+
+  entity_json="$(jq -c . /tmp/acp_http_e2e_created_entity.out)"
+  fetched_entity_id="$(echo "$entity_json" | jq -r '.Id // empty')"
+  fetched_row_version="$(echo "$entity_json" | jq -r '.RowVersion // empty')"
+  if [[ "$fetched_entity_id" != "$entity_id" ]]; then
+    echo "ERROR: fetched entity Id does not match create response" >&2
+    exit 1
+  fi
+  if [[ -n "$fetched_row_version" && -z "$row_version" ]]; then
+    echo "ERROR: row-versioned create response did not contain RowVersion" >&2
+    exit 1
+  fi
+  if [[ -n "$row_version" && "$fetched_row_version" != "$row_version" ]]; then
+    echo "ERROR: fetched RowVersion does not match create response" >&2
+    exit 1
+  fi
+  row_version="$fetched_row_version"
   entity_status="$(echo "$entity_json" | jq -r --arg sf "$status_field" '.[$sf] // ""')"
   echo "ENTITY ID: $entity_id | ROW_VERSION: $row_version | ${status_field}: $entity_status"
 fi

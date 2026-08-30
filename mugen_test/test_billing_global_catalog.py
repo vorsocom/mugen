@@ -325,7 +325,11 @@ class TestBillingGlobalCatalogContract(unittest.TestCase):
             },
         )
 
-        for entity_set in ("BillingProducts", "BillingPrices"):
+        for entity_set in (
+            "BillingProducts",
+            "BillingPrices",
+            "BillingPriceEntitlements",
+        ):
             resource = registry.get_resource(entity_set)
             self.assertTrue(resource.behavior.resolve_soft_deleted_references)
             self.assertTrue(

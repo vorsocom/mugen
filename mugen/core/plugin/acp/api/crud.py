@@ -73,6 +73,20 @@ def _request_ids() -> tuple[str | None, str | None]:
     return request_id, correlation_id
 
 
+def _create_response(created: Any) -> tuple[dict[str, Any], str]:
+    entity_id = str(created.id)
+    payload: dict[str, Any] = {
+        "Id": entity_id,
+    }
+
+    row_version = getattr(created, "row_version", None)
+    if row_version is not None:
+        payload["RowVersion"] = row_version
+
+    location = f"{request.path.rstrip('/')}/{entity_id}"
+    return payload, location
+
+
 def _tenant_scope_mode(
     *,
     registry: IAdminRegistry,
@@ -429,7 +443,7 @@ async def create_entity(
     logger_provider=_logger_provider,
     registry_provider=_registry_provider,
     **_,
-) -> tuple[str, int]:
+) -> tuple[dict[str, Any], int, dict[str, str]]:
     """Create an EDM entity in the given entity set."""
     logger: ILoggingGateway = logger_provider()
     data = await request.get_json()
@@ -567,15 +581,16 @@ async def create_entity(
         request_id=request_id,
         correlation_id=correlation_id,
     )
+    response_payload, location = _create_response(created)
     await commit_idempotency_success(
         registry=registry,
         idempotency_state=idempotency_state,
         response_code=201,
-        response_payload="",
+        response_payload=response_payload,
         result_ref=str(created.id),
     )
 
-    return "", 201
+    return response_payload, 201, {"Location": location}
 
 
 @api.post("core/acp/v1/tenants/<tenant_id>/<entity_set>")
@@ -587,7 +602,7 @@ async def create_entity_tenant(
     logger_provider=_logger_provider,
     registry_provider=_registry_provider,
     **_,
-) -> tuple[str, int]:
+) -> tuple[dict[str, Any], int, dict[str, str]]:
     """Create an EDM entity in the given entity set, scoped to the tenant."""
     logger: ILoggingGateway = logger_provider()
     actor_id = _parse_uuid_or_none(auth_user)
@@ -762,15 +777,16 @@ async def create_entity_tenant(
         request_id=request_id,
         correlation_id=correlation_id,
     )
+    response_payload, location = _create_response(created)
     await commit_idempotency_success(
         registry=registry,
         idempotency_state=idempotency_state,
         response_code=201,
-        response_payload="",
+        response_payload=response_payload,
         result_ref=str(created.id),
     )
 
-    return "", 201
+    return response_payload, 201, {"Location": location}
 
 
 @api.patch("core/acp/v1/<entity_set>/<entity_id>")
