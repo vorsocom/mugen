@@ -725,13 +725,17 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
         created_id = uuid.uuid4()
 
         svc = SimpleNamespace(
-            create=AsyncMock(return_value=SimpleNamespace(id=created_id))
+            create=AsyncMock(
+                return_value=SimpleNamespace(id=created_id, row_version=1)
+            )
         )
         registry = _FakeRegistry(
             resource=_resource(create_schema=("Name",)),
             service=svc,
         )
         emit = AsyncMock(return_value=None)
+        emit_trace = AsyncMock(return_value=None)
+        commit = AsyncMock(return_value=None)
         create_fn = crud_mod.create_entity.__wrapped__
 
         async with self.app.test_request_context(
@@ -740,16 +744,44 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
             json={"Name": "Alice"},
             headers={"X-Request-Id": "req-1", "X-Correlation-Id": "corr-1"},
         ):
-            with patch.object(crud_mod, "emit_audit_event", new=emit):
-                _, status = await create_fn(
+            with (
+                patch.object(crud_mod, "emit_audit_event", new=emit),
+                patch.object(crud_mod, "emit_biz_trace_event", new=emit_trace),
+                patch.object(
+                    crud_mod,
+                    "commit_idempotency_success",
+                    new=commit,
+                ),
+            ):
+                result = await create_fn(
                     entity_set="Users",
                     auth_user=str(actor_id),
                     logger_provider=_logger,
                     registry_provider=lambda: registry,
                 )
-        self.assertEqual(status, 201)
+                response = await self.app.make_response(result)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            await response.get_json(),
+            {"Id": str(created_id), "RowVersion": 1},
+        )
+        self.assertEqual(response.content_type, "application/json")
+        self.assertEqual(
+            response.headers["Location"],
+            f"/api/core/acp/v1/Users/{created_id}",
+        )
         self.assertEqual(svc.create.await_args.args[0], {"name": "Alice"})
         self.assertEqual(emit.await_args.kwargs["outcome"], "success")
+        self.assertEqual(emit.await_args.kwargs["entity_id"], created_id)
+        self.assertEqual(
+            emit_trace.await_args.kwargs["details"]["entity_id"],
+            str(created_id),
+        )
+        self.assertEqual(
+            commit.await_args.kwargs["response_payload"],
+            {"Id": str(created_id), "RowVersion": 1},
+        )
+        self.assertEqual(commit.await_args.kwargs["result_ref"], str(created_id))
 
         async with self.app.test_request_context(
             "/api/core/acp/v1/Users",
@@ -917,11 +949,16 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                 )
             self.assertIs(result, replay_response)
 
+        svc.create.assert_not_awaited()
+
     async def test_create_entity_tenant_paths(self) -> None:
         tenant_id = uuid.uuid4()
         actor_id = uuid.uuid4()
+        created_id = uuid.uuid4()
         svc = SimpleNamespace(
-            create=AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))
+            create=AsyncMock(
+                return_value=SimpleNamespace(id=created_id, row_version=1)
+            )
         )
         registry = _FakeRegistry(
             resource=_resource(create_schema=("TenantId", "Name")),
@@ -938,14 +975,23 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
             with patch.object(
                 crud_mod, "emit_audit_event", new=AsyncMock(return_value=None)
             ):
-                _, status = await create_fn(
+                result = await create_fn(
                     tenant_id=str(tenant_id),
                     entity_set="Users",
                     auth_user=str(actor_id),
                     logger_provider=_logger,
                     registry_provider=lambda: registry,
                 )
-        self.assertEqual(status, 201)
+                response = await self.app.make_response(result)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            await response.get_json(),
+            {"Id": str(created_id), "RowVersion": 1},
+        )
+        self.assertEqual(
+            response.headers["Location"],
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users/{created_id}",
+        )
         payload = svc.create.await_args.args[0]
         self.assertEqual(payload["tenant_id"], tenant_id)
         self.assertEqual(payload["name"], "Alice")
@@ -958,7 +1004,7 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
             with patch.object(
                 crud_mod, "emit_audit_event", new=AsyncMock(return_value=None)
             ):
-                _, status = await create_fn(
+                _, status, _ = await create_fn(
                     tenant_id=str(tenant_id),
                     entity_set="Users",
                     auth_user=str(actor_id),
@@ -986,8 +1032,9 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertEqual(ex.exception.code, 400)
 
+        invitation_id = uuid.uuid4()
         invitation_svc = SimpleNamespace(
-            create=AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))
+            create=AsyncMock(return_value=SimpleNamespace(id=invitation_id))
         )
         invitation_registry = _FakeRegistry(
             resource=_resource(
@@ -1005,7 +1052,7 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
             with patch.object(
                 crud_mod, "emit_audit_event", new=AsyncMock(return_value=None)
             ):
-                _, status = await create_fn(
+                invitation_payload, status, invitation_headers = await create_fn(
                     tenant_id=str(tenant_id),
                     entity_set="TenantInvitations",
                     auth_user=str(actor_id),
@@ -1013,6 +1060,14 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                     registry_provider=lambda: invitation_registry,
                 )
         self.assertEqual(status, 201)
+        self.assertEqual(invitation_payload, {"Id": str(invitation_id)})
+        self.assertEqual(
+            invitation_headers["Location"],
+            (
+                f"/api/core/acp/v1/tenants/{tenant_id}/TenantInvitations/"
+                f"{invitation_id}"
+            ),
+        )
         payload = invitation_svc.create.await_args.args[0]
         self.assertEqual(payload["tenant_id"], tenant_id)
         self.assertEqual(payload["invited_by_user_id"], actor_id)
@@ -1074,6 +1129,86 @@ class TestMugenAcpApiCrud(unittest.IsolatedAsyncioTestCase):
                         registry_provider=lambda: integrity_registry,
                     )
                 self.assertEqual(ex.exception.code, 409)
+
+    async def test_create_entity_pydantic_optional_scope_route_forms(self) -> None:
+        actor_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        global_id = uuid.uuid4()
+        tenant_entity_id = uuid.uuid4()
+        svc = SimpleNamespace(
+            create=AsyncMock(
+                side_effect=[
+                    SimpleNamespace(id=global_id, row_version=2),
+                    SimpleNamespace(id=tenant_entity_id, row_version=3),
+                ]
+            )
+        )
+        registry = _FakeRegistry(
+            resource=_resource(create_schema=_AliasCreateSchema),
+            service=svc,
+            tenant_scope="optional",
+        )
+
+        async with self.app.test_request_context(
+            "/api/core/acp/v1/Users",
+            method="POST",
+            json={"DisplayName": "Global Alice"},
+        ):
+            with patch.object(
+                crud_mod, "emit_audit_event", new=AsyncMock(return_value=None)
+            ):
+                global_result = await crud_mod.create_entity.__wrapped__(
+                    entity_set="Users",
+                    auth_user=str(actor_id),
+                    logger_provider=_logger,
+                    registry_provider=lambda: registry,
+                )
+
+        async with self.app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/Users",
+            method="POST",
+            json={"DisplayName": "Tenant Alice"},
+        ):
+            with patch.object(
+                crud_mod, "emit_audit_event", new=AsyncMock(return_value=None)
+            ):
+                tenant_result = await crud_mod.create_entity_tenant.__wrapped__(
+                    tenant_id=str(tenant_id),
+                    entity_set="Users",
+                    auth_user=str(actor_id),
+                    logger_provider=_logger,
+                    registry_provider=lambda: registry,
+                )
+
+        self.assertEqual(
+            global_result,
+            (
+                {"Id": str(global_id), "RowVersion": 2},
+                201,
+                {"Location": f"/api/core/acp/v1/Users/{global_id}"},
+            ),
+        )
+        self.assertEqual(
+            tenant_result,
+            (
+                {"Id": str(tenant_entity_id), "RowVersion": 3},
+                201,
+                {
+                    "Location": (
+                        f"/api/core/acp/v1/tenants/{tenant_id}/Users/"
+                        f"{tenant_entity_id}"
+                    )
+                },
+            ),
+        )
+        self.assertEqual(
+            svc.create.await_args_list[0].args[0],
+            {"display_name": "Global Alice"},
+        )
+        self.assertEqual(
+            svc.create.await_args_list[1].args[0],
+            {"display_name": "Tenant Alice", "tenant_id": tenant_id},
+        )
 
     async def test_update_entity_and_update_entity_tenant_paths(self) -> None:
         entity_id = uuid.uuid4()

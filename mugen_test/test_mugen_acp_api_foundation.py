@@ -76,13 +76,20 @@ class TestMugenAcpApiFoundation(unittest.IsolatedAsyncioTestCase):
 
     async def test_acquire_idempotency_replay_response(self) -> None:
         record_id = uuid.uuid4()
+        result_ref = str(uuid.uuid4())
         dedup_svc = SimpleNamespace(
             acquire=AsyncMock(
                 return_value={
                     "decision": "replay",
-                    "record": SimpleNamespace(id=record_id),
-                    "response_code": 202,
-                    "response_payload": {"Replay": True},
+                    "record": SimpleNamespace(
+                        id=record_id,
+                        result_ref=result_ref,
+                    ),
+                    "response_code": 201,
+                    "response_payload": {
+                        "Id": result_ref,
+                        "RowVersion": 1,
+                    },
                 }
             )
         )
@@ -92,7 +99,7 @@ class TestMugenAcpApiFoundation(unittest.IsolatedAsyncioTestCase):
         )
 
         async with self.app.test_request_context(
-            "/",
+            "/api/core/acp/v1/Users",
             headers={"X-Idempotency-Key": "abc-123"},
         ):
             state = await acquire_idempotency(
@@ -104,9 +111,41 @@ class TestMugenAcpApiFoundation(unittest.IsolatedAsyncioTestCase):
             )
 
         response = state["replay_response"]
-        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            await response.get_json(),
+            {"Id": result_ref, "RowVersion": 1},
+        )
+        self.assertEqual(response.content_type, "application/json")
+        self.assertEqual(
+            response.headers["Location"],
+            f"/api/core/acp/v1/Users/{result_ref}",
+        )
         self.assertEqual(response.headers["X-Idempotency-Replayed"], "true")
         self.assertEqual(state["record_id"], record_id)
+
+        action_result_ref = str(uuid.uuid4())
+        dedup_svc.acquire.return_value = {
+            "decision": "replay",
+            "record": SimpleNamespace(id=record_id),
+            "response_code": 200,
+            "response_payload": {"Id": action_result_ref},
+            "result_ref": action_result_ref,
+        }
+        async with self.app.test_request_context(
+            "/api/core/acp/v1/Users/$action/provision",
+            headers={"X-Idempotency-Key": "action-key"},
+        ):
+            action_state = await acquire_idempotency(
+                registry=registry,
+                tenant_id=None,
+                entity_set="Users",
+                action_name="provision",
+                payload={},
+            )
+
+        action_response = action_state["replay_response"]
+        self.assertNotIn("Location", action_response.headers)
 
     async def test_acquire_idempotency_acquired_with_scope_fallback(self) -> None:
         record_id = uuid.uuid4()
@@ -396,7 +435,8 @@ class TestMugenAcpApiFoundation(unittest.IsolatedAsyncioTestCase):
             raise RuntimeError("config unavailable")
 
         self.assertFalse(
-            foundation_mod._enforce_bindings_enabled(  # pylint: disable=protected-access
+            # pylint: disable-next=protected-access
+            foundation_mod._enforce_bindings_enabled(
                 config_provider=_boom_provider
             )
         )
