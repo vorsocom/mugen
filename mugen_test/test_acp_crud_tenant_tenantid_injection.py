@@ -91,7 +91,9 @@ class TestAcpCrudTenantTenantIdInjection(unittest.IsolatedAsyncioTestCase):
         case_id = uuid.uuid4()
 
         fake_service = SimpleNamespace(
-            create=AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))
+            create=AsyncMock(
+                return_value=SimpleNamespace(id=uuid.uuid4(), row_version=1)
+            )
         )
         registry = _FakeRegistry(fake_service)
 
@@ -110,7 +112,7 @@ class TestAcpCrudTenantTenantIdInjection(unittest.IsolatedAsyncioTestCase):
                 "mugen.core.plugin.acp.api.crud.emit_audit_event",
                 new=AsyncMock(return_value=None),
             ):
-                _, status = await create_entity_tenant.__wrapped__(
+                _, status, _ = await create_entity_tenant.__wrapped__(
                     tenant_id=str(tenant_id),
                     entity_set="OpsCaseLinks",
                     auth_user=str(auth_user),

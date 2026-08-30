@@ -128,15 +128,23 @@ async def acquire_idempotency(
     if decision == "replay":
         replay_payload = result.get("response_payload")
         replay_status = int(result.get("response_code") or 200)
+        record = result.get("record")
         response = await make_response(
             replay_payload if replay_payload is not None else "",
             replay_status,
         )
+        result_ref = result.get("result_ref")
+        if result_ref is None and record is not None:
+            result_ref = getattr(record, "result_ref", None)
+        if action_name is None and result_ref:
+            response.headers["Location"] = (
+                f"{request.path.rstrip('/')}/{result_ref}"
+            )
         response.headers["X-Idempotency-Replayed"] = "true"
         return {
             "enabled": True,
             "replay_response": response,
-            "record_id": result.get("record").id if result.get("record") else None,
+            "record_id": record.id if record else None,
         }
 
     record = result.get("record")
