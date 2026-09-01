@@ -291,14 +291,23 @@ class TestMugenGatewayKnowledgePgVector(unittest.IsolatedAsyncioTestCase):
 
         gateway._fetch_projection_columns = AsyncMock(  # pylint: disable=protected-access
             return_value={
+                "document_id": "text",
                 "tenant_id": "uuid",
-                "knowledge_entry_revision_id": "uuid",
+                "knowledge_pack_id": "uuid",
                 "knowledge_pack_version_id": "uuid",
+                "knowledge_entry_id": "uuid",
+                "knowledge_entry_revision_id": "uuid",
+                "knowledge_scope_id": "uuid",
+                "entry_key": "text",
                 "channel": "citext",
                 "locale": "citext",
                 "category": "citext",
+                "service_route_key": "citext",
+                "client_profile_key": "citext",
                 "title": "text",
                 "body": "text",
+                "content_checksum": "text",
+                "projection_schema_version": "integer",
                 "embedding": "text",
             }
         )
@@ -307,14 +316,23 @@ class TestMugenGatewayKnowledgePgVector(unittest.IsolatedAsyncioTestCase):
 
         gateway._fetch_projection_columns = AsyncMock(  # pylint: disable=protected-access
             return_value={
+                "document_id": "text",
                 "tenant_id": "uuid",
-                "knowledge_entry_revision_id": "uuid",
+                "knowledge_pack_id": "uuid",
                 "knowledge_pack_version_id": "uuid",
+                "knowledge_entry_id": "uuid",
+                "knowledge_entry_revision_id": "uuid",
+                "knowledge_scope_id": "uuid",
+                "entry_key": "text",
                 "channel": "citext",
                 "locale": "citext",
                 "category": "citext",
+                "service_route_key": "citext",
+                "client_profile_key": "citext",
                 "title": "text",
                 "body": "text",
+                "content_checksum": "text",
+                "projection_schema_version": "integer",
                 "embedding": "vector",
             }
         )
@@ -329,14 +347,23 @@ class TestMugenGatewayKnowledgePgVector(unittest.IsolatedAsyncioTestCase):
         gateway._check_projection_table_exists = AsyncMock(return_value=True)  # pylint: disable=protected-access
         gateway._fetch_projection_columns = AsyncMock(  # pylint: disable=protected-access
             return_value={
+                "document_id": "text",
                 "tenant_id": "uuid",
-                "knowledge_entry_revision_id": "uuid",
+                "knowledge_pack_id": "uuid",
                 "knowledge_pack_version_id": "uuid",
+                "knowledge_entry_id": "uuid",
+                "knowledge_entry_revision_id": "uuid",
+                "knowledge_scope_id": "uuid",
+                "entry_key": "text",
                 "channel": "citext",
                 "locale": "citext",
                 "category": "citext",
+                "service_route_key": "citext",
+                "client_profile_key": "citext",
                 "title": "text",
                 "body": "text",
+                "content_checksum": "text",
+                "projection_schema_version": "integer",
                 "embedding": "vector",
             }
         )
@@ -496,14 +523,23 @@ class TestMugenGatewayKnowledgePgVector(unittest.IsolatedAsyncioTestCase):
         gateway._check_projection_table_exists = AsyncMock(return_value=True)  # pylint: disable=protected-access
         gateway._fetch_projection_columns = AsyncMock(  # pylint: disable=protected-access
             return_value={
+                "document_id": "text",
                 "tenant_id": "uuid",
-                "knowledge_entry_revision_id": "uuid",
+                "knowledge_pack_id": "uuid",
                 "knowledge_pack_version_id": "uuid",
+                "knowledge_entry_id": "uuid",
+                "knowledge_entry_revision_id": "uuid",
+                "knowledge_scope_id": "uuid",
+                "entry_key": "text",
                 "channel": "citext",
                 "locale": "citext",
                 "category": "citext",
+                "service_route_key": "citext",
+                "client_profile_key": "citext",
                 "title": "text",
                 "body": "text",
+                "content_checksum": "text",
+                "projection_schema_version": "integer",
                 "embedding": "vector",
             }
         )

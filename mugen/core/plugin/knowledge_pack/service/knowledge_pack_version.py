@@ -25,6 +25,7 @@ from mugen.core.plugin.knowledge_pack.api.validation import (
     KnowledgePackArchiveValidation,
     KnowledgePackPublishValidation,
     KnowledgePackRejectValidation,
+    KnowledgePackReindexValidation,
     KnowledgePackRollbackVersionValidation,
     KnowledgePackSubmitForReviewValidation,
 )
@@ -39,6 +40,10 @@ from mugen.core.plugin.knowledge_pack.service.knowledge_entry_revision import (
     KnowledgeEntryRevisionService,
 )
 from mugen.core.plugin.knowledge_pack.service.knowledge_pack import KnowledgePackService
+from mugen.core.plugin.knowledge_pack.service.knowledge_index_projection import (
+    KnowledgeIndexProjectionService,
+    projection_action_response,
+)
 
 
 class KnowledgePackVersionService(
@@ -50,6 +55,7 @@ class KnowledgePackVersionService(
     _PACK_TABLE = "knowledge_pack_knowledge_pack"
     _REVISION_TABLE = "knowledge_pack_knowledge_entry_revision"
     _APPROVAL_TABLE = "knowledge_pack_knowledge_approval"
+    _PROJECTION_TABLE = "knowledge_pack_knowledge_index_projection"
 
     def __init__(self, table: str, rsg: IRelationalStorageGateway, **kwargs):
         super().__init__(
@@ -65,6 +71,10 @@ class KnowledgePackVersionService(
         )
         self._approval_service = KnowledgeApprovalService(
             table=self._APPROVAL_TABLE,
+            rsg=rsg,
+        )
+        self._projection_service = KnowledgeIndexProjectionService(
+            table=self._PROJECTION_TABLE,
             rsg=rsg,
         )
 
@@ -287,6 +297,52 @@ class KnowledgePackVersionService(
                     "All revisions must be approved or archived before publishing.",
                 )
 
+    async def _cancel_pending_projections(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        knowledge_pack_version_id: uuid.UUID,
+    ) -> None:
+        """Cancel active attempts before archiving their governed version."""
+        try:
+            projections = await self._projection_service.list(
+                filter_groups=[
+                    FilterGroup(
+                        where={
+                            "tenant_id": tenant_id,
+                            "knowledge_pack_version_id": knowledge_pack_version_id,
+                        },
+                        scalar_filters=[
+                            ScalarFilter(
+                                field="status",
+                                op=ScalarFilterOp.IN,
+                                value=["queued", "processing"],
+                            )
+                        ],
+                    )
+                ],
+                limit=100,
+            )
+            for projection in projections:
+                if projection.id is None:
+                    continue
+                await self._projection_service.update(
+                    where={
+                        "tenant_id": tenant_id,
+                        "id": projection.id,
+                        "status": projection.status,
+                    },
+                    changes={
+                        "status": "cancelled",
+                        "lease_owner": None,
+                        "lease_expires_at": None,
+                        "completed_at": self._now_utc(),
+                        "is_current_ready": False,
+                    },
+                )
+        except SQLAlchemyError:
+            abort(500)
+
     async def action_submit_for_review(
         self,
         *,
@@ -402,9 +458,9 @@ class KnowledgePackVersionService(
         if current.status != "review":
             abort(409, "Only review versions can be rejected.")
 
-        note = self._normalize_optional_text(data.reason) or self._normalize_optional_text(
-            data.note
-        )
+        note = self._normalize_optional_text(
+            data.reason
+        ) or self._normalize_optional_text(data.note)
 
         await self._update_version_with_row_version(
             where=where,
@@ -459,6 +515,18 @@ class KnowledgePackVersionService(
             tenant_id=tenant_id,
             knowledge_pack_version_id=entity_id,
         )
+
+        gateway = self._projection_service.gateway()
+        if gateway is not None:
+            projection = await self._projection_service.queue_projection(
+                tenant_id=tenant_id,
+                knowledge_pack_id=current.knowledge_pack_id,
+                knowledge_pack_version_id=entity_id,
+                requested_by_user_id=auth_user_id,
+                operation="publish",
+                note=data.note,
+            )
+            return projection_action_response(projection), 202
 
         published_versions = await self._list_pack_versions_by_status(
             tenant_id=tenant_id,
@@ -547,11 +615,33 @@ class KnowledgePackVersionService(
         )
 
         if current.status == "archived":
+            if (
+                current.knowledge_pack_id is not None
+                and self._projection_service.gateway() is not None
+            ):
+                await self._cancel_pending_projections(
+                    tenant_id=tenant_id,
+                    knowledge_pack_version_id=entity_id,
+                )
+                await self._projection_service.queue_projection(
+                    tenant_id=tenant_id,
+                    knowledge_pack_id=current.knowledge_pack_id,
+                    knowledge_pack_version_id=entity_id,
+                    requested_by_user_id=auth_user_id,
+                    operation="cleanup",
+                    note=data.note,
+                )
             return "", 204
 
-        note = self._normalize_optional_text(data.reason) or self._normalize_optional_text(
-            data.note
-        )
+        if self._projection_service.gateway() is not None:
+            await self._cancel_pending_projections(
+                tenant_id=tenant_id,
+                knowledge_pack_version_id=entity_id,
+            )
+
+        note = self._normalize_optional_text(
+            data.reason
+        ) or self._normalize_optional_text(data.note)
 
         await self._update_version_with_row_version(
             where=where,
@@ -598,6 +688,19 @@ class KnowledgePackVersionService(
             note=note,
         )
 
+        if (
+            current.knowledge_pack_id is not None
+            and self._projection_service.gateway() is not None
+        ):
+            await self._projection_service.queue_projection(
+                tenant_id=tenant_id,
+                knowledge_pack_id=current.knowledge_pack_id,
+                knowledge_pack_version_id=entity_id,
+                requested_by_user_id=auth_user_id,
+                operation="cleanup",
+                note=note,
+            )
+
         return "", 204
 
     async def action_rollback_version(
@@ -629,6 +732,18 @@ class KnowledgePackVersionService(
             tenant_id=tenant_id,
             knowledge_pack_version_id=entity_id,
         )
+
+        gateway = self._projection_service.gateway()
+        if gateway is not None:
+            projection = await self._projection_service.queue_projection(
+                tenant_id=tenant_id,
+                knowledge_pack_id=current.knowledge_pack_id,
+                knowledge_pack_version_id=entity_id,
+                requested_by_user_id=auth_user_id,
+                operation="rollback",
+                note=data.note,
+            )
+            return projection_action_response(projection), 202
 
         published_versions = await self._list_pack_versions_by_status(
             tenant_id=tenant_id,
@@ -711,3 +826,33 @@ class KnowledgePackVersionService(
         )
 
         return "", 204
+
+    async def action_reindex(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        entity_id: uuid.UUID,
+        where: Mapping[str, Any],
+        auth_user_id: uuid.UUID,
+        data: KnowledgePackReindexValidation,
+    ) -> tuple[dict[str, Any], int]:
+        """Queue a replacement projection while the current ready copy remains live."""
+        current = await self._get_for_action(
+            where=where,
+            expected_row_version=int(data.row_version),
+        )
+        if current.status != "published":
+            abort(409, "Only published versions can be reindexed.")
+        if current.knowledge_pack_id is None:
+            abort(409, "KnowledgePackId is required for reindex workflow.")
+        if self._projection_service.gateway() is None:
+            abort(409, "A knowledge gateway is not configured.")
+        projection = await self._projection_service.queue_projection(
+            tenant_id=tenant_id,
+            knowledge_pack_id=current.knowledge_pack_id,
+            knowledge_pack_version_id=entity_id,
+            requested_by_user_id=auth_user_id,
+            operation="reindex",
+            note=data.note,
+        )
+        return projection_action_response(projection), 202

@@ -37,6 +37,12 @@
       "payload": {
         "VersionNumber": 1
       }
+    },
+    {
+      "name": "projection_is_system_created",
+      "entity_set": "KnowledgeIndexProjections",
+      "expect_code": 405,
+      "payload": {}
     }
   ],
   "positive_creates": [
@@ -114,6 +120,16 @@
       "expect_code": 200,
       "params": {
         "$filter": "contains(Status,'missing') or contains(Note,'missing')"
+      },
+      "expect_count": 0
+    },
+    {
+      "name": "projection_resource_is_tenant_readable",
+      "entity_set": "KnowledgeIndexProjections",
+      "expect_code": 200,
+      "params": {
+        "$orderby": "RequestedAt desc",
+        "$top": 1
       },
       "expect_count": 0
     }

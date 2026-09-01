@@ -11,13 +11,17 @@ import uuid
 
 from sentence_transformers import SentenceTransformer
 
-from mugen.core.contract.dto.chromadb.search import ChromaSearchVendorParams
 from mugen.core.contract.gateway.knowledge import (
     IKnowledgeGateway,
+    KnowledgeDeleteSelector,
     KnowledgeGatewayRuntimeError,
+    KnowledgeGatewayWriteResult,
+    KnowledgeIndexDocument,
+    KnowledgeSearchQuery,
     KnowledgeSearchResult,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.gateway.knowledge.common import apply_query_scope, selector_metadata
 from mugen.core.utility.config_value import (
     parse_nonnegative_finite_float,
     parse_optional_positive_finite_float,
@@ -535,9 +539,25 @@ class ChromaKnowledgeGateway(IKnowledgeGateway):
             "knowledge_entry_revision_id": revision_id,
             "knowledge_pack_version_id": version_id,
             "tenant_id": tenant_id,
+            "knowledge_pack_id": self._coerce_optional_string(
+                metadata.get("knowledge_pack_id")
+            ),
+            "knowledge_entry_id": self._coerce_optional_string(
+                metadata.get("knowledge_entry_id")
+            ),
+            "knowledge_scope_id": self._coerce_optional_string(
+                metadata.get("knowledge_scope_id")
+            ),
+            "entry_key": self._coerce_optional_string(metadata.get("entry_key")),
             "channel": self._coerce_optional_string(metadata.get("channel")),
             "locale": self._coerce_optional_string(metadata.get("locale")),
             "category": self._coerce_optional_string(metadata.get("category")),
+            "service_route_key": self._coerce_optional_string(
+                metadata.get("service_route_key")
+            ),
+            "client_profile_key": self._coerce_optional_string(
+                metadata.get("client_profile_key")
+            ),
             "title": title,
             "snippet": self._build_snippet(title=title, body=body),
             "similarity": similarity,
@@ -577,6 +597,8 @@ class ChromaKnowledgeGateway(IKnowledgeGateway):
         locale: str | None,
         category: str | None,
         top_k: int,
+        knowledge_pack_id: str | None = None,
+        knowledge_pack_version_id: str | None = None,
     ) -> dict[str, Any]:
         collection = await self._get_collection()
         where: dict[str, Any] = {"tenant_id": tenant_id}
@@ -586,6 +608,10 @@ class ChromaKnowledgeGateway(IKnowledgeGateway):
             where["locale"] = locale
         if category is not None:
             where["category"] = category
+        if knowledge_pack_id is not None:
+            where["knowledge_pack_id"] = knowledge_pack_id
+        if knowledge_pack_version_id is not None:
+            where["knowledge_pack_version_id"] = knowledge_pack_version_id
         query_result = await asyncio.to_thread(
             collection.query,
             query_embeddings=[query_vector],
@@ -659,18 +685,104 @@ class ChromaKnowledgeGateway(IKnowledgeGateway):
                 "Chroma knowledge gateway encoder initialization failed."
             ) from exc
 
+    async def upsert_documents(
+        self,
+        documents: list[KnowledgeIndexDocument],
+    ) -> KnowledgeGatewayWriteResult:
+        """Idempotently upsert governed documents into the Chroma collection."""
+        self._assert_open()
+        if not documents:
+            return KnowledgeGatewayWriteResult(
+                provider=self.provider_name,
+                requested_count=0,
+                affected_count=0,
+            )
+        try:
+            embeddings = await asyncio.gather(
+                *(self._encode_search_term(document.content) for document in documents)
+            )
+            collection = await self._get_collection()
+            metadatas = []
+            for document in documents:
+                metadata = {
+                    key: "" if value is None else value
+                    for key, value in document.metadata().items()
+                }
+                metadata["document_id"] = document.document_id
+                metadata["body"] = document.content
+                metadatas.append(metadata)
+            await self._execute_with_retry(
+                operation="upsert",
+                request_factory=lambda: asyncio.to_thread(
+                    collection.upsert,
+                    ids=[document.document_id for document in documents],
+                    embeddings=embeddings,
+                    documents=[document.content for document in documents],
+                    metadatas=metadatas,
+                ),
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise KnowledgeGatewayRuntimeError(
+                provider=self.provider_name,
+                operation="upsert",
+                cause=exc,
+            ) from exc
+        return KnowledgeGatewayWriteResult(
+            provider=self.provider_name,
+            requested_count=len(documents),
+            affected_count=len(documents),
+        )
+
+    async def delete_documents(
+        self,
+        selector: KnowledgeDeleteSelector,
+    ) -> KnowledgeGatewayWriteResult:
+        """Delete Chroma documents inside a mandatory tenant selector."""
+        self._assert_open()
+        try:
+            collection = await self._get_collection()
+            kwargs: dict[str, Any] = {"where": selector_metadata(selector)}
+            if selector.document_ids:
+                kwargs["ids"] = list(selector.document_ids)
+            await self._execute_with_retry(
+                operation="delete",
+                request_factory=lambda: asyncio.to_thread(collection.delete, **kwargs),
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise KnowledgeGatewayRuntimeError(
+                provider=self.provider_name,
+                operation="delete",
+                cause=exc,
+            ) from exc
+        requested_count = len(selector.document_ids)
+        return KnowledgeGatewayWriteResult(
+            provider=self.provider_name,
+            requested_count=requested_count,
+            affected_count=requested_count if selector.document_ids else None,
+        )
+
     async def search(
         self,
-        params: ChromaSearchVendorParams,
+        params: KnowledgeSearchQuery,
     ) -> KnowledgeSearchResult:
         self._assert_open()
         tenant_id = self._normalize_tenant_id(params.tenant_id)
         search_term = self._normalize_search_term(params.search_term)
         top_k = self._resolve_effective_top_k(params.top_k)
         min_similarity = self._normalize_min_similarity(params.min_similarity)
-        channel = self._normalize_optional_filter(params.channel)
-        locale = self._normalize_optional_filter(params.locale)
-        category = self._normalize_optional_filter(params.category)
+        neutral_query = isinstance(params, KnowledgeSearchQuery)
+        channel = (
+            None if neutral_query else self._normalize_optional_filter(params.channel)
+        )
+        locale = (
+            None if neutral_query else self._normalize_optional_filter(params.locale)
+        )
+        category = (
+            None if neutral_query else self._normalize_optional_filter(params.category)
+        )
+        knowledge_pack_id = getattr(params, "knowledge_pack_id", None)
+        knowledge_pack_version_id = getattr(params, "knowledge_pack_version_id", None)
+        provider_top_k = self._search_max_top_k if neutral_query else top_k
         query_vector = await self._encode_search_term(search_term)
 
         try:
@@ -682,13 +794,23 @@ class ChromaKnowledgeGateway(IKnowledgeGateway):
                     channel=channel,
                     locale=locale,
                     category=category,
-                    top_k=top_k,
+                    top_k=provider_top_k,
+                    knowledge_pack_id=(
+                        None if knowledge_pack_id is None else str(knowledge_pack_id)
+                    ),
+                    knowledge_pack_version_id=(
+                        None
+                        if knowledge_pack_version_id is None
+                        else str(knowledge_pack_version_id)
+                    ),
                 ),
             )
             items = self._normalise_items(
                 query_result=raw_response,
                 min_similarity=min_similarity,
             )
+            if neutral_query:
+                items = apply_query_scope(items, params)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self._logging_gateway.warning(
                 "ChromaKnowledgeGateway transport failure "

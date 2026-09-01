@@ -12,13 +12,17 @@ from sentence_transformers import SentenceTransformer
 from sqlalchemy import text as sa_text
 from sqlalchemy.exc import SQLAlchemyError
 
-from mugen.core.contract.dto.pgvector.search import PgVectorSearchVendorParams
 from mugen.core.contract.gateway.knowledge import (
     IKnowledgeGateway,
+    KnowledgeDeleteSelector,
     KnowledgeGatewayRuntimeError,
+    KnowledgeGatewayWriteResult,
+    KnowledgeIndexDocument,
+    KnowledgeSearchQuery,
     KnowledgeSearchResult,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.gateway.knowledge.common import apply_query_scope
 from mugen.core.gateway.storage.rdbms.sqla.shared_runtime import SharedSQLAlchemyRuntime
 from mugen.core.utility.config_value import (
     parse_nonnegative_finite_float,
@@ -44,14 +48,23 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
     _default_search_max_top_k = 50
     _default_snippet_max_chars = 240
     _required_projection_columns = {
+        "document_id",
         "tenant_id",
-        "knowledge_entry_revision_id",
+        "knowledge_pack_id",
         "knowledge_pack_version_id",
+        "knowledge_entry_id",
+        "knowledge_entry_revision_id",
+        "knowledge_scope_id",
+        "entry_key",
         "channel",
         "locale",
         "category",
+        "service_route_key",
+        "client_profile_key",
         "title",
         "body",
+        "content_checksum",
+        "projection_schema_version",
         "embedding",
     }
 
@@ -440,8 +453,7 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
             timeout_seconds=timeout_seconds,
         )
         return {
-            str(row.get("column_name")): str(row.get("udt_name") or "")
-            for row in rows
+            str(row.get("column_name")): str(row.get("udt_name") or "") for row in rows
         }
 
     async def _has_embedding_vector_index(self, *, timeout_seconds: float) -> bool:
@@ -475,11 +487,17 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
         if timeout_seconds is None:
             timeout_seconds = 5.0
         await self._check_database_connectivity(timeout_seconds=timeout_seconds)
-        if await self._check_vector_extension_enabled(timeout_seconds=timeout_seconds) is not True:
+        if (
+            await self._check_vector_extension_enabled(timeout_seconds=timeout_seconds)
+            is not True
+        ):
             raise RuntimeError(
                 "PgVector knowledge gateway requires Postgres extension 'vector'."
             )
-        if await self._check_projection_table_exists(timeout_seconds=timeout_seconds) is not True:
+        if (
+            await self._check_projection_table_exists(timeout_seconds=timeout_seconds)
+            is not True
+        ):
             raise RuntimeError(
                 "PgVector knowledge gateway configured table was not found."
             )
@@ -495,7 +513,10 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
             raise RuntimeError(
                 "PgVector knowledge gateway embedding column must use vector type."
             )
-        if await self._has_embedding_vector_index(timeout_seconds=timeout_seconds) is not True:
+        if (
+            await self._has_embedding_vector_index(timeout_seconds=timeout_seconds)
+            is not True
+        ):
             raise RuntimeError(
                 "PgVector knowledge gateway requires an ivfflat or hnsw index on embedding."
             )
@@ -516,6 +537,8 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
         category: str | None,
         top_k: int,
         min_similarity: float | None,
+        knowledge_pack_id: str | None = None,
+        knowledge_pack_version_id: str | None = None,
     ) -> tuple[str, dict[str, Any]]:
         where_conditions: list[str] = [
             "tenant_id = CAST(:tenant_id AS uuid)",
@@ -534,6 +557,16 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
         if category is not None:
             where_conditions.append("category = :category")
             params["category"] = category
+        if knowledge_pack_id is not None:
+            where_conditions.append(
+                "knowledge_pack_id = CAST(:knowledge_pack_id AS uuid)"
+            )
+            params["knowledge_pack_id"] = knowledge_pack_id
+        if knowledge_pack_version_id is not None:
+            where_conditions.append(
+                "knowledge_pack_version_id = CAST(:knowledge_pack_version_id AS uuid)"
+            )
+            params["knowledge_pack_version_id"] = knowledge_pack_version_id
         if min_similarity is not None:
             where_conditions.append(
                 "(1 - (embedding <=> CAST(:query_vector AS vector))) >= :min_similarity"
@@ -544,11 +577,17 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
         statement = (
             "SELECT "
             "tenant_id, "
+            "knowledge_pack_id, "
+            "knowledge_entry_id, "
             "knowledge_entry_revision_id, "
             "knowledge_pack_version_id, "
+            "knowledge_scope_id, "
+            "entry_key, "
             "channel, "
             "locale, "
             "category, "
+            "service_route_key, "
+            "client_profile_key, "
             "title, "
             "body, "
             "(embedding <=> CAST(:query_vector AS vector)) AS distance "
@@ -569,6 +608,8 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
         category: str | None,
         top_k: int,
         min_similarity: float | None,
+        knowledge_pack_id: str | None = None,
+        knowledge_pack_version_id: str | None = None,
     ) -> list[dict[str, Any]]:
         statement, params = self._build_search_query(
             query_vector=query_vector,
@@ -578,6 +619,8 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
             category=category,
             top_k=top_k,
             min_similarity=min_similarity,
+            knowledge_pack_id=knowledge_pack_id,
+            knowledge_pack_version_id=knowledge_pack_version_id,
         )
         return await self._fetch_mappings(
             statement,
@@ -634,9 +677,19 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
                 row.get("knowledge_pack_version_id")
             ),
             "tenant_id": self._uuid_text(row.get("tenant_id")),
+            "knowledge_pack_id": self._uuid_text(row.get("knowledge_pack_id")),
+            "knowledge_entry_id": self._uuid_text(row.get("knowledge_entry_id")),
+            "knowledge_scope_id": self._uuid_text(row.get("knowledge_scope_id")),
+            "entry_key": self._coerce_optional_string(row.get("entry_key")),
             "channel": self._coerce_optional_string(row.get("channel")),
             "locale": self._coerce_optional_string(row.get("locale")),
             "category": self._coerce_optional_string(row.get("category")),
+            "service_route_key": self._coerce_optional_string(
+                row.get("service_route_key")
+            ),
+            "client_profile_key": self._coerce_optional_string(
+                row.get("client_profile_key")
+            ),
             "title": title,
             "snippet": self._build_snippet(
                 title=title,
@@ -646,16 +699,147 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
             "distance": distance,
         }
 
+    async def upsert_documents(
+        self,
+        documents: list[KnowledgeIndexDocument],
+    ) -> KnowledgeGatewayWriteResult:
+        """Idempotently upsert governed rows into the pgvector projection."""
+        self._assert_open()
+        if not documents:
+            return KnowledgeGatewayWriteResult(self.provider_name, 0, 0)
+        statement = sa_text(
+            f"INSERT INTO {self._qualified_search_table} ("
+            "document_id, tenant_id, knowledge_pack_id, knowledge_pack_version_id, "
+            "knowledge_entry_id, knowledge_entry_revision_id, knowledge_scope_id, "
+            "entry_key, title, body, channel, locale, category, service_route_key, "
+            "client_profile_key, content_checksum, projection_schema_version, embedding"
+            ") VALUES ("
+            ":document_id, CAST(:tenant_id AS uuid), CAST(:knowledge_pack_id AS uuid), "
+            "CAST(:knowledge_pack_version_id AS uuid), "
+            "CAST(:knowledge_entry_id AS uuid), "
+            "CAST(:knowledge_entry_revision_id AS uuid), "
+            "CAST(:knowledge_scope_id AS uuid), "
+            ":entry_key, :title, :body, :channel, :locale, :category, "
+            ":service_route_key, :client_profile_key, :content_checksum, "
+            ":projection_schema_version, CAST(:embedding AS vector)"
+            ") ON CONFLICT (document_id) DO UPDATE SET "
+            "tenant_id = EXCLUDED.tenant_id, "
+            "knowledge_pack_id = EXCLUDED.knowledge_pack_id, "
+            "knowledge_pack_version_id = EXCLUDED.knowledge_pack_version_id, "
+            "knowledge_entry_id = EXCLUDED.knowledge_entry_id, "
+            "knowledge_entry_revision_id = EXCLUDED.knowledge_entry_revision_id, "
+            "knowledge_scope_id = EXCLUDED.knowledge_scope_id, "
+            "entry_key = EXCLUDED.entry_key, "
+            "title = EXCLUDED.title, body = EXCLUDED.body, channel = EXCLUDED.channel, "
+            "locale = EXCLUDED.locale, category = EXCLUDED.category, "
+            "service_route_key = EXCLUDED.service_route_key, "
+            "client_profile_key = EXCLUDED.client_profile_key, "
+            "content_checksum = EXCLUDED.content_checksum, "
+            "projection_schema_version = EXCLUDED.projection_schema_version, "
+            "embedding = EXCLUDED.embedding"
+        )
+        try:
+            embeddings = await asyncio.gather(
+                *(self._encode_search_term(document.content) for document in documents)
+            )
+
+            async def write() -> None:
+                async with self._engine.begin() as conn:
+                    for document, embedding in zip(documents, embeddings):
+                        metadata = document.metadata()
+                        await self._await_with_timeout(
+                            conn.execute(
+                                statement,
+                                {
+                                    "document_id": document.document_id,
+                                    **metadata,
+                                    "body": document.content,
+                                    "embedding": self._vector_literal(embedding),
+                                },
+                            ),
+                            timeout_seconds=self._api_timeout_seconds,
+                        )
+
+            await self._execute_with_retry(operation="upsert", request_factory=write)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise KnowledgeGatewayRuntimeError(
+                provider=self.provider_name,
+                operation="upsert",
+                cause=exc,
+            ) from exc
+        return KnowledgeGatewayWriteResult(
+            self.provider_name,
+            len(documents),
+            len(documents),
+        )
+
+    async def delete_documents(
+        self,
+        selector: KnowledgeDeleteSelector,
+    ) -> KnowledgeGatewayWriteResult:
+        """Delete pgvector rows inside a mandatory tenant selector."""
+        self._assert_open()
+        conditions = ["tenant_id = CAST(:tenant_id AS uuid)"]
+        params: dict[str, Any] = {"tenant_id": str(selector.tenant_id)}
+        if selector.knowledge_pack_id is not None:
+            conditions.append("knowledge_pack_id = CAST(:knowledge_pack_id AS uuid)")
+            params["knowledge_pack_id"] = str(selector.knowledge_pack_id)
+        if selector.knowledge_pack_version_id is not None:
+            conditions.append(
+                "knowledge_pack_version_id = CAST(:knowledge_pack_version_id AS uuid)"
+            )
+            params["knowledge_pack_version_id"] = str(
+                selector.knowledge_pack_version_id
+            )
+        if selector.document_ids:
+            conditions.append("document_id = ANY(:document_ids)")
+            params["document_ids"] = list(selector.document_ids)
+        statement = sa_text(
+            f"DELETE FROM {self._qualified_search_table} WHERE "
+            + " AND ".join(conditions)
+        )
+        affected_count: int | None = None
+        try:
+
+            async def delete() -> None:
+                nonlocal affected_count
+                async with self._engine.begin() as conn:
+                    result = await self._await_with_timeout(
+                        conn.execute(statement, params),
+                        timeout_seconds=self._api_timeout_seconds,
+                    )
+                    affected_count = getattr(result, "rowcount", None)
+
+            await self._execute_with_retry(operation="delete", request_factory=delete)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise KnowledgeGatewayRuntimeError(
+                provider=self.provider_name,
+                operation="delete",
+                cause=exc,
+            ) from exc
+        return KnowledgeGatewayWriteResult(
+            self.provider_name,
+            len(selector.document_ids),
+            affected_count,
+        )
+
     async def search(
         self,
-        params: PgVectorSearchVendorParams,
+        params: KnowledgeSearchQuery,
     ) -> KnowledgeSearchResult:
         self._assert_open()
         tenant_id = self._normalize_tenant_id(params.tenant_id)
         search_term = self._normalize_search_term(params.search_term)
-        channel = self._normalize_optional_filter(params.channel)
-        locale = self._normalize_optional_filter(params.locale)
-        category = self._normalize_optional_filter(params.category)
+        neutral_query = isinstance(params, KnowledgeSearchQuery)
+        channel = (
+            None if neutral_query else self._normalize_optional_filter(params.channel)
+        )
+        locale = (
+            None if neutral_query else self._normalize_optional_filter(params.locale)
+        )
+        category = (
+            None if neutral_query else self._normalize_optional_filter(params.category)
+        )
         top_k = self._resolve_effective_top_k(params.top_k)
         min_similarity = self._normalize_min_similarity(params.min_similarity)
 
@@ -670,8 +854,18 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
                     channel=channel,
                     locale=locale,
                     category=category,
-                    top_k=top_k,
+                    top_k=self._search_max_top_k if neutral_query else top_k,
                     min_similarity=min_similarity,
+                    knowledge_pack_id=(
+                        None
+                        if getattr(params, "knowledge_pack_id", None) is None
+                        else str(params.knowledge_pack_id)
+                    ),
+                    knowledge_pack_version_id=(
+                        None
+                        if getattr(params, "knowledge_pack_version_id", None) is None
+                        else str(params.knowledge_pack_version_id)
+                    ),
                 ),
             )
         except (SQLAlchemyError, asyncio.TimeoutError) as exc:
@@ -685,6 +879,8 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
                 cause=exc,
             ) from exc
         items = [self._normalise_item(row) for row in rows]
+        if neutral_query:
+            items = apply_query_scope(items, params)
         return KnowledgeSearchResult(
             items=items,
             total_count=None,

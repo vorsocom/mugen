@@ -7,6 +7,9 @@ __all__ = [
     "KnowledgeEntryRevisionService",
     "KnowledgeApprovalService",
     "KnowledgeScopeService",
+    "KnowledgeIndexProjectionService",
+    "ApprovedKnowledgeResult",
+    "KnowledgeRetrievalService",
 ]
 
 from mugen.core.plugin.knowledge_pack.service.knowledge_pack import (
@@ -26,4 +29,11 @@ from mugen.core.plugin.knowledge_pack.service.knowledge_approval import (
 )
 from mugen.core.plugin.knowledge_pack.service.knowledge_scope import (
     KnowledgeScopeService,
+)
+from mugen.core.plugin.knowledge_pack.service.knowledge_index_projection import (
+    KnowledgeIndexProjectionService,
+)
+from mugen.core.plugin.knowledge_pack.service.retrieval import (
+    ApprovedKnowledgeResult,
+    KnowledgeRetrievalService,
 )
