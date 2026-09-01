@@ -43,6 +43,7 @@ class KnowledgeScopeService(
 
     _VERSION_TABLE = "knowledge_pack_knowledge_pack_version"
     _REVISION_TABLE = "knowledge_pack_knowledge_entry_revision"
+    _SERVICE_PROFILE_TABLE = "service_profile_service_profile"
 
     def __init__(self, table: str, rsg: IRelationalStorageGateway, **kwargs):
         super().__init__(
@@ -63,6 +64,14 @@ class KnowledgeScopeService(
 
     async def create(self, values: Mapping[str, Any]) -> KnowledgeScopeDE:
         """Create a scope only while its version is mutable."""
+        await self._assert_service_profile_available(
+            tenant_id=uuid.UUID(str(values["tenant_id"])),
+            service_profile_id=(
+                None
+                if values.get("service_profile_id") is None
+                else uuid.UUID(str(values["service_profile_id"]))
+            ),
+        )
         await self._projection_guard.assert_mutable(
             tenant_id=uuid.UUID(str(values["tenant_id"])),
             knowledge_pack_version_id=uuid.UUID(
@@ -88,6 +97,18 @@ class KnowledgeScopeService(
             tenant_id=current.tenant_id,
             knowledge_pack_version_id=current.knowledge_pack_version_id,
         )
+        requested_profile_id = changes.get(
+            "service_profile_id",
+            current.service_profile_id,
+        )
+        await self._assert_service_profile_available(
+            tenant_id=current.tenant_id,
+            service_profile_id=(
+                None
+                if requested_profile_id is None
+                else uuid.UUID(str(requested_profile_id))
+            ),
+        )
         return await super().update_with_row_version(
             where,
             expected_row_version=expected_row_version,
@@ -103,8 +124,21 @@ class KnowledgeScopeService(
         category: str | None = None,
         service_route_key: str | None = None,
         client_profile_key: str | None = None,
+        service_profile_id: uuid.UUID | None = None,
     ) -> Sequence[KnowledgeEntryRevisionDE]:
         """Retrieve published revisions constrained by scope dimensions."""
+        if service_profile_id is not None:
+            profile = await self._rsg.get_one(
+                self._SERVICE_PROFILE_TABLE,
+                {
+                    "tenant_id": tenant_id,
+                    "id": service_profile_id,
+                    "status": "active",
+                    "deleted_at": None,
+                },
+            )
+            if profile is None:
+                return []
         where: dict[str, object] = {
             "tenant_id": tenant_id,
             "is_active": True,
@@ -118,16 +152,19 @@ class KnowledgeScopeService(
 
         service_route_options = self._scope_options(service_route_key)
         client_profile_options = self._scope_options(client_profile_key)
+        service_profile_options = self._scope_options(service_profile_id)
         filter_groups = [
             FilterGroup(
                 where={
                     **where,
                     "service_route_key": route_option,
                     "client_profile_key": profile_option,
+                    "service_profile_id": service_profile_option,
                 },
             )
             for route_option in service_route_options
             for profile_option in client_profile_options
+            for service_profile_option in service_profile_options
         ]
 
         try:
@@ -180,6 +217,7 @@ class KnowledgeScopeService(
                     scope,
                     service_route_key=service_route_key,
                     client_profile_key=client_profile_key,
+                    service_profile_id=service_profile_id,
                 ),
             )
             revision_order.setdefault(revision_id, len(revision_order))
@@ -218,8 +256,33 @@ class KnowledgeScopeService(
         )
 
     @staticmethod
-    def _scope_options(value: str | None) -> tuple[str | None, ...]:
+    def _scope_options(value: Any | None) -> tuple[Any | None, ...]:
         return (None,) if value is None else (None, value)
+
+    async def _assert_service_profile_available(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        service_profile_id: uuid.UUID | None,
+    ) -> None:
+        if service_profile_id is None:
+            return
+        try:
+            profile = await self._rsg.get_one(
+                self._SERVICE_PROFILE_TABLE,
+                {
+                    "tenant_id": tenant_id,
+                    "id": service_profile_id,
+                    "deleted_at": None,
+                },
+            )
+        except SQLAlchemyError:
+            abort(500)
+        if profile is None:
+            abort(
+                400,
+                "ServiceProfileId must reference an available route-tenant profile.",
+            )
 
     @staticmethod
     def _scope_specificity(
@@ -227,6 +290,7 @@ class KnowledgeScopeService(
         *,
         service_route_key: str | None,
         client_profile_key: str | None,
+        service_profile_id: uuid.UUID | None,
     ) -> int:
         specificity = 0
         if (
@@ -237,6 +301,11 @@ class KnowledgeScopeService(
         if (
             client_profile_key is not None
             and scope.client_profile_key == client_profile_key
+        ):
+            specificity += 1
+        if (
+            service_profile_id is not None
+            and scope.service_profile_id == service_profile_id
         ):
             specificity += 1
         return specificity

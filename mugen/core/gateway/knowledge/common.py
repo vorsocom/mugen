@@ -24,6 +24,7 @@ _SCOPE_FIELDS = (
     "category",
     "service_route_key",
     "client_profile_key",
+    "service_profile_id",
 )
 
 
@@ -56,6 +57,13 @@ def _scope_matches(hit: KnowledgeSearchHit, query: KnowledgeSearchQuery) -> bool
     for field_name in _SCOPE_FIELDS:
         requested = getattr(query, field_name)
         stored = getattr(hit, field_name)
+        if field_name == "service_profile_id":
+            if requested is None:
+                if stored is not None:
+                    return False
+            elif stored not in (None, requested):
+                return False
+            continue
         if requested is not None and stored not in (None, requested):
             return False
     return True

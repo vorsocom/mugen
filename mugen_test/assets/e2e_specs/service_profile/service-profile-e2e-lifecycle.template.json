@@ -1,0 +1,22 @@
+{
+  "runtime": {
+    "spawn_hypercorn": true,
+    "hypercorn_cmd": "__HYPERCORN_CMD__",
+    "health_url": "http://127.0.0.1:8081/api/core/acp/v1/auth/.well-known/jwks.json",
+    "startup_timeout_secs": 30
+  },
+  "base_url": "http://127.0.0.1:8081/api/core/acp/v1",
+  "credentials": {
+    "username": "__ACP_USERNAME__",
+    "password": "__ACP_PASSWORD__"
+  },
+  "catalog": {
+    "code_prefix": "service_profile___CODE__",
+    "currency_definition_id": "e5855e26-4070-517a-9291-f6ae40dfbf10"
+  },
+  "unprivileged_user": {
+    "username": "service_profile_reader___CODE__",
+    "password": "ServiceProfile,E2E-123",
+    "email": "service-profile-reader-__CODE__@example.com"
+  }
+}

@@ -268,6 +268,7 @@ WEB_RUNNER="$REPO_ROOT/mugen_test/assets/e2e_specs/web/run_web_http_e2e.sh"
 ACP_INVITE_RUNNER="$REPO_ROOT/mugen_test/assets/e2e_specs/acp/run_acp_invitation_redeem_e2e.sh"
 BILLING_ARCHIVE_RUNNER="$REPO_ROOT/mugen_test/assets/e2e_specs/billing/run_billing_runtime_archive_e2e.sh"
 BILLING_NORMALIZED_RUNNER="$REPO_ROOT/mugen_test/assets/e2e_specs/billing/run_billing_normalized_definitions_e2e.sh"
+SERVICE_PROFILE_RUNNER="$REPO_ROOT/mugen_test/assets/e2e_specs/service_profile/run_service_profile_e2e.sh"
 
 PRINT_CONFIG=0
 ONLY_FILTER=""
@@ -356,6 +357,11 @@ if [[ ! -x "$BILLING_NORMALIZED_RUNNER" ]]; then
   exit 1
 fi
 
+if [[ ! -x "$SERVICE_PROFILE_RUNNER" ]]; then
+  echo "ERROR: runner not found or not executable: $SERVICE_PROFILE_RUNNER" >&2
+  exit 1
+fi
+
 E2E_PYTHON_BIN="$(resolve_python_bin)"
 E2E_PYTHONPATH="$REPO_ROOT"
 if [[ -n "${PYTHONPATH:-}" ]]; then
@@ -398,6 +404,7 @@ declare -a FULL_SPECS=(
   "mugen_test/assets/e2e_specs/billing/billing-runtime-archive.template.json"
   "mugen_test/assets/e2e_specs/ops_vpn/ops-vpn-e2e-vendor-lifecycle.template.json"
   "mugen_test/assets/e2e_specs/knowledge_pack/knowledge-pack-e2e-pack-smoke.template.json"
+  "mugen_test/assets/e2e_specs/service_profile/service-profile-e2e-lifecycle.template.json"
   "mugen_test/assets/e2e_specs/ops_governance/ops-governance-e2e-policy-evaluate.template.json"
   "mugen_test/assets/e2e_specs/ops_governance/ops-governance-e2e-retention-class-update.template.json"
   "mugen_test/assets/e2e_specs/ops_reporting/ops-reporting-e2e-aggregation.template.json"
@@ -531,6 +538,8 @@ for spec_rel in "${SPECS[@]}"; do
     runner="$BILLING_ARCHIVE_RUNNER"
   elif [[ "$spec_rel" == *"/billing/billing-normalized-definitions.template.json" ]]; then
     runner="$BILLING_NORMALIZED_RUNNER"
+  elif [[ "$spec_rel" == *"/service_profile/service-profile-e2e-lifecycle.template.json" ]]; then
+    runner="$SERVICE_PROFILE_RUNNER"
   fi
 
   if [[ "$SERVER_MODE" == "shared" && "$PRINT_CONFIG" -ne 1 && "$runner" != "$ACP_INVITE_RUNNER" ]]; then
@@ -541,7 +550,7 @@ for spec_rel in "${SPECS[@]}"; do
     stop_shared_server
   fi
 
-  if [[ "$use_shared_server_for_runner" -eq 1 && ( "$runner" == "$ACP_RUNNER" || "$runner" == "$BILLING_ARCHIVE_RUNNER" || "$runner" == "$BILLING_NORMALIZED_RUNNER" ) ]]; then
+  if [[ "$use_shared_server_for_runner" -eq 1 && ( "$runner" == "$ACP_RUNNER" || "$runner" == "$BILLING_ARCHIVE_RUNNER" || "$runner" == "$BILLING_NORMALIZED_RUNNER" || "$runner" == "$SERVICE_PROFILE_RUNNER" ) ]]; then
     runner_extra_env=("ACP_E2E_EXTERNAL_SERVER=1")
   elif [[ "$use_shared_server_for_runner" -eq 1 && "$runner" == "$WEB_RUNNER" ]]; then
     runner_extra_env=("WEB_E2E_EXTERNAL_SERVER=1")

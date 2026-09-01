@@ -473,3 +473,117 @@ class TestKnowledgePackScopeRevisionEdges(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(filter_groups), 1)
         self.assertEqual(filter_groups[0].where["service_route_key"], None)
         self.assertEqual(filter_groups[0].where["client_profile_key"], None)
+
+    async def test_scope_service_profile_exact_precedes_wildcard(self) -> None:
+        tenant_id = uuid.uuid4()
+        profile_id = uuid.uuid4()
+        version_id = uuid.uuid4()
+        exact_revision_id = uuid.uuid4()
+        wildcard_revision_id = uuid.uuid4()
+        rsg = Mock()
+        rsg.get_one = AsyncMock(return_value={"id": profile_id, "status": "active"})
+        svc = KnowledgeScopeService(
+            table="knowledge_pack_knowledge_scope",
+            rsg=rsg,
+        )
+        scopes = [
+            KnowledgeScopeDE(
+                tenant_id=tenant_id,
+                knowledge_pack_version_id=version_id,
+                knowledge_entry_revision_id=wildcard_revision_id,
+                service_profile_id=None,
+                is_active=True,
+            ),
+            KnowledgeScopeDE(
+                tenant_id=tenant_id,
+                knowledge_pack_version_id=version_id,
+                knowledge_entry_revision_id=exact_revision_id,
+                service_profile_id=profile_id,
+                is_active=True,
+            ),
+        ]
+
+        async def list_scopes(*, filter_groups, limit):
+            _ = limit
+            return [
+                scope
+                for scope in scopes
+                if any(
+                    all(
+                        getattr(scope, field) == expected
+                        for field, expected in group.where.items()
+                    )
+                    for group in filter_groups
+                )
+            ]
+
+        revisions = {
+            revision_id: KnowledgeEntryRevisionDE(
+                id=revision_id,
+                status="published",
+            )
+            for revision_id in (exact_revision_id, wildcard_revision_id)
+        }
+        svc.list = AsyncMock(side_effect=list_scopes)
+        svc._version_service.get = AsyncMock(
+            return_value=KnowledgePackVersionDE(status="published")
+        )
+        svc._revision_service.get = AsyncMock(
+            side_effect=lambda where: revisions[where["id"]]
+        )
+        svc._revision_service.list = AsyncMock(
+            return_value=[revisions[wildcard_revision_id], revisions[exact_revision_id]]
+        )
+        result = await svc.list_published_revisions(
+            tenant_id=tenant_id,
+            service_profile_id=profile_id,
+        )
+        self.assertEqual(
+            [revision.id for revision in result],
+            [exact_revision_id, wildcard_revision_id],
+        )
+        self.assertEqual(len(svc.list.await_args.kwargs["filter_groups"]), 2)
+
+        rsg.get_one = AsyncMock(return_value=None)
+        self.assertEqual(
+            await svc.list_published_revisions(
+                tenant_id=tenant_id,
+                service_profile_id=profile_id,
+            ),
+            [],
+        )
+
+    async def test_scope_create_validates_service_profile_tenant(self) -> None:
+        tenant_id = uuid.uuid4()
+        profile_id = uuid.uuid4()
+        version_id = uuid.uuid4()
+        revision_id = uuid.uuid4()
+        rsg = Mock()
+        rsg.get_one = AsyncMock(return_value={"id": profile_id})
+        svc = KnowledgeScopeService(
+            table="knowledge_pack_knowledge_scope",
+            rsg=rsg,
+        )
+        svc._projection_guard.assert_mutable = AsyncMock()
+        expected = KnowledgeScopeDE(id=uuid.uuid4(), tenant_id=tenant_id)
+        values = {
+            "tenant_id": tenant_id,
+            "knowledge_pack_version_id": version_id,
+            "knowledge_entry_revision_id": revision_id,
+            "service_profile_id": profile_id,
+        }
+        with patch.object(
+            IRelationalService,
+            "create",
+            new=AsyncMock(return_value=expected),
+        ):
+            self.assertIs(await svc.create(values), expected)
+
+        rsg.get_one = AsyncMock(return_value=None)
+        with self.assertRaises(HTTPException) as context:
+            await svc.create(values)
+        self.assertEqual(context.exception.code, 400)
+        rsg.get_one = AsyncMock(side_effect=SQLAlchemyError("db"))
+        with self.assertRaises(HTTPException) as context:
+            await svc.create(values)
+        self.assertEqual(context.exception.code, 500)

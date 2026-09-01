@@ -304,6 +304,7 @@ class TestMugenGatewayKnowledgePgVector(unittest.IsolatedAsyncioTestCase):
                 "category": "citext",
                 "service_route_key": "citext",
                 "client_profile_key": "citext",
+                "service_profile_id": "uuid",
                 "title": "text",
                 "body": "text",
                 "content_checksum": "text",
@@ -329,12 +330,22 @@ class TestMugenGatewayKnowledgePgVector(unittest.IsolatedAsyncioTestCase):
                 "category": "citext",
                 "service_route_key": "citext",
                 "client_profile_key": "citext",
+                "service_profile_id": "uuid",
                 "title": "text",
                 "body": "text",
                 "content_checksum": "text",
                 "projection_schema_version": "integer",
                 "embedding": "vector",
             }
+        )
+        gateway._check_service_profile_column_contract = AsyncMock(  # pylint: disable=protected-access
+            return_value=False
+        )
+        with self.assertRaisesRegex(RuntimeError, "nullable UUID"):
+            await gateway.check_readiness()
+
+        gateway._check_service_profile_column_contract = AsyncMock(  # pylint: disable=protected-access
+            return_value=True
         )
         gateway._has_embedding_vector_index = AsyncMock(return_value=False)  # pylint: disable=protected-access
         with self.assertRaisesRegex(RuntimeError, "ivfflat or hnsw index"):
@@ -360,12 +371,16 @@ class TestMugenGatewayKnowledgePgVector(unittest.IsolatedAsyncioTestCase):
                 "category": "citext",
                 "service_route_key": "citext",
                 "client_profile_key": "citext",
+                "service_profile_id": "uuid",
                 "title": "text",
                 "body": "text",
                 "content_checksum": "text",
                 "projection_schema_version": "integer",
                 "embedding": "vector",
             }
+        )
+        gateway._check_service_profile_column_contract = AsyncMock(  # pylint: disable=protected-access
+            return_value=True
         )
         gateway._has_embedding_vector_index = AsyncMock(return_value=True)  # pylint: disable=protected-access
         gateway._get_encoder = AsyncMock(return_value=object())  # pylint: disable=protected-access
@@ -511,6 +526,23 @@ class TestMugenGatewayKnowledgePgVector(unittest.IsolatedAsyncioTestCase):
             {"embedding": ""},
         )
 
+        gateway._fetch_mappings = AsyncMock(  # pylint: disable=protected-access
+            return_value=[{"udt_name": "uuid", "is_nullable": "YES"}]
+        )
+        self.assertTrue(
+            await gateway._check_service_profile_column_contract(  # pylint: disable=protected-access
+                timeout_seconds=1.0
+            )
+        )
+        gateway._fetch_mappings = AsyncMock(  # pylint: disable=protected-access
+            return_value=[{"udt_name": "text", "is_nullable": "NO"}]
+        )
+        self.assertFalse(
+            await gateway._check_service_profile_column_contract(  # pylint: disable=protected-access
+                timeout_seconds=1.0
+            )
+        )
+
         gateway._fetch_scalar = AsyncMock(return_value=True)  # pylint: disable=protected-access
         self.assertTrue(
             await gateway._has_embedding_vector_index(timeout_seconds=1.0)  # pylint: disable=protected-access
@@ -536,12 +568,16 @@ class TestMugenGatewayKnowledgePgVector(unittest.IsolatedAsyncioTestCase):
                 "category": "citext",
                 "service_route_key": "citext",
                 "client_profile_key": "citext",
+                "service_profile_id": "uuid",
                 "title": "text",
                 "body": "text",
                 "content_checksum": "text",
                 "projection_schema_version": "integer",
                 "embedding": "vector",
             }
+        )
+        gateway._check_service_profile_column_contract = AsyncMock(  # pylint: disable=protected-access
+            return_value=True
         )
         gateway._has_embedding_vector_index = AsyncMock(return_value=True)  # pylint: disable=protected-access
         gateway._get_encoder = AsyncMock(side_effect=RuntimeError("boom"))  # pylint: disable=protected-access

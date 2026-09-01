@@ -441,6 +441,7 @@ and downstream workflow examples.
 - [Web platform support contract](docs/web-support-contract.md)
 - [Human handoff backend contract](docs/human-handoff-backend.md)
 - [Working with services](docs/services.md)
+- [Service Profile provisioning and runtime contracts](docs/service-profile.md)
 - [ACP RBAC policy](docs/acp-rbac-policy.md)
 - [Context engine design](docs/context-engine-design.md)
 - [Context engine authoring](docs/context-engine-authoring.md)

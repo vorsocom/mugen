@@ -49,6 +49,7 @@ class KnowledgeSearchQuery:
     category: str | None = None
     service_route_key: str | None = None
     client_profile_key: str | None = None
+    service_profile_id: uuid.UUID | None = None
     candidate_limit: int = 10
     min_similarity: float | None = None
 
@@ -58,7 +59,11 @@ class KnowledgeSearchQuery:
         if not query_text:
             raise ValueError("query_text must be non-empty.")
         object.__setattr__(self, "query_text", query_text)
-        for field_name in ("knowledge_pack_id", "knowledge_pack_version_id"):
+        for field_name in (
+            "knowledge_pack_id",
+            "knowledge_pack_version_id",
+            "service_profile_id",
+        ):
             field_value = getattr(self, field_name)
             if field_value is not None:
                 _require_uuid(field_value, field_name)
@@ -114,6 +119,7 @@ class KnowledgeIndexDocument:
     category: str | None = None
     service_route_key: str | None = None
     client_profile_key: str | None = None
+    service_profile_id: uuid.UUID | None = None
 
     def __post_init__(self) -> None:
         if not str(self.document_id).strip():
@@ -125,8 +131,12 @@ class KnowledgeIndexDocument:
             "knowledge_entry_id",
             "knowledge_entry_revision_id",
             "knowledge_scope_id",
+            "service_profile_id",
         ):
-            _require_uuid(getattr(self, field_name), field_name)
+            field_value = getattr(self, field_name)
+            if field_name == "service_profile_id" and field_value is None:
+                continue
+            _require_uuid(field_value, field_name)
         for field_name in ("entry_key", "title", "content", "content_checksum"):
             if not str(getattr(self, field_name)).strip():
                 raise ValueError(f"{field_name} must be non-empty.")
@@ -161,6 +171,11 @@ class KnowledgeIndexDocument:
             "category": self.category,
             "service_route_key": self.service_route_key,
             "client_profile_key": self.client_profile_key,
+            "service_profile_id": (
+                None
+                if self.service_profile_id is None
+                else str(self.service_profile_id)
+            ),
             "content_checksum": self.content_checksum,
             "projection_schema_version": self.projection_schema_version,
         }
@@ -221,6 +236,7 @@ class KnowledgeSearchHit(Mapping[str, Any]):
     category: str | None = None
     service_route_key: str | None = None
     client_profile_key: str | None = None
+    service_profile_id: uuid.UUID | None = None
     similarity: float | None = None
     distance: float | None = None
     title: str | None = None
@@ -255,6 +271,7 @@ class KnowledgeSearchHit(Mapping[str, Any]):
             category=_normalize_optional_text(item.get("category")),
             service_route_key=_normalize_optional_text(item.get("service_route_key")),
             client_profile_key=_normalize_optional_text(item.get("client_profile_key")),
+            service_profile_id=parsed_uuid("service_profile_id"),
             similarity=(
                 None if item.get("similarity") is None else float(item["similarity"])
             ),
@@ -299,6 +316,11 @@ class KnowledgeSearchHit(Mapping[str, Any]):
                 if self.client_profile_key is None
                 else {"client_profile_key": self.client_profile_key}
             ),
+            **(
+                {}
+                if self.service_profile_id is None
+                else {"service_profile_id": str(self.service_profile_id)}
+            ),
             "title": self.title,
             "snippet": self.snippet,
             "similarity": self.similarity,
@@ -330,6 +352,7 @@ class KnowledgeSearchHit(Mapping[str, Any]):
             "category",
             "service_route_key",
             "client_profile_key",
+            "service_profile_id",
         ):
             requested = getattr(query, field_name)
             if requested is not None and getattr(self, field_name) == requested:

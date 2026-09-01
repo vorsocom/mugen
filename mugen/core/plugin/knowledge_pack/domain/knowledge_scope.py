@@ -22,6 +22,7 @@ class KnowledgeScopeDE(BaseDE, TenantScopedDEMixin):
     category: str | None = None
     service_route_key: str | None = None
     client_profile_key: str | None = None
+    service_profile_id: uuid.UUID | None = None
 
     is_active: bool | None = None
     attributes: dict[str, Any] | None = None

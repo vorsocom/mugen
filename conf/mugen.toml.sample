@@ -246,6 +246,17 @@ contrib = "mugen.core.plugin.knowledge_pack.contrib"
 #
 # [[mugen.modules.extensions]]
 # type = "fw"
+# token = "core.fw.service_profile"
+# enabled = true
+# critical = true
+# name = "com.vorsocomputing.mugen.service_profile"
+# namespace = "com.vorsocomputing.mugen.service_profile"
+# models = "mugen.core.plugin.service_profile.model"
+# migration_track = "core"
+# contrib = "mugen.core.plugin.service_profile.contrib"
+#
+# [[mugen.modules.extensions]]
+# type = "fw"
 # token = "core.fw.ops_case"
 # enabled = true
 # name = "com.vorsocomputing.mugen.ops_case"

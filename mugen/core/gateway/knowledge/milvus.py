@@ -57,6 +57,7 @@ class MilvusKnowledgeGateway(IKnowledgeGateway):
         "entry_key",
         "service_route_key",
         "client_profile_key",
+        "service_profile_id",
         "content_checksum",
         "projection_schema_version",
     )
@@ -544,6 +545,9 @@ class MilvusKnowledgeGateway(IKnowledgeGateway):
             ),
             "client_profile_key": self._coerce_optional_string(
                 payload.get("client_profile_key")
+            ),
+            "service_profile_id": self._coerce_optional_string(
+                payload.get("service_profile_id")
             ),
             "title": title,
             "snippet": self._build_snippet(title=title, body=body),
