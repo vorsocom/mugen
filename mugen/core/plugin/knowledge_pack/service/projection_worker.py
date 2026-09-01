@@ -305,6 +305,7 @@ class KnowledgeProjectionWorker:  # pylint: disable=too-many-instance-attributes
                     category=document.category,
                     service_route_key=document.service_route_key,
                     client_profile_key=document.client_profile_key,
+                    service_profile_id=document.service_profile_id,
                     candidate_limit=10,
                     min_similarity=0.0,
                 )

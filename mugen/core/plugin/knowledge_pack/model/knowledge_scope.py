@@ -77,6 +77,12 @@ class KnowledgeScope(ModelBase, TenantScopedMixin):
         index=True,
     )
 
+    service_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        nullable=True,
+        index=True,
+    )
+
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -114,6 +120,15 @@ class KnowledgeScope(ModelBase, TenantScopedMixin):
             ),
             name="fkx_knowledge_scope__tenant_entry_revision",
             ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ("tenant_id", "service_profile_id"),
+            (
+                f"{CORE_SCHEMA_TOKEN}.service_profile_service_profile.tenant_id",
+                f"{CORE_SCHEMA_TOKEN}.service_profile_service_profile.id",
+            ),
+            name="fkx_knowledge_scope__tenant_service_profile",
+            ondelete="RESTRICT",
         ),
         CheckConstraint(
             "channel IS NULL OR length(btrim(channel)) > 0",
@@ -159,6 +174,12 @@ class KnowledgeScope(ModelBase, TenantScopedMixin):
             "tenant_id",
             "service_route_key",
             "client_profile_key",
+            "is_active",
+        ),
+        Index(
+            "ix_knowledge_scope__tenant_service_profile_active",
+            "tenant_id",
+            "service_profile_id",
             "is_active",
         ),
         {"schema": CORE_SCHEMA_TOKEN},

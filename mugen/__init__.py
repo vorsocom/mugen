@@ -1402,7 +1402,10 @@ async def register_extensions(  # pylint: disable=too-many-positional-arguments
             )
         token = raw_token.strip().lower()
         configured_type = str(getattr(ext_cfg, "type", "") or "").strip().lower()
-        critical = _parse_ext_bool(getattr(ext_cfg, "critical", False), default=False)
+        critical = token == "core.fw.service_profile" or _parse_ext_bool(
+            getattr(ext_cfg, "critical", False),
+            default=False,
+        )
         enabled = _extension_enabled(ext_cfg)
         known_status = extension_statuses.get(token)
         extension_type = (

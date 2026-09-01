@@ -62,6 +62,7 @@ _BUILTIN_EXTENSION_TYPES: dict[str, str] = {
     "core.fw.channel_orchestration": "fw",
     "core.fw.context_engine": "fw",
     "core.fw.knowledge_pack": "fw",
+    "core.fw.service_profile": "fw",
     "core.fw.line_messagingapi": "fw",
     "core.fw.ops_case": "fw",
     "core.fw.ops_connector": "fw",
@@ -142,6 +143,14 @@ _BUILTIN_FRAMEWORK_EXTENSION_METADATA: dict[str, dict[str, Any]] = {
         "models": "mugen.core.plugin.knowledge_pack.model",
         "migration_track": "core",
         "contrib": "mugen.core.plugin.knowledge_pack.contrib",
+    },
+    "core.fw.service_profile": {
+        "name": "com.vorsocomputing.mugen.service_profile",
+        "namespace": "com.vorsocomputing.mugen.service_profile",
+        "models": "mugen.core.plugin.service_profile.model",
+        "migration_track": "core",
+        "contrib": "mugen.core.plugin.service_profile.contrib",
+        "critical": True,
     },
     "core.fw.ops_case": {
         "name": "com.vorsocomputing.mugen.ops_case",

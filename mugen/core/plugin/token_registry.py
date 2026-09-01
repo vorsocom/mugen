@@ -100,6 +100,12 @@ def get_plugin_extension_token_registry() -> dict[str, tuple[str, type, str, str
             "mugen.core.plugin.knowledge_pack.fw_ext",
             "KnowledgePackFWExtension",
         ),
+        "core.fw.service_profile": (
+            "fw",
+            IFWExtension,
+            "mugen.core.plugin.service_profile.fw_ext",
+            "ServiceProfileFWExtension",
+        ),
         "core.fw.channel_orchestration": (
             "fw",
             IFWExtension,

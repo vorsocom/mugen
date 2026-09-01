@@ -558,6 +558,9 @@ class ChromaKnowledgeGateway(IKnowledgeGateway):
             "client_profile_key": self._coerce_optional_string(
                 metadata.get("client_profile_key")
             ),
+            "service_profile_id": self._coerce_optional_string(
+                metadata.get("service_profile_id")
+            ),
             "title": title,
             "snippet": self._build_snippet(title=title, body=body),
             "similarity": similarity,

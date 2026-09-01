@@ -16,7 +16,7 @@ from mugen.core.contract.gateway.storage.rdbms.types import (
     ScalarFilterOp,
 )
 
-PROJECTION_SCHEMA_VERSION = 1
+PROJECTION_SCHEMA_VERSION = 2
 _DOCUMENT_NAMESPACE = uuid.UUID("28702d73-85a3-4c06-b9f3-0f52d250eb9d")
 
 
@@ -143,6 +143,7 @@ class KnowledgeProjectionDocumentBuilder:  # pylint: disable=too-few-public-meth
                 {
                     "service_route_key": scope.get("service_route_key"),
                     "client_profile_key": scope.get("client_profile_key"),
+                    "service_profile_id": scope.get("service_profile_id"),
                 }
             )
             content_checksum = _checksum(

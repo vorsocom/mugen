@@ -60,6 +60,7 @@ To run fast inner-loop pre-push checks (coverage + smoke E2E):
 - `billing`: `billing/billing-e2e-account-product-smoke.template.json`
 - `ops_vpn`: `ops_vpn/ops-vpn-e2e-vendor-lifecycle.template.json`
 - `knowledge_pack`: `knowledge_pack/knowledge-pack-e2e-pack-smoke.template.json`
+- `service_profile`: `service_profile/service-profile-e2e-lifecycle.template.json`
 - `ops_governance`:
   - `ops_governance/ops-governance-e2e-policy-evaluate.template.json`
   - `ops_governance/ops-governance-e2e-retention-class-update.template.json`

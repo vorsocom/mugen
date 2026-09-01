@@ -213,7 +213,12 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
 
     async def test_chroma_upsert_delete_empty_and_errors(self) -> None:
         ids = _ids()
-        document = _document(ids, client_profile_key=None)
+        service_profile_id = uuid.uuid4()
+        document = _document(
+            ids,
+            client_profile_key=None,
+            service_profile_id=service_profile_id,
+        )
         gateway, _ = chroma_test._build_gateway(  # pylint: disable=protected-access
             config=chroma_test._make_config()  # pylint: disable=protected-access
         )
@@ -228,6 +233,7 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
         metadata = collection.upsert.call_args.kwargs["metadatas"][0]
         self.assertEqual(metadata["client_profile_key"], "")
         self.assertEqual(metadata["document_id"], document.document_id)
+        self.assertEqual(metadata["service_profile_id"], str(service_profile_id))
         await gateway.delete_documents(
             _selector(ids, document_ids=(document.document_id,))
         )
@@ -259,7 +265,8 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
 
     async def test_milvus_upsert_delete_empty_and_errors(self) -> None:
         ids = _ids()
-        document = _document(ids)
+        service_profile_id = uuid.uuid4()
+        document = _document(ids, service_profile_id=service_profile_id)
         gateway, _ = milvus_test._build_gateway(  # pylint: disable=protected-access
             config=milvus_test._make_config()  # pylint: disable=protected-access
         )
@@ -272,6 +279,7 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
         await gateway.upsert_documents([document])
         row = client.upsert.call_args.kwargs["data"][0]
         self.assertEqual(row["id"], document.document_id)
+        self.assertEqual(row["service_profile_id"], str(service_profile_id))
         await gateway.delete_documents(
             _selector(ids, document_ids=(document.document_id,))
         )
@@ -286,7 +294,8 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
 
     async def test_pgvector_upsert_delete_empty_and_errors(self) -> None:
         ids = _ids()
-        document = _document(ids)
+        service_profile_id = uuid.uuid4()
+        document = _document(ids, service_profile_id=service_profile_id)
         connection = _Connection()
         runtime = SimpleNamespace(
             engine=_Engine(connection),
@@ -304,6 +313,10 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await gateway.upsert_documents([])).affected_count, 0)
         await gateway.upsert_documents([document])
         self.assertEqual(connection.calls[0][1]["document_id"], document.document_id)
+        self.assertEqual(
+            connection.calls[0][1]["service_profile_id"],
+            str(service_profile_id),
+        )
         deleted = await gateway.delete_documents(
             _selector(ids, document_ids=(document.document_id,))
         )
@@ -345,7 +358,11 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
 
     async def test_pinecone_upsert_delete_empty_namespace_and_errors(self) -> None:
         ids = _ids()
-        documents = [_document(ids), _document(ids, channel=None)]
+        service_profile_id = uuid.uuid4()
+        documents = [
+            _document(ids, service_profile_id=service_profile_id),
+            _document(ids, channel=None),
+        ]
         gateway, _ = pinecone_test._build_gateway(  # pylint: disable=protected-access
             config=pinecone_test._make_config(
                 namespace="tenant"
@@ -359,6 +376,12 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await gateway.upsert_documents([])).requested_count, 0)
         await gateway.upsert_documents(documents)
         self.assertEqual(index.upsert.await_args.kwargs["namespace"], "tenant")
+        self.assertEqual(
+            index.upsert.await_args.kwargs["vectors"][0]["metadata"][
+                "service_profile_id"
+            ],
+            str(service_profile_id),
+        )
         self.assertEqual(
             index.upsert.await_args.kwargs["vectors"][1]["metadata"]["channel"],
             "",
@@ -400,7 +423,8 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
 
     async def test_qdrant_upsert_delete_empty_and_errors(self) -> None:
         ids = _ids()
-        document = _document(ids)
+        service_profile_id = uuid.uuid4()
+        document = _document(ids, service_profile_id=service_profile_id)
         gateway, client, *_ = (
             qdrant_test._build_gateway(  # pylint: disable=protected-access
                 config=qdrant_test._make_config(
@@ -417,6 +441,7 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
         await gateway.upsert_documents([document])
         point = client.upsert.await_args.kwargs["points"][0]
         self.assertEqual(str(point.id), document.document_id)
+        self.assertEqual(point.payload["service_profile_id"], str(service_profile_id))
         await gateway.delete_documents(
             _selector(ids, document_ids=(document.document_id,))
         )
@@ -431,7 +456,11 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
 
     async def test_weaviate_upsert_replace_delete_empty_and_errors(self) -> None:
         ids = _ids()
-        documents = [_document(ids), _document(ids, channel=None)]
+        service_profile_id = uuid.uuid4()
+        documents = [
+            _document(ids, service_profile_id=service_profile_id),
+            _document(ids, channel=None),
+        ]
         gateway, _ = weaviate_test._build_gateway(  # pylint: disable=protected-access
             config=weaviate_test._make_config()  # pylint: disable=protected-access
         )
@@ -452,6 +481,10 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
         data.insert.assert_called_once()
         data.replace.assert_called_once()
         self.assertEqual(data.replace.call_args.kwargs["properties"]["channel"], "")
+        self.assertEqual(
+            data.insert.call_args.kwargs["properties"]["service_profile_id"],
+            str(service_profile_id),
+        )
         await gateway.delete_documents(_selector(ids))
         data.delete_many.assert_called_once()
         await gateway.delete_documents(
@@ -476,6 +509,7 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
 
     async def test_all_adapters_apply_neutral_scope_precedence(self) -> None:
         ids = _ids()
+        service_profile_id = uuid.uuid4()
         query = KnowledgeSearchQuery(
             tenant_id=ids["tenant"],
             query_text="refund",
@@ -483,11 +517,12 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
             knowledge_pack_version_id=ids["version"],
             channel="web",
             service_route_key="support",
+            service_profile_id=service_profile_id,
             candidate_limit=2,
         )
         wildcard = _document(ids, channel=None, service_route_key=None).metadata()
         wildcard["similarity"] = 0.99
-        exact = _document(ids).metadata()
+        exact = _document(ids, service_profile_id=service_profile_id).metadata()
         exact["similarity"] = 0.8
         adapters = []
 

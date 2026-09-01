@@ -61,6 +61,7 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
         "category",
         "service_route_key",
         "client_profile_key",
+        "service_profile_id",
         "title",
         "body",
         "content_checksum",
@@ -456,6 +457,28 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
             str(row.get("column_name")): str(row.get("udt_name") or "") for row in rows
         }
 
+    async def _check_service_profile_column_contract(
+        self,
+        *,
+        timeout_seconds: float,
+    ) -> bool:
+        rows = await self._fetch_mappings(
+            "SELECT udt_name, is_nullable "
+            "FROM information_schema.columns "
+            "WHERE table_schema = :table_schema "
+            "AND table_name = :table_name "
+            "AND column_name = 'service_profile_id'",
+            params={
+                "table_schema": self._search_schema,
+                "table_name": self._search_table,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        return len(rows) == 1 and (
+            str(rows[0].get("udt_name") or "") == "uuid"
+            and str(rows[0].get("is_nullable") or "").upper() == "YES"
+        )
+
     async def _has_embedding_vector_index(self, *, timeout_seconds: float) -> bool:
         value = await self._fetch_scalar(
             "SELECT EXISTS ("
@@ -512,6 +535,16 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
         if columns.get("embedding") != "vector":
             raise RuntimeError(
                 "PgVector knowledge gateway embedding column must use vector type."
+            )
+        if (
+            await self._check_service_profile_column_contract(
+                timeout_seconds=timeout_seconds
+            )
+            is not True
+        ):
+            raise RuntimeError(
+                "PgVector knowledge gateway service_profile_id column must be a "
+                "nullable UUID."
             )
         if (
             await self._has_embedding_vector_index(timeout_seconds=timeout_seconds)
@@ -588,6 +621,7 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
             "category, "
             "service_route_key, "
             "client_profile_key, "
+            "service_profile_id, "
             "title, "
             "body, "
             "(embedding <=> CAST(:query_vector AS vector)) AS distance "
@@ -690,6 +724,7 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
             "client_profile_key": self._coerce_optional_string(
                 row.get("client_profile_key")
             ),
+            "service_profile_id": self._uuid_text(row.get("service_profile_id")),
             "title": title,
             "snippet": self._build_snippet(
                 title=title,
@@ -712,7 +747,8 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
             "document_id, tenant_id, knowledge_pack_id, knowledge_pack_version_id, "
             "knowledge_entry_id, knowledge_entry_revision_id, knowledge_scope_id, "
             "entry_key, title, body, channel, locale, category, service_route_key, "
-            "client_profile_key, content_checksum, projection_schema_version, embedding"
+            "client_profile_key, service_profile_id, content_checksum, "
+            "projection_schema_version, embedding"
             ") VALUES ("
             ":document_id, CAST(:tenant_id AS uuid), CAST(:knowledge_pack_id AS uuid), "
             "CAST(:knowledge_pack_version_id AS uuid), "
@@ -720,7 +756,8 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
             "CAST(:knowledge_entry_revision_id AS uuid), "
             "CAST(:knowledge_scope_id AS uuid), "
             ":entry_key, :title, :body, :channel, :locale, :category, "
-            ":service_route_key, :client_profile_key, :content_checksum, "
+            ":service_route_key, :client_profile_key, "
+            "CAST(:service_profile_id AS uuid), :content_checksum, "
             ":projection_schema_version, CAST(:embedding AS vector)"
             ") ON CONFLICT (document_id) DO UPDATE SET "
             "tenant_id = EXCLUDED.tenant_id, "
@@ -734,6 +771,7 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
             "locale = EXCLUDED.locale, category = EXCLUDED.category, "
             "service_route_key = EXCLUDED.service_route_key, "
             "client_profile_key = EXCLUDED.client_profile_key, "
+            "service_profile_id = EXCLUDED.service_profile_id, "
             "content_checksum = EXCLUDED.content_checksum, "
             "projection_schema_version = EXCLUDED.projection_schema_version, "
             "embedding = EXCLUDED.embedding"
