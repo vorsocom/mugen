@@ -677,13 +677,13 @@ Behavior:
 Knowledge provider gateways are search adapters for downstream projections.
 They are not the `knowledge_pack` governance source of truth.
 
-Current generic gateway search contracts enforce tenant filtering and optional
-`channel`, `locale`, and `category` filters. They do not expose first-class
-`service_route_key` or `client_profile_key` request fields. Route/profile
-isolation for production `knowledge_pack` evidence must be enforced before
-ranking through `KnowledgeScopeService.list_published_revisions(...)`, through
-`KnowledgePackContributor`, or through a downstream-owned projection contract
-that explicitly adds and tests those fields.
+The provider-neutral gateway contract enforces tenant filtering and supports
+optional pack, version, channel, locale, category, service-route, client-profile,
+and Service Profile scope. Exact requested scope values or `NULL` wildcards are
+eligible; exact matches rank first. Safe Knowledge Pack retrieval always
+rehydrates and authorizes provider hits against current relational governance.
+See [Service Profiles](service-profile.md) for the external provider field
+required by profile-aware projection schema version 2.
 
 ### ChromaDB
 

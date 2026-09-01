@@ -36,6 +36,7 @@ class ApprovedKnowledgeResult:
     category: str | None
     service_route_key: str | None
     client_profile_key: str | None
+    service_profile_id: uuid.UUID | None
     similarity: float | None
     distance: float | None
     projection_provider: str
@@ -51,6 +52,7 @@ class KnowledgeRetrievalService:
     _REVISION_TABLE = "knowledge_pack_knowledge_entry_revision"
     _SCOPE_TABLE = "knowledge_pack_knowledge_scope"
     _PROJECTION_TABLE = "knowledge_pack_knowledge_index_projection"
+    _SERVICE_PROFILE_TABLE = "service_profile_service_profile"
 
     def __init__(
         self,
@@ -92,6 +94,7 @@ class KnowledgeRetrievalService:
             "category": scope.get("category") or revision.get("category"),
             "service_route_key": scope.get("service_route_key"),
             "client_profile_key": scope.get("client_profile_key"),
+            "service_profile_id": scope.get("service_profile_id"),
         }
 
     @staticmethod
@@ -105,9 +108,17 @@ class KnowledgeRetrievalService:
             "category",
             "service_route_key",
             "client_profile_key",
+            "service_profile_id",
         ):
             requested = getattr(query, field_name)
             stored = effective_scope.get(field_name)
+            if field_name == "service_profile_id":
+                if requested is None:
+                    if stored is not None:
+                        return False
+                elif stored not in (None, requested):
+                    return False
+                continue
             if requested is not None and stored not in (None, requested):
                 return False
         return True
@@ -122,6 +133,7 @@ class KnowledgeRetrievalService:
                 "category",
                 "service_route_key",
                 "client_profile_key",
+                "service_profile_id",
             )
             if getattr(query, field_name) is not None
             and scope.get(field_name) == getattr(query, field_name)
@@ -212,6 +224,12 @@ class KnowledgeRetrievalService:
         if scope is None:
             return None
         effective_scope = self._effective_scope(scope, revision)
+        stored_service_profile_id = effective_scope["service_profile_id"]
+        if stored_service_profile_id is not None and not await self._profile_active(
+            tenant_id=query.tenant_id,
+            service_profile_id=stored_service_profile_id,
+        ):
+            return None
         for field_name, value in effective_scope.items():
             if getattr(hit, field_name) != value:
                 return None
@@ -233,6 +251,7 @@ class KnowledgeRetrievalService:
             category=effective_scope["category"],
             service_route_key=effective_scope["service_route_key"],
             client_profile_key=effective_scope["client_profile_key"],
+            service_profile_id=effective_scope["service_profile_id"],
             similarity=hit.similarity,
             distance=hit.distance,
             projection_provider=self._gateway.provider_name,
@@ -240,11 +259,33 @@ class KnowledgeRetrievalService:
         )
         return result, self._specificity(effective_scope, query)
 
+    async def _profile_active(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        service_profile_id: uuid.UUID,
+    ) -> bool:
+        profile = await self._rsg.get_one(
+            self._SERVICE_PROFILE_TABLE,
+            {
+                "tenant_id": tenant_id,
+                "id": service_profile_id,
+                "status": "active",
+                "deleted_at": None,
+            },
+        )
+        return profile is not None
+
     async def search(
         self,
         query: KnowledgeSearchQuery,
     ) -> list[ApprovedKnowledgeResult]:
         """Return current approved relational content, ignoring gateway bodies."""
+        if query.service_profile_id is not None and not await self._profile_active(
+            tenant_id=query.tenant_id,
+            service_profile_id=query.service_profile_id,
+        ):
+            return []
         gateway_result = await self._gateway.search(query)
         selected: dict[uuid.UUID, tuple[ApprovedKnowledgeResult, int]] = {}
         for hit in gateway_result.items:

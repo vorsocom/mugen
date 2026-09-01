@@ -121,6 +121,14 @@ _CI_REQUIRED_FRAMEWORK_EXTENSIONS: tuple[dict[str, str], ...] = (
         "contrib": "mugen.core.plugin.channel_orchestration.contrib",
     },
     {
+        "token": "core.fw.service_profile",
+        "name": "com.vorsocomputing.mugen.service_profile",
+        "namespace": "com.vorsocomputing.mugen.service_profile",
+        "models": "mugen.core.plugin.service_profile.model",
+        "migration_track": "core",
+        "contrib": "mugen.core.plugin.service_profile.contrib",
+    },
+    {
         "token": "core.fw.context_engine",
         "name": "com.vorsocomputing.mugen.context_engine",
         "namespace": "com.vorsocomputing.mugen.context_engine",

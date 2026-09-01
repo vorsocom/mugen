@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 import uuid
 from types import SimpleNamespace
 
@@ -34,7 +34,10 @@ from mugen.core.plugin.knowledge_pack.domain import (
     KnowledgeIndexProjectionDE,
     KnowledgeScopeDE,
 )
-from mugen.core.plugin.knowledge_pack.model import KnowledgeIndexProjection
+from mugen.core.plugin.knowledge_pack.model import (
+    KnowledgeIndexProjection,
+    KnowledgeScope,
+)
 from mugen.core.plugin.knowledge_pack.runtime import (
     configure_knowledge_gateway,
     get_knowledge_gateway,
@@ -181,6 +184,24 @@ class TestKnowledgeGatewayContracts(unittest.IsolatedAsyncioTestCase):
         result = KnowledgeSearchResult(items=[metadata, hit])
         self.assertEqual(len(result.items), 2)
 
+        service_profile_id = uuid.uuid4()
+        profile_query = KnowledgeSearchQuery(
+            tenant_id=ids["tenant"],
+            query_text="refunds",
+            service_profile_id=service_profile_id,
+        )
+        profile_document = KnowledgeIndexDocument(
+            **{
+                field.name: getattr(document, field.name)
+                for field in document.__dataclass_fields__.values()
+                if field.name != "service_profile_id"
+            },
+            service_profile_id=service_profile_id,
+        )
+        profile_hit = KnowledgeSearchHit.from_mapping(profile_document.metadata())
+        self.assertEqual(profile_hit.service_profile_id, service_profile_id)
+        self.assertEqual(profile_hit.scope_specificity(profile_query), 1)
+
     def test_contract_validation_errors(self) -> None:
         tenant_id = uuid.uuid4()
         invalid_queries = (
@@ -192,6 +213,11 @@ class TestKnowledgeGatewayContracts(unittest.IsolatedAsyncioTestCase):
                 "tenant_id": tenant_id,
                 "query_text": "x",
                 "knowledge_pack_id": "bad",
+            },
+            {
+                "tenant_id": tenant_id,
+                "query_text": "x",
+                "service_profile_id": "bad",
             },
         )
         for kwargs in invalid_queries:
@@ -285,6 +311,44 @@ class TestKnowledgeGatewayContracts(unittest.IsolatedAsyncioTestCase):
         wrong_version["knowledge_pack_version_id"] = str(uuid.uuid4())
         self.assertEqual(apply_query_scope([wrong_version], query), [])
 
+    def test_service_profile_scope_requires_exact_or_wildcard(self) -> None:
+        ids = _ids()
+        service_profile_id = uuid.uuid4()
+        query = KnowledgeSearchQuery(
+            tenant_id=ids["tenant"],
+            query_text="refund",
+            service_profile_id=service_profile_id,
+            candidate_limit=10,
+        )
+
+        def metadata(profile_id, similarity):
+            values = _document(ids).metadata()
+            values["service_profile_id"] = (
+                None if profile_id is None else str(profile_id)
+            )
+            values["similarity"] = similarity
+            return values
+
+        exact, wildcard = apply_query_scope(
+            [
+                metadata(None, 0.99),
+                metadata(service_profile_id, 0.8),
+                metadata(uuid.uuid4(), 1.0),
+            ],
+            query,
+        )
+        self.assertEqual(exact.service_profile_id, service_profile_id)
+        self.assertIsNone(wildcard.service_profile_id)
+
+        unscoped = KnowledgeSearchQuery(
+            tenant_id=ids["tenant"],
+            query_text="refund",
+        )
+        self.assertEqual(
+            apply_query_scope([metadata(service_profile_id, 1.0)], unscoped),
+            [],
+        )
+
 
 class TestProjectionDocumentsAndQueue(unittest.IsolatedAsyncioTestCase):
     """Covers deterministic relational document building and durable queue actions."""
@@ -341,6 +405,7 @@ class TestProjectionDocumentsAndQueue(unittest.IsolatedAsyncioTestCase):
                         "category": None,
                         "service_route_key": "support",
                         "client_profile_key": None,
+                        "service_profile_id": ids["pack"],
                     },
                     {
                         "id": second_scope,
@@ -366,6 +431,8 @@ class TestProjectionDocumentsAndQueue(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(refund.channel, "web")
         self.assertEqual(refund.locale, "en-US")
         self.assertEqual(refund.service_route_key, "support")
+        self.assertEqual(refund.service_profile_id, ids["pack"])
+        self.assertEqual(PROJECTION_SCHEMA_VERSION, 2)
         self.assertIn(
             '"answer":"yes"',
             next(item for item in documents if item.entry_key == "json").content,
@@ -771,6 +838,10 @@ class TestProjectionDocumentsAndQueue(unittest.IsolatedAsyncioTestCase):
             "KnowledgeIndexProjection",
             KnowledgeIndexProjection.__repr__(SimpleNamespace(id=None)),
         )
+        self.assertIn(
+            "KnowledgeScope",
+            KnowledgeScope.__repr__(SimpleNamespace(id=None)),
+        )
         configure_knowledge_gateway(None)
 
 
@@ -808,6 +879,7 @@ class _RelationalFixture:
                 "category": None,
                 "service_route_key": "support",
                 "client_profile_key": "retail",
+                "service_profile_id": None,
                 "is_active": True,
             },
             "knowledge_pack_knowledge_index_projection": {"id": uuid.uuid4()},
@@ -881,6 +953,74 @@ class TestKnowledgeSafeRetrieval(unittest.IsolatedAsyncioTestCase):
             knowledge_pack_id=uuid.uuid4(),
         )
         self.assertEqual(await service.search(pack_scoped_query), [])
+
+    async def test_service_profile_scope_is_relationally_revalidated(self) -> None:
+        ids = _ids()
+        service_profile_id = uuid.uuid4()
+        fixture = _RelationalFixture(ids)
+        fixture.rows["knowledge_pack_knowledge_scope"][
+            "service_profile_id"
+        ] = service_profile_id
+        fixture.rows["service_profile_service_profile"] = {
+            "id": service_profile_id,
+            "tenant_id": ids["tenant"],
+            "status": "active",
+            "deleted_at": None,
+        }
+        gateway = _WritableGateway(
+            KnowledgeSearchResult(
+                items=[
+                    self._hit(
+                        ids,
+                        service_profile_id=str(service_profile_id),
+                    )
+                ]
+            )
+        )
+        service = KnowledgeRetrievalService(
+            rsg=fixture,  # type: ignore[arg-type]
+            gateway=gateway,
+        )
+        query = KnowledgeSearchQuery(
+            tenant_id=ids["tenant"],
+            query_text="refund",
+            service_profile_id=service_profile_id,
+        )
+        results = await service.search(query)
+        self.assertEqual(results[0].service_profile_id, service_profile_id)
+
+        with patch.object(
+            service,
+            "_profile_active",
+            new=AsyncMock(side_effect=[True, False]),
+        ):
+            self.assertEqual(await service.search(query), [])
+
+        fixture.rows["service_profile_service_profile"]["status"] = "disabled"
+        self.assertEqual(await service.search(query), [])
+
+        fixture.rows["service_profile_service_profile"]["status"] = "active"
+        unscoped_query = KnowledgeSearchQuery(
+            tenant_id=ids["tenant"],
+            query_text="refund",
+        )
+        self.assertEqual(await service.search(unscoped_query), [])
+        self.assertFalse(
+            service._scope_matches(  # pylint: disable=protected-access
+                {"service_profile_id": service_profile_id},
+                unscoped_query,
+            )
+        )
+        self.assertFalse(
+            service._scope_matches(  # pylint: disable=protected-access
+                {"service_profile_id": service_profile_id},
+                KnowledgeSearchQuery(
+                    tenant_id=ids["tenant"],
+                    query_text="refund",
+                    service_profile_id=uuid.uuid4(),
+                ),
+            )
+        )
 
     async def test_rejects_cross_tenant_stale_inactive_and_incomplete_hits(
         self,
