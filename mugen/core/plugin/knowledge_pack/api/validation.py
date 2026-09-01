@@ -83,6 +83,16 @@ class KnowledgePackRollbackVersionValidation(KnowledgePackVersionActionValidatio
     """Validate payload for rollback_version actions."""
 
 
+class KnowledgePackReindexValidation(KnowledgePackVersionActionValidation):
+    """Validate payload for reindex actions."""
+
+
+class KnowledgeIndexProjectionRetryValidation(IValidationBase):
+    """Validate payload for controlled projection retry actions."""
+
+    row_version: PositiveInt
+
+
 class KnowledgeEntryCreateValidation(IValidationBase):
     """Validate generic create inputs for KnowledgeEntry."""
 
@@ -191,14 +201,16 @@ class KnowledgeScopeCreateValidation(IValidationBase):
         if self.category is not None and not (self.category or "").strip():
             raise ValueError("Category cannot be empty if provided.")
 
-        if self.service_route_key is not None and not (
-            self.service_route_key or ""
-        ).strip():
+        if (
+            self.service_route_key is not None
+            and not (self.service_route_key or "").strip()
+        ):
             raise ValueError("ServiceRouteKey cannot be empty if provided.")
 
-        if self.client_profile_key is not None and not (
-            self.client_profile_key or ""
-        ).strip():
+        if (
+            self.client_profile_key is not None
+            and not (self.client_profile_key or "").strip()
+        ):
             raise ValueError("ClientProfileKey cannot be empty if provided.")
 
         return self

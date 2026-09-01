@@ -9,6 +9,8 @@ __all__ = [
     "KnowledgeApproval",
     "KnowledgeApprovalAction",
     "KnowledgeScope",
+    "KnowledgeIndexProjection",
+    "KnowledgeProjectionStatus",
 ]
 
 from mugen.core.plugin.knowledge_pack.model.knowledge_pack import KnowledgePack
@@ -25,3 +27,7 @@ from mugen.core.plugin.knowledge_pack.model.knowledge_approval import (
     KnowledgeApprovalAction,
 )
 from mugen.core.plugin.knowledge_pack.model.knowledge_scope import KnowledgeScope
+from mugen.core.plugin.knowledge_pack.model.knowledge_index_projection import (
+    KnowledgeIndexProjection,
+    KnowledgeProjectionStatus,
+)

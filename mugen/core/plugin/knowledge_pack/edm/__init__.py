@@ -7,6 +7,7 @@ __all__ = [
     "knowledge_entry_revision_type",
     "knowledge_approval_type",
     "knowledge_scope_type",
+    "knowledge_index_projection_type",
 ]
 
 from mugen.core.plugin.knowledge_pack.edm.knowledge_pack import knowledge_pack_type
@@ -21,3 +22,6 @@ from mugen.core.plugin.knowledge_pack.edm.knowledge_approval import (
     knowledge_approval_type,
 )
 from mugen.core.plugin.knowledge_pack.edm.knowledge_scope import knowledge_scope_type
+from mugen.core.plugin.knowledge_pack.edm.knowledge_index_projection import (
+    knowledge_index_projection_type,
+)

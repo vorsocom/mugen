@@ -11,13 +11,17 @@ import uuid
 
 from sentence_transformers import SentenceTransformer
 
-from mugen.core.contract.dto.weaviate.search import WeaviateSearchVendorParams
 from mugen.core.contract.gateway.knowledge import (
     IKnowledgeGateway,
+    KnowledgeDeleteSelector,
     KnowledgeGatewayRuntimeError,
+    KnowledgeGatewayWriteResult,
+    KnowledgeIndexDocument,
+    KnowledgeSearchQuery,
     KnowledgeSearchResult,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.gateway.knowledge.common import apply_query_scope, selector_metadata
 from mugen.core.utility.config_value import (
     parse_bool_flag,
     parse_nonnegative_finite_float,
@@ -49,6 +53,17 @@ class WeaviateKnowledgeGateway(IKnowledgeGateway):
         "category",
         "title",
         "body",
+    )
+    _governed_properties = (
+        "document_id",
+        "knowledge_pack_id",
+        "knowledge_entry_id",
+        "knowledge_scope_id",
+        "entry_key",
+        "service_route_key",
+        "client_profile_key",
+        "content_checksum",
+        "projection_schema_version",
     )
 
     def __init__(
@@ -130,7 +145,9 @@ class WeaviateKnowledgeGateway(IKnowledgeGateway):
     def _resolve_api_http_host(self) -> str:
         raw_value = getattr(self._section("weaviate", "api"), "http_host", None)
         if not isinstance(raw_value, str) or raw_value.strip() == "":
-            raise RuntimeError("Invalid configuration: weaviate.api.http_host is required.")
+            raise RuntimeError(
+                "Invalid configuration: weaviate.api.http_host is required."
+            )
         return raw_value.strip()
 
     def _resolve_api_http_port(self) -> int:
@@ -159,7 +176,9 @@ class WeaviateKnowledgeGateway(IKnowledgeGateway):
     def _resolve_api_grpc_host(self) -> str:
         raw_value = getattr(self._section("weaviate", "api"), "grpc_host", None)
         if not isinstance(raw_value, str) or raw_value.strip() == "":
-            raise RuntimeError("Invalid configuration: weaviate.api.grpc_host is required.")
+            raise RuntimeError(
+                "Invalid configuration: weaviate.api.grpc_host is required."
+            )
         return raw_value.strip()
 
     def _resolve_api_grpc_port(self) -> int:
@@ -573,6 +592,8 @@ class WeaviateKnowledgeGateway(IKnowledgeGateway):
         channel: str | None,
         locale: str | None,
         category: str | None,
+        knowledge_pack_id: str | None = None,
+        knowledge_pack_version_id: str | None = None,
     ):
         # pylint: disable=import-outside-toplevel
         from weaviate.classes.query import Filter
@@ -584,6 +605,16 @@ class WeaviateKnowledgeGateway(IKnowledgeGateway):
             filters.append(Filter.by_property("locale").equal(locale))
         if category is not None:
             filters.append(Filter.by_property("category").equal(category))
+        if knowledge_pack_id is not None:
+            filters.append(
+                Filter.by_property("knowledge_pack_id").equal(knowledge_pack_id)
+            )
+        if knowledge_pack_version_id is not None:
+            filters.append(
+                Filter.by_property("knowledge_pack_version_id").equal(
+                    knowledge_pack_version_id
+                )
+            )
         if len(filters) == 1:
             return filters[0]
         return Filter.all_of(filters)
@@ -602,7 +633,9 @@ class WeaviateKnowledgeGateway(IKnowledgeGateway):
         objects = getattr(query_result, "objects", None)
         if isinstance(objects, list):
             return list(objects)
-        raise RuntimeError("Weaviate knowledge gateway returned an invalid query payload.")
+        raise RuntimeError(
+            "Weaviate knowledge gateway returned an invalid query payload."
+        )
 
     @staticmethod
     def _extract_properties(item: object) -> dict[str, Any]:
@@ -681,9 +714,25 @@ class WeaviateKnowledgeGateway(IKnowledgeGateway):
             "knowledge_entry_revision_id": revision_id,
             "knowledge_pack_version_id": version_id,
             "tenant_id": tenant_id,
+            "knowledge_pack_id": self._coerce_optional_string(
+                properties.get("knowledge_pack_id")
+            ),
+            "knowledge_entry_id": self._coerce_optional_string(
+                properties.get("knowledge_entry_id")
+            ),
+            "knowledge_scope_id": self._coerce_optional_string(
+                properties.get("knowledge_scope_id")
+            ),
+            "entry_key": self._coerce_optional_string(properties.get("entry_key")),
             "channel": self._coerce_optional_string(properties.get("channel")),
             "locale": self._coerce_optional_string(properties.get("locale")),
             "category": self._coerce_optional_string(properties.get("category")),
+            "service_route_key": self._coerce_optional_string(
+                properties.get("service_route_key")
+            ),
+            "client_profile_key": self._coerce_optional_string(
+                properties.get("client_profile_key")
+            ),
             "title": title,
             "snippet": self._build_snippet(
                 title=title,
@@ -716,6 +765,7 @@ class WeaviateKnowledgeGateway(IKnowledgeGateway):
         query_vector: list[float],
         query_filters: object,
         top_k: int,
+        governed: bool = False,
     ) -> object:
         collection = await self._get_collection()
         query = getattr(getattr(collection, "query", None), "near_vector", None)
@@ -727,7 +777,10 @@ class WeaviateKnowledgeGateway(IKnowledgeGateway):
             "limit": top_k,
             "filters": query_filters,
             "return_metadata": self._metadata_query_factory(),
-            "return_properties": list(self._required_properties),
+            "return_properties": list(
+                self._required_properties
+                + (self._governed_properties if governed else ())
+            ),
         }
         if self._search_target_vector is not None:
             query_kwargs["target_vector"] = self._search_target_vector
@@ -812,24 +865,151 @@ class WeaviateKnowledgeGateway(IKnowledgeGateway):
                 "Weaviate knowledge gateway encoder initialization failed."
             ) from exc
 
+    async def upsert_documents(
+        self,
+        documents: list[KnowledgeIndexDocument],
+    ) -> KnowledgeGatewayWriteResult:
+        """Idempotently upsert governed objects into Weaviate."""
+        self._assert_open()
+        if not documents:
+            return KnowledgeGatewayWriteResult(self.provider_name, 0, 0)
+        try:
+            embeddings = await asyncio.gather(
+                *(self._encode_search_term(document.content) for document in documents)
+            )
+            collection = await self._get_collection()
+            data_api = getattr(collection, "data", None)
+            exists = getattr(data_api, "exists", None)
+            insert = getattr(data_api, "insert", None)
+            replace = getattr(data_api, "replace", None)
+            if not callable(exists) or not callable(insert) or not callable(replace):
+                raise RuntimeError(
+                    "Weaviate knowledge gateway write API is unavailable."
+                )
+
+            async def write_all() -> None:
+                for document, embedding in zip(documents, embeddings):
+                    properties = {
+                        **{
+                            key: "" if value is None else value
+                            for key, value in document.metadata().items()
+                        },
+                        "document_id": document.document_id,
+                        "body": document.content,
+                    }
+                    object_exists = await asyncio.to_thread(
+                        exists,
+                        uuid=document.document_id,
+                    )
+                    method = replace if object_exists else insert
+                    await asyncio.to_thread(
+                        method,
+                        uuid=document.document_id,
+                        properties=properties,
+                        vector=embedding,
+                    )
+
+            await self._execute_with_retry(
+                operation="upsert",
+                request_factory=write_all,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise KnowledgeGatewayRuntimeError(
+                provider=self.provider_name,
+                operation="upsert",
+                cause=exc,
+            ) from exc
+        return KnowledgeGatewayWriteResult(
+            self.provider_name,
+            len(documents),
+            len(documents),
+        )
+
+    async def delete_documents(
+        self,
+        selector: KnowledgeDeleteSelector,
+    ) -> KnowledgeGatewayWriteResult:
+        """Delete Weaviate objects inside a mandatory tenant selector."""
+        self._assert_open()
+        try:
+            from weaviate.classes.query import (
+                Filter,
+            )  # pylint: disable=import-outside-toplevel
+
+            filters = [
+                Filter.by_property(key).equal(value)
+                for key, value in selector_metadata(selector).items()
+            ]
+            if selector.document_ids:
+                filters.append(
+                    Filter.by_property("document_id").contains_any(
+                        list(selector.document_ids)
+                    )
+                )
+            delete_filter = filters[0] if len(filters) == 1 else Filter.all_of(filters)
+            collection = await self._get_collection()
+            delete_many = getattr(
+                getattr(collection, "data", None), "delete_many", None
+            )
+            if not callable(delete_many):
+                raise RuntimeError(
+                    "Weaviate knowledge gateway delete API is unavailable."
+                )
+            await self._execute_with_retry(
+                operation="delete",
+                request_factory=lambda: asyncio.to_thread(
+                    delete_many,
+                    where=delete_filter,
+                ),
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise KnowledgeGatewayRuntimeError(
+                provider=self.provider_name,
+                operation="delete",
+                cause=exc,
+            ) from exc
+        requested_count = len(selector.document_ids)
+        return KnowledgeGatewayWriteResult(
+            self.provider_name,
+            requested_count,
+            requested_count if selector.document_ids else None,
+        )
+
     async def search(
         self,
-        params: WeaviateSearchVendorParams,
+        params: KnowledgeSearchQuery,
     ) -> KnowledgeSearchResult:
         self._assert_open()
         tenant_id = self._normalize_tenant_id(params.tenant_id)
         search_term = self._normalize_search_term(params.search_term)
         top_k = self._resolve_effective_top_k(params.top_k)
         min_similarity = self._normalize_min_similarity(params.min_similarity)
-        channel = self._normalize_optional_filter(params.channel)
-        locale = self._normalize_optional_filter(params.locale)
-        category = self._normalize_optional_filter(params.category)
+        neutral_query = isinstance(params, KnowledgeSearchQuery)
+        channel = (
+            None if neutral_query else self._normalize_optional_filter(params.channel)
+        )
+        locale = (
+            None if neutral_query else self._normalize_optional_filter(params.locale)
+        )
+        category = (
+            None if neutral_query else self._normalize_optional_filter(params.category)
+        )
         query_vector = await self._encode_search_term(search_term)
         query_filters = self._build_query_filters(
             tenant_id=tenant_id,
             channel=channel,
             locale=locale,
             category=category,
+            knowledge_pack_id=(
+                None
+                if getattr(params, "knowledge_pack_id", None) is None
+                else str(params.knowledge_pack_id)
+            ),
+            knowledge_pack_version_id=(
+                None
+                if getattr(params, "knowledge_pack_version_id", None) is None
+                else str(params.knowledge_pack_version_id)
+            ),
         )
 
         try:
@@ -838,13 +1018,16 @@ class WeaviateKnowledgeGateway(IKnowledgeGateway):
                 request_factory=lambda: self._query_collection(
                     query_vector=query_vector,
                     query_filters=query_filters,
-                    top_k=top_k,
+                    top_k=self._search_max_top_k if neutral_query else top_k,
+                    governed=neutral_query,
                 ),
             )
             items = self._normalise_items(
                 query_result=raw_response,
                 min_similarity=min_similarity,
             )
+            if neutral_query:
+                items = apply_query_scope(items, params)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self._logging_gateway.warning(
                 "WeaviateKnowledgeGateway transport failure "
