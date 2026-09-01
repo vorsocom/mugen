@@ -3,7 +3,7 @@
 __all__ = ["KnowledgeScopeService"]
 
 import uuid
-from typing import Sequence
+from typing import Any, Mapping, Sequence
 
 from quart import abort
 from sqlalchemy.exc import SQLAlchemyError
@@ -30,6 +30,9 @@ from mugen.core.plugin.knowledge_pack.service.knowledge_entry_revision import (
 from mugen.core.plugin.knowledge_pack.service.knowledge_pack_version import (
     KnowledgePackVersionService,
 )
+from mugen.core.plugin.knowledge_pack.service.projection_guard import (
+    KnowledgeProjectionMutationGuard,
+)
 
 
 class KnowledgeScopeService(
@@ -55,6 +58,40 @@ class KnowledgeScopeService(
         self._revision_service = KnowledgeEntryRevisionService(
             table=self._REVISION_TABLE,
             rsg=rsg,
+        )
+        self._projection_guard = KnowledgeProjectionMutationGuard(rsg)
+
+    async def create(self, values: Mapping[str, Any]) -> KnowledgeScopeDE:
+        """Create a scope only while its version is mutable."""
+        await self._projection_guard.assert_mutable(
+            tenant_id=uuid.UUID(str(values["tenant_id"])),
+            knowledge_pack_version_id=uuid.UUID(
+                str(values["knowledge_pack_version_id"])
+            ),
+        )
+        return await super().create(values)
+
+    async def update_with_row_version(
+        self,
+        where: Mapping[str, Any],
+        *,
+        expected_row_version: int,
+        changes: Mapping[str, Any],
+    ) -> KnowledgeScopeDE | None:
+        """Update a scope only while its version is mutable."""
+        current = await self.get(where)
+        if current is None:
+            return None
+        if current.tenant_id is None or current.knowledge_pack_version_id is None:
+            return None
+        await self._projection_guard.assert_mutable(
+            tenant_id=current.tenant_id,
+            knowledge_pack_version_id=current.knowledge_pack_version_id,
+        )
+        return await super().update_with_row_version(
+            where,
+            expected_row_version=expected_row_version,
+            changes=changes,
         )
 
     async def list_published_revisions(
@@ -170,9 +207,7 @@ class KnowledgeScopeService(
             abort(500)
 
         published_revisions = [
-            revision
-            for revision in revisions
-            if revision.status == "published"
+            revision for revision in revisions if revision.status == "published"
         ]
         return sorted(
             published_revisions,

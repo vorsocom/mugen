@@ -7,6 +7,7 @@ __all__ = [
     "IKnowledgeEntryRevisionService",
     "IKnowledgeApprovalService",
     "IKnowledgeScopeService",
+    "IKnowledgeIndexProjectionService",
 ]
 
 from mugen.core.plugin.knowledge_pack.contract.service.knowledge_pack import (
@@ -26,4 +27,7 @@ from mugen.core.plugin.knowledge_pack.contract.service.knowledge_approval import
 )
 from mugen.core.plugin.knowledge_pack.contract.service.knowledge_scope import (
     IKnowledgeScopeService,
+)
+from .knowledge_index_projection import (
+    IKnowledgeIndexProjectionService,
 )

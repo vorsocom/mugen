@@ -88,3 +88,15 @@ class IKnowledgePackVersionService(
         data: IValidationBase,
     ) -> tuple[dict[str, Any], int]:
         """Rollback publication to this historical version."""
+
+    @abstractmethod
+    async def action_reindex(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        entity_id: uuid.UUID,
+        where: Mapping[str, Any],
+        auth_user_id: uuid.UUID,
+        data: IValidationBase,
+    ) -> tuple[dict[str, Any], int]:
+        """Queue a replacement projection for a published version."""

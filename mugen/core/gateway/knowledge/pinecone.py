@@ -11,14 +11,18 @@ import uuid
 
 from sentence_transformers import SentenceTransformer
 
-from mugen.core.contract.dto.pinecone.search import PineconeSearchVendorParams
 from mugen.core.contract.gateway.knowledge import (
     IKnowledgeGateway,
+    KnowledgeDeleteSelector,
     KnowledgeGatewayRuntimeError,
+    KnowledgeGatewayWriteResult,
+    KnowledgeIndexDocument,
+    KnowledgeSearchQuery,
     KnowledgeSearchResult,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.gateway.completion.timeout_config import require_fields_in_production
+from mugen.core.gateway.knowledge.common import apply_query_scope, selector_metadata
 from mugen.core.utility.config_value import (
     parse_nonnegative_finite_float,
     parse_optional_positive_finite_float,
@@ -464,7 +468,9 @@ class PineconeKnowledgeGateway(IKnowledgeGateway):
             return text
         return text[: self._snippet_max_chars]
 
-    def _normalize_similarity_distance(self, score_raw: object) -> tuple[float | None, float | None]:
+    def _normalize_similarity_distance(
+        self, score_raw: object
+    ) -> tuple[float | None, float | None]:
         score = self._coerce_float(score_raw)
         if score is None:
             return None, None
@@ -481,6 +487,8 @@ class PineconeKnowledgeGateway(IKnowledgeGateway):
         channel: str | None,
         locale: str | None,
         category: str | None,
+        knowledge_pack_id: str | None = None,
+        knowledge_pack_version_id: str | None = None,
     ) -> dict[str, Any]:
         query_filter: dict[str, Any] = {"tenant_id": tenant_id}
         if channel is not None:
@@ -489,6 +497,10 @@ class PineconeKnowledgeGateway(IKnowledgeGateway):
             query_filter["locale"] = locale
         if category is not None:
             query_filter["category"] = category
+        if knowledge_pack_id is not None:
+            query_filter["knowledge_pack_id"] = knowledge_pack_id
+        if knowledge_pack_version_id is not None:
+            query_filter["knowledge_pack_version_id"] = knowledge_pack_version_id
         return query_filter
 
     @staticmethod
@@ -567,9 +579,25 @@ class PineconeKnowledgeGateway(IKnowledgeGateway):
             "knowledge_entry_revision_id": revision_id,
             "knowledge_pack_version_id": version_id,
             "tenant_id": tenant_id,
+            "knowledge_pack_id": self._coerce_optional_string(
+                metadata.get("knowledge_pack_id")
+            ),
+            "knowledge_entry_id": self._coerce_optional_string(
+                metadata.get("knowledge_entry_id")
+            ),
+            "knowledge_scope_id": self._coerce_optional_string(
+                metadata.get("knowledge_scope_id")
+            ),
+            "entry_key": self._coerce_optional_string(metadata.get("entry_key")),
             "channel": self._coerce_optional_string(metadata.get("channel")),
             "locale": self._coerce_optional_string(metadata.get("locale")),
             "category": self._coerce_optional_string(metadata.get("category")),
+            "service_route_key": self._coerce_optional_string(
+                metadata.get("service_route_key")
+            ),
+            "client_profile_key": self._coerce_optional_string(
+                metadata.get("client_profile_key")
+            ),
             "title": title,
             "snippet": self._build_snippet(title=title, body=body),
             "similarity": similarity,
@@ -671,9 +699,15 @@ class PineconeKnowledgeGateway(IKnowledgeGateway):
         return None
 
     def _warn_missing_timeout_in_production(self) -> None:
-        environment = str(
-            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
-        ).strip().lower()
+        environment = (
+            str(
+                getattr(
+                    getattr(self._config, "mugen", SimpleNamespace()), "environment", ""
+                )
+            )
+            .strip()
+            .lower()
+        )
         if environment != "production":
             return
         if self._api_timeout_seconds is None:
@@ -719,24 +753,135 @@ class PineconeKnowledgeGateway(IKnowledgeGateway):
                 "Pinecone knowledge gateway encoder initialization failed."
             ) from exc
 
+    async def upsert_documents(
+        self,
+        documents: list[KnowledgeIndexDocument],
+    ) -> KnowledgeGatewayWriteResult:
+        """Idempotently upsert governed vectors into the Pinecone index."""
+        self._assert_open()
+        if not documents:
+            return KnowledgeGatewayWriteResult(self.provider_name, 0, 0)
+        try:
+            embeddings = await asyncio.gather(
+                *(self._encode_search_term(document.content) for document in documents)
+            )
+            vectors = []
+            for document, embedding in zip(documents, embeddings):
+                metadata = {
+                    key: "" if value is None else value
+                    for key, value in document.metadata().items()
+                }
+                metadata["body"] = document.content
+                metadata["document_id"] = document.document_id
+                vectors.append(
+                    {
+                        "id": document.document_id,
+                        "values": embedding,
+                        "metadata": metadata,
+                    }
+                )
+            index = await self._get_index()
+            upsert = getattr(index, "upsert", None)
+            if not callable(upsert):
+                raise RuntimeError(
+                    "Pinecone knowledge gateway upsert API is unavailable."
+                )
+            kwargs: dict[str, Any] = {"vectors": vectors}
+            if self._search_namespace is not None:
+                kwargs["namespace"] = self._search_namespace
+            await self._execute_with_retry(
+                operation="upsert",
+                request_factory=lambda: self._await_with_timeout(
+                    self._call_provider_method(upsert, **kwargs),
+                    timeout_seconds=self._api_timeout_seconds,
+                ),
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise KnowledgeGatewayRuntimeError(
+                provider=self.provider_name,
+                operation="upsert",
+                cause=exc,
+            ) from exc
+        return KnowledgeGatewayWriteResult(
+            self.provider_name,
+            len(documents),
+            len(documents),
+        )
+
+    async def delete_documents(
+        self,
+        selector: KnowledgeDeleteSelector,
+    ) -> KnowledgeGatewayWriteResult:
+        """Delete Pinecone vectors inside a mandatory tenant selector."""
+        self._assert_open()
+        delete_filter: dict[str, Any] = selector_metadata(selector)
+        if selector.document_ids:
+            delete_filter["document_id"] = {"$in": list(selector.document_ids)}
+        try:
+            index = await self._get_index()
+            delete = getattr(index, "delete", None)
+            if not callable(delete):
+                raise RuntimeError(
+                    "Pinecone knowledge gateway delete API is unavailable."
+                )
+            kwargs: dict[str, Any] = {"filter": delete_filter}
+            if self._search_namespace is not None:
+                kwargs["namespace"] = self._search_namespace
+            await self._execute_with_retry(
+                operation="delete",
+                request_factory=lambda: self._await_with_timeout(
+                    self._call_provider_method(delete, **kwargs),
+                    timeout_seconds=self._api_timeout_seconds,
+                ),
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise KnowledgeGatewayRuntimeError(
+                provider=self.provider_name,
+                operation="delete",
+                cause=exc,
+            ) from exc
+        requested_count = len(selector.document_ids)
+        return KnowledgeGatewayWriteResult(
+            self.provider_name,
+            requested_count,
+            requested_count if selector.document_ids else None,
+        )
+
     async def search(
         self,
-        params: PineconeSearchVendorParams,
+        params: KnowledgeSearchQuery,
     ) -> KnowledgeSearchResult:
         self._assert_open()
         tenant_id = self._normalize_tenant_id(params.tenant_id)
         search_term = self._normalize_search_term(params.search_term)
         top_k = self._resolve_effective_top_k(params.top_k)
         min_similarity = self._normalize_min_similarity(params.min_similarity)
-        channel = self._normalize_optional_filter(params.channel)
-        locale = self._normalize_optional_filter(params.locale)
-        category = self._normalize_optional_filter(params.category)
+        neutral_query = isinstance(params, KnowledgeSearchQuery)
+        channel = (
+            None if neutral_query else self._normalize_optional_filter(params.channel)
+        )
+        locale = (
+            None if neutral_query else self._normalize_optional_filter(params.locale)
+        )
+        category = (
+            None if neutral_query else self._normalize_optional_filter(params.category)
+        )
         query_vector = await self._encode_search_term(search_term)
         query_filter = self._build_query_filter(
             tenant_id=tenant_id,
             channel=channel,
             locale=locale,
             category=category,
+            knowledge_pack_id=(
+                None
+                if getattr(params, "knowledge_pack_id", None) is None
+                else str(params.knowledge_pack_id)
+            ),
+            knowledge_pack_version_id=(
+                None
+                if getattr(params, "knowledge_pack_version_id", None) is None
+                else str(params.knowledge_pack_version_id)
+            ),
         )
 
         try:
@@ -745,13 +890,15 @@ class PineconeKnowledgeGateway(IKnowledgeGateway):
                 request_factory=lambda: self._query_index(
                     query_vector=query_vector,
                     query_filter=query_filter,
-                    top_k=top_k,
+                    top_k=self._search_max_top_k if neutral_query else top_k,
                 ),
             )
             items = self._normalise_items(
                 query_result=raw_response,
                 min_similarity=min_similarity,
             )
+            if neutral_query:
+                items = apply_query_scope(items, params)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self._logging_gateway.warning(
                 "PineconeKnowledgeGateway transport failure "

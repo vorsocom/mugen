@@ -11,13 +11,17 @@ import uuid
 
 from sentence_transformers import SentenceTransformer
 
-from mugen.core.contract.dto.milvus.search import MilvusSearchVendorParams
 from mugen.core.contract.gateway.knowledge import (
     IKnowledgeGateway,
+    KnowledgeDeleteSelector,
     KnowledgeGatewayRuntimeError,
+    KnowledgeGatewayWriteResult,
+    KnowledgeIndexDocument,
+    KnowledgeSearchQuery,
     KnowledgeSearchResult,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.gateway.knowledge.common import apply_query_scope, selector_metadata
 from mugen.core.utility.config_value import (
     parse_nonnegative_finite_float,
     parse_optional_positive_finite_float,
@@ -45,6 +49,16 @@ class MilvusKnowledgeGateway(IKnowledgeGateway):
         "category",
         "title",
         "body",
+    )
+    _governed_payload_keys = (
+        "knowledge_pack_id",
+        "knowledge_entry_id",
+        "knowledge_scope_id",
+        "entry_key",
+        "service_route_key",
+        "client_profile_key",
+        "content_checksum",
+        "projection_schema_version",
     )
 
     def __init__(
@@ -420,6 +434,8 @@ class MilvusKnowledgeGateway(IKnowledgeGateway):
         channel: str | None,
         locale: str | None,
         category: str | None,
+        knowledge_pack_id: str | None = None,
+        knowledge_pack_version_id: str | None = None,
     ) -> str:
         conditions = [
             f'tenant_id == "{self._escape_filter_value(tenant_id)}"',
@@ -430,6 +446,16 @@ class MilvusKnowledgeGateway(IKnowledgeGateway):
             conditions.append(f'locale == "{self._escape_filter_value(locale)}"')
         if category is not None:
             conditions.append(f'category == "{self._escape_filter_value(category)}"')
+        if knowledge_pack_id is not None:
+            conditions.append(
+                "knowledge_pack_id == "
+                f'"{self._escape_filter_value(knowledge_pack_id)}"'
+            )
+        if knowledge_pack_version_id is not None:
+            conditions.append(
+                "knowledge_pack_version_id == "
+                f'"{self._escape_filter_value(knowledge_pack_version_id)}"'
+            )
         return " and ".join(conditions)
 
     @staticmethod
@@ -500,9 +526,25 @@ class MilvusKnowledgeGateway(IKnowledgeGateway):
             "knowledge_entry_revision_id": revision_id,
             "knowledge_pack_version_id": version_id,
             "tenant_id": tenant_id,
+            "knowledge_pack_id": self._coerce_optional_string(
+                payload.get("knowledge_pack_id")
+            ),
+            "knowledge_entry_id": self._coerce_optional_string(
+                payload.get("knowledge_entry_id")
+            ),
+            "knowledge_scope_id": self._coerce_optional_string(
+                payload.get("knowledge_scope_id")
+            ),
+            "entry_key": self._coerce_optional_string(payload.get("entry_key")),
             "channel": self._coerce_optional_string(payload.get("channel")),
             "locale": self._coerce_optional_string(payload.get("locale")),
             "category": self._coerce_optional_string(payload.get("category")),
+            "service_route_key": self._coerce_optional_string(
+                payload.get("service_route_key")
+            ),
+            "client_profile_key": self._coerce_optional_string(
+                payload.get("client_profile_key")
+            ),
             "title": title,
             "snippet": self._build_snippet(title=title, body=body),
             "similarity": similarity,
@@ -549,7 +591,9 @@ class MilvusKnowledgeGateway(IKnowledgeGateway):
             anns_field=self._search_vector_field,
             limit=top_k,
             filter=filter_expression,
-            output_fields=list(self._required_payload_keys),
+            output_fields=list(
+                self._required_payload_keys + self._governed_payload_keys
+            ),
         )
         if not isinstance(search_result, list):
             raise RuntimeError(
@@ -634,24 +678,133 @@ class MilvusKnowledgeGateway(IKnowledgeGateway):
                 "Milvus knowledge gateway encoder initialization failed."
             ) from exc
 
+    async def upsert_documents(
+        self,
+        documents: list[KnowledgeIndexDocument],
+    ) -> KnowledgeGatewayWriteResult:
+        """Idempotently upsert governed rows into the Milvus collection."""
+        self._assert_open()
+        if not documents:
+            return KnowledgeGatewayWriteResult(self.provider_name, 0, 0)
+        try:
+            embeddings = await asyncio.gather(
+                *(self._encode_search_term(document.content) for document in documents)
+            )
+            rows = []
+            for document, embedding in zip(documents, embeddings):
+                rows.append(
+                    {
+                        "id": document.document_id,
+                        self._search_vector_field: embedding,
+                        **document.metadata(),
+                        "body": document.content,
+                    }
+                )
+            client = await self._get_client()
+            upsert = getattr(client, "upsert", None)
+            if not callable(upsert):
+                raise RuntimeError(
+                    "Milvus knowledge gateway upsert API is unavailable."
+                )
+            await self._execute_with_retry(
+                operation="upsert",
+                request_factory=lambda: asyncio.to_thread(
+                    upsert,
+                    collection_name=self._search_collection,
+                    data=rows,
+                ),
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise KnowledgeGatewayRuntimeError(
+                provider=self.provider_name,
+                operation="upsert",
+                cause=exc,
+            ) from exc
+        return KnowledgeGatewayWriteResult(
+            self.provider_name,
+            len(documents),
+            len(documents),
+        )
+
+    async def delete_documents(
+        self,
+        selector: KnowledgeDeleteSelector,
+    ) -> KnowledgeGatewayWriteResult:
+        """Delete Milvus rows inside a mandatory tenant selector."""
+        self._assert_open()
+        constraints = selector_metadata(selector)
+        conditions = [
+            f'{key} == "{self._escape_filter_value(value)}"'
+            for key, value in constraints.items()
+        ]
+        if selector.document_ids:
+            identifiers = ", ".join(
+                f'"{self._escape_filter_value(item)}"' for item in selector.document_ids
+            )
+            conditions.append(f"id in [{identifiers}]")
+        try:
+            client = await self._get_client()
+            delete = getattr(client, "delete", None)
+            if not callable(delete):
+                raise RuntimeError(
+                    "Milvus knowledge gateway delete API is unavailable."
+                )
+            await self._execute_with_retry(
+                operation="delete",
+                request_factory=lambda: asyncio.to_thread(
+                    delete,
+                    collection_name=self._search_collection,
+                    filter=" and ".join(conditions),
+                ),
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise KnowledgeGatewayRuntimeError(
+                provider=self.provider_name,
+                operation="delete",
+                cause=exc,
+            ) from exc
+        requested_count = len(selector.document_ids)
+        return KnowledgeGatewayWriteResult(
+            self.provider_name,
+            requested_count,
+            requested_count if selector.document_ids else None,
+        )
+
     async def search(
         self,
-        params: MilvusSearchVendorParams,
+        params: KnowledgeSearchQuery,
     ) -> KnowledgeSearchResult:
         self._assert_open()
         tenant_id = self._normalize_tenant_id(params.tenant_id)
         search_term = self._normalize_search_term(params.search_term)
         top_k = self._resolve_effective_top_k(params.top_k)
         min_similarity = self._normalize_min_similarity(params.min_similarity)
-        channel = self._normalize_optional_filter(params.channel)
-        locale = self._normalize_optional_filter(params.locale)
-        category = self._normalize_optional_filter(params.category)
+        neutral_query = isinstance(params, KnowledgeSearchQuery)
+        channel = (
+            None if neutral_query else self._normalize_optional_filter(params.channel)
+        )
+        locale = (
+            None if neutral_query else self._normalize_optional_filter(params.locale)
+        )
+        category = (
+            None if neutral_query else self._normalize_optional_filter(params.category)
+        )
         query_vector = await self._encode_search_term(search_term)
         filter_expression = self._build_filter_expression(
             tenant_id=tenant_id,
             channel=channel,
             locale=locale,
             category=category,
+            knowledge_pack_id=(
+                None
+                if getattr(params, "knowledge_pack_id", None) is None
+                else str(params.knowledge_pack_id)
+            ),
+            knowledge_pack_version_id=(
+                None
+                if getattr(params, "knowledge_pack_version_id", None) is None
+                else str(params.knowledge_pack_version_id)
+            ),
         )
 
         try:
@@ -660,13 +813,15 @@ class MilvusKnowledgeGateway(IKnowledgeGateway):
                 request_factory=lambda: self._query_collection(
                     query_vector=query_vector,
                     filter_expression=filter_expression,
-                    top_k=top_k,
+                    top_k=self._search_max_top_k if neutral_query else top_k,
                 ),
             )
             items = self._normalise_items(
                 search_result=raw_response,
                 min_similarity=min_similarity,
             )
+            if neutral_query:
+                items = apply_query_scope(items, params)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self._logging_gateway.warning(
                 "MilvusKnowledgeGateway transport failure "

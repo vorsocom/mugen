@@ -13,14 +13,18 @@ from qdrant_client import AsyncQdrantClient, models
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 from sentence_transformers import SentenceTransformer
 
-from mugen.core.contract.dto.qdrant.search import QdrantSearchVendorParams
 from mugen.core.contract.gateway.knowledge import (
     IKnowledgeGateway,
+    KnowledgeDeleteSelector,
     KnowledgeGatewayRuntimeError,
+    KnowledgeGatewayWriteResult,
+    KnowledgeIndexDocument,
+    KnowledgeSearchQuery,
     KnowledgeSearchResult,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.gateway.completion.timeout_config import require_fields_in_production
+from mugen.core.gateway.knowledge.common import apply_query_scope, selector_metadata
 from mugen.core.utility.config_value import (
     parse_nonnegative_finite_float,
     parse_optional_positive_finite_float,
@@ -251,9 +255,15 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
         return parsed
 
     def _warn_missing_timeout_in_production(self) -> None:
-        environment = str(
-            getattr(getattr(self._config, "mugen", SimpleNamespace()), "environment", "")
-        ).strip().lower()
+        environment = (
+            str(
+                getattr(
+                    getattr(self._config, "mugen", SimpleNamespace()), "environment", ""
+                )
+            )
+            .strip()
+            .lower()
+        )
         if environment != "production":
             return
         if self._api_timeout_seconds is None:
@@ -398,6 +408,8 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
         channel: str | None,
         locale: str | None,
         category: str | None,
+        knowledge_pack_id: str | None = None,
+        knowledge_pack_version_id: str | None = None,
     ) -> models.Filter:
         must_conditions = [
             models.FieldCondition(
@@ -424,6 +436,20 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
                 models.FieldCondition(
                     key="category",
                     match=models.MatchValue(value=category),
+                )
+            )
+        if knowledge_pack_id is not None:
+            must_conditions.append(
+                models.FieldCondition(
+                    key="knowledge_pack_id",
+                    match=models.MatchValue(value=knowledge_pack_id),
+                )
+            )
+        if knowledge_pack_version_id is not None:
+            must_conditions.append(
+                models.FieldCondition(
+                    key="knowledge_pack_version_id",
+                    match=models.MatchValue(value=knowledge_pack_version_id),
                 )
             )
         return models.Filter(must=must_conditions)
@@ -456,11 +482,15 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
     @staticmethod
     def _extract_points(search_result: object) -> list[Any]:
         if not isinstance(search_result, list):
-            raise RuntimeError("Qdrant knowledge gateway returned an invalid search payload.")
+            raise RuntimeError(
+                "Qdrant knowledge gateway returned an invalid search payload."
+            )
         return list(search_result)
 
     @staticmethod
-    def _extract_point_payload_and_score(point: object) -> tuple[dict[str, Any], object]:
+    def _extract_point_payload_and_score(
+        point: object,
+    ) -> tuple[dict[str, Any], object]:
         if isinstance(point, dict):
             payload = point.get("payload")
             if isinstance(payload, dict):
@@ -517,9 +547,25 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
             "knowledge_entry_revision_id": revision_id,
             "knowledge_pack_version_id": version_id,
             "tenant_id": tenant_id,
+            "knowledge_pack_id": self._coerce_optional_string(
+                payload.get("knowledge_pack_id")
+            ),
+            "knowledge_entry_id": self._coerce_optional_string(
+                payload.get("knowledge_entry_id")
+            ),
+            "knowledge_scope_id": self._coerce_optional_string(
+                payload.get("knowledge_scope_id")
+            ),
+            "entry_key": self._coerce_optional_string(payload.get("entry_key")),
             "channel": self._coerce_optional_string(payload.get("channel")),
             "locale": self._coerce_optional_string(payload.get("locale")),
             "category": self._coerce_optional_string(payload.get("category")),
+            "service_route_key": self._coerce_optional_string(
+                payload.get("service_route_key")
+            ),
+            "client_profile_key": self._coerce_optional_string(
+                payload.get("client_profile_key")
+            ),
             "title": title,
             "snippet": self._build_snippet(title=title, body=body),
             "similarity": similarity,
@@ -587,10 +633,16 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
         for attempt in range(1, attempts + 1):
             try:
                 return await request_factory()
-            except (ResponseHandlingException, UnexpectedResponse, asyncio.TimeoutError) as exc:
+            except (
+                ResponseHandlingException,
+                UnexpectedResponse,
+                asyncio.TimeoutError,
+            ) as exc:
                 if attempt >= attempts:
                     raise
-                delay_seconds = float(self._api_retry_backoff_seconds) * (2 ** (attempt - 1))
+                delay_seconds = float(self._api_retry_backoff_seconds) * (
+                    2 ** (attempt - 1)
+                )
                 self._logging_gateway.warning(
                     "QdrantKnowledgeGateway: transient %s failure; retrying "
                     "attempt=%d/%d delay_seconds=%.3f error=%s: %s"
@@ -623,7 +675,9 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
 
         probe = getattr(self._client, "get_collections", None)
         if callable(probe) is not True:
-            raise RuntimeError("Qdrant knowledge gateway readiness probe is unavailable.")
+            raise RuntimeError(
+                "Qdrant knowledge gateway readiness probe is unavailable."
+            )
 
         timeout_seconds = self._api_timeout_seconds
         if timeout_seconds is None:
@@ -635,7 +689,9 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
                 timeout=timeout_seconds,
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            raise RuntimeError("Qdrant knowledge gateway readiness probe failed.") from exc
+            raise RuntimeError(
+                "Qdrant knowledge gateway readiness probe failed."
+            ) from exc
 
         collection_names = self._extract_collection_names(collections_result)
         if self._search_collection not in collection_names:
@@ -650,24 +706,137 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
                 "Qdrant knowledge gateway encoder initialization failed."
             ) from exc
 
+    async def upsert_documents(
+        self,
+        documents: list[KnowledgeIndexDocument],
+    ) -> KnowledgeGatewayWriteResult:
+        """Idempotently upsert governed points into Qdrant."""
+        self._assert_open()
+        if not documents:
+            return KnowledgeGatewayWriteResult(self.provider_name, 0, 0)
+        try:
+            embeddings = await asyncio.gather(
+                *(self._encode_search_term(document.content) for document in documents)
+            )
+            points = [
+                models.PointStruct(
+                    id=document.document_id,
+                    vector=embedding,
+                    payload={**document.metadata(), "body": document.content},
+                )
+                for document, embedding in zip(documents, embeddings)
+            ]
+            upsert = getattr(self._client, "upsert", None)
+            if not callable(upsert):
+                raise RuntimeError(
+                    "Qdrant knowledge gateway upsert API is unavailable."
+                )
+            await self._execute_with_retry(
+                operation="upsert",
+                request_factory=lambda: self._call_provider_method(
+                    upsert,
+                    collection_name=self._search_collection,
+                    points=points,
+                    wait=True,
+                    **self._request_timeout_kwargs(),
+                ),
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise KnowledgeGatewayRuntimeError(
+                provider=self.provider_name,
+                operation="upsert",
+                cause=exc,
+            ) from exc
+        return KnowledgeGatewayWriteResult(
+            self.provider_name,
+            len(documents),
+            len(documents),
+        )
+
+    async def delete_documents(
+        self,
+        selector: KnowledgeDeleteSelector,
+    ) -> KnowledgeGatewayWriteResult:
+        """Delete Qdrant points inside a mandatory tenant selector."""
+        self._assert_open()
+        must_conditions: list[Any] = [
+            models.FieldCondition(
+                key=key,
+                match=models.MatchValue(value=value),
+            )
+            for key, value in selector_metadata(selector).items()
+        ]
+        if selector.document_ids:
+            must_conditions.append(
+                models.HasIdCondition(has_id=list(selector.document_ids))
+            )
+        points_selector = models.FilterSelector(
+            filter=models.Filter(must=must_conditions)
+        )
+        try:
+            delete = getattr(self._client, "delete", None)
+            if not callable(delete):
+                raise RuntimeError(
+                    "Qdrant knowledge gateway delete API is unavailable."
+                )
+            await self._execute_with_retry(
+                operation="delete",
+                request_factory=lambda: self._call_provider_method(
+                    delete,
+                    collection_name=self._search_collection,
+                    points_selector=points_selector,
+                    wait=True,
+                    **self._request_timeout_kwargs(),
+                ),
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise KnowledgeGatewayRuntimeError(
+                provider=self.provider_name,
+                operation="delete",
+                cause=exc,
+            ) from exc
+        requested_count = len(selector.document_ids)
+        return KnowledgeGatewayWriteResult(
+            self.provider_name,
+            requested_count,
+            requested_count if selector.document_ids else None,
+        )
+
     async def search(
         self,
-        params: QdrantSearchVendorParams,
+        params: KnowledgeSearchQuery,
     ) -> KnowledgeSearchResult:
         self._assert_open()
         tenant_id = self._normalize_tenant_id(params.tenant_id)
         search_term = self._normalize_search_term(params.search_term)
         top_k = self._resolve_effective_top_k(params.top_k)
         min_similarity = self._normalize_min_similarity(params.min_similarity)
-        channel = self._normalize_optional_filter(params.channel)
-        locale = self._normalize_optional_filter(params.locale)
-        category = self._normalize_optional_filter(params.category)
+        neutral_query = isinstance(params, KnowledgeSearchQuery)
+        channel = (
+            None if neutral_query else self._normalize_optional_filter(params.channel)
+        )
+        locale = (
+            None if neutral_query else self._normalize_optional_filter(params.locale)
+        )
+        category = (
+            None if neutral_query else self._normalize_optional_filter(params.category)
+        )
         query_vector = await self._encode_search_term(search_term)
         query_filter = self._build_query_filter(
             tenant_id=tenant_id,
             channel=channel,
             locale=locale,
             category=category,
+            knowledge_pack_id=(
+                None
+                if getattr(params, "knowledge_pack_id", None) is None
+                else str(params.knowledge_pack_id)
+            ),
+            knowledge_pack_version_id=(
+                None
+                if getattr(params, "knowledge_pack_version_id", None) is None
+                else str(params.knowledge_pack_version_id)
+            ),
         )
 
         try:
@@ -676,13 +845,15 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
                 request_factory=lambda: self._query_collection(
                     query_vector=query_vector,
                     query_filter=query_filter,
-                    top_k=top_k,
+                    top_k=self._search_max_top_k if neutral_query else top_k,
                 ),
             )
             items = self._normalise_items(
                 search_result=raw_response,
                 min_similarity=min_similarity,
             )
+            if neutral_query:
+                items = apply_query_scope(items, params)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self._logging_gateway.warning(
                 "QdrantKnowledgeGateway transport failure "

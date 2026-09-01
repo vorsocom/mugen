@@ -46,7 +46,9 @@ from mugen.core.plugin.knowledge_pack.api.validation import (
     KnowledgePackPublishValidation,
     KnowledgePackRejectValidation,
     KnowledgePackRollbackVersionValidation,
+    KnowledgePackReindexValidation,
     KnowledgePackSubmitForReviewValidation,
+    KnowledgeIndexProjectionRetryValidation,
     KnowledgeScopeCreateValidation,
     KnowledgeScopeUpdateValidation,
 )
@@ -60,6 +62,7 @@ _VERSION_ACTIONS = (
     "publish",
     "archive",
     "rollback_version",
+    "reindex",
 )
 
 
@@ -158,14 +161,17 @@ def contribute(
                     "schema": KnowledgePackRollbackVersionValidation,
                     "confirm": "Rollback publication to this version?",
                 },
+                "reindex": {
+                    "perm": plugin_ns.verb("reindex"),
+                    "schema": KnowledgePackReindexValidation,
+                    "confirm": "Reindex this published version?",
+                },
             },
         },
         {
             "set": "KnowledgeEntries",
             "entity": "KnowledgeEntry",
-            "description": (
-                "Knowledge items owned by a specific pack version."
-            ),
+            "description": ("Knowledge items owned by a specific pack version."),
             "allow_create": True,
             "allow_update": True,
             "allow_delete": False,
@@ -191,13 +197,30 @@ def contribute(
         {
             "set": "KnowledgeApprovals",
             "entity": "KnowledgeApproval",
-            "description": (
-                "Append-only governance approvals and publish decisions."
-            ),
+            "description": ("Append-only governance approvals and publish decisions."),
             "allow_create": False,
             "allow_update": False,
             "allow_delete": False,
             "crud": CrudPolicy(),
+        },
+        {
+            "set": "KnowledgeIndexProjections",
+            "entity": "KnowledgeIndexProjection",
+            "description": (
+                "System-created durable search projection attempts and lease status."
+            ),
+            "allow_create": False,
+            "allow_update": False,
+            "allow_delete": False,
+            "allow_manage": True,
+            "crud": CrudPolicy(),
+            "actions": {
+                "retry": {
+                    "perm": plugin_ns.verb("reindex"),
+                    "schema": KnowledgeIndexProjectionRetryValidation,
+                    "confirm": "Retry this projection attempt?",
+                },
+            },
         },
         {
             "set": "KnowledgeScopes",
@@ -312,9 +335,7 @@ def contribute(
         registry.register_edm_type_spec(
             EdmTypeSpec(
                 edm_type_name=edm_type_name,
-                edm_provider=(
-                    f"mugen.core.plugin.knowledge_pack.edm:{obj_name}_type"
-                ),
+                edm_provider=(f"mugen.core.plugin.knowledge_pack.edm:{obj_name}_type"),
             )
         )
 
