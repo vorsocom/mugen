@@ -115,6 +115,7 @@ The shared ingress foundation is part of that rule set:
   - `EXT_SERVICE_ADMIN_SVC_JWT`
   - `EXT_SERVICE_ADMIN_SVC_AUTH`
   - `EXT_SERVICE_CONTEXT_COMPONENT_REGISTRY`
+  - `EXT_SERVICE_KNOWLEDGE_CONVERSATION_SELECTOR`
 - ACP modules should keep DI defaults as module-level callables that resolve from
   `di.container` at call time (not import time).
 - ACP modules should build namespaced ACP keys via `AdminNs` instead of inline

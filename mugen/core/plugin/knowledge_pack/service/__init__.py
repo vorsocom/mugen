@@ -9,6 +9,7 @@ __all__ = [
     "KnowledgeScopeService",
     "KnowledgeIndexProjectionService",
     "ApprovedKnowledgeResult",
+    "KnowledgeConversationSelector",
     "KnowledgeRetrievalService",
 ]
 
@@ -36,4 +37,7 @@ from mugen.core.plugin.knowledge_pack.service.knowledge_index_projection import 
 from mugen.core.plugin.knowledge_pack.service.retrieval import (
     ApprovedKnowledgeResult,
     KnowledgeRetrievalService,
+)
+from mugen.core.plugin.knowledge_pack.service.conversation_selection import (
+    KnowledgeConversationSelector,
 )

@@ -112,7 +112,9 @@ and provide reusable platform primitives:
 - `billing`: global commercial/metering/reference definitions and tenant-scoped
   subscription, usage, entitlement, run, invoice, and payment operations.
 - `channel_orchestration`: intake, routing, throttle, blocklist, and fallback.
-- `knowledge_pack`: versioned knowledge content lifecycle and retrieval metadata.
+- `knowledge_pack`: versioned knowledge content lifecycle, safe semantic
+  retrieval, and provider-neutral conversational answer selection. See
+  [Knowledge Conversation Selection](knowledge-conversation-selection.md).
 - `ops_case`: canonical case lifecycle, assignment, escalation, and timeline.
 - `ops_governance`: consent/delegation/policy/retention metadata and actions.
 - `ops_metering`: tenant usage capture/rating/session primitives backed by global
