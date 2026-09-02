@@ -799,26 +799,43 @@ class TestKnowledgePackRuntimeWiring(unittest.IsolatedAsyncioTestCase):
             extension = KnowledgePackFWExtension(
                 rsg_provider=lambda: Mock(),
                 gateway_provider=lambda: None,
+                completion_gateway_provider=lambda: None,
                 logging_provider=lambda: logger,
             )
             await extension.setup(app)
-            register.assert_not_called()
+            registered = register.call_args.args[0]
+            self.assertIn(
+                "knowledge_conversation_selector",
+                registered,
+            )
             app.add_background_task.assert_not_called()
 
+            register.reset_mock()
             gateway = _Gateway()
             extension = KnowledgePackFWExtension(
                 rsg_provider=lambda: Mock(),
                 gateway_provider=lambda: gateway,
+                completion_gateway_provider=lambda: None,
                 logging_provider=lambda: logger,
             )
             await extension.setup(app)
             register.assert_called_once()
+            registered = register.call_args.args[0]
+            self.assertEqual(
+                set(registered),
+                {
+                    "knowledge_conversation_selector",
+                    "knowledge_projection_worker",
+                    "knowledge_retrieval_service",
+                },
+            )
             app.add_background_task.assert_called_once()
 
         gateway = _Gateway()
         container = SimpleNamespace(
             relational_storage_gateway=Mock(),
             knowledge_gateway=gateway,
+            completion_gateway=None,
             logging_gateway=logger,
             register_ext_services=Mock(),
         )
