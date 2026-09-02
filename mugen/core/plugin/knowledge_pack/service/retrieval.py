@@ -4,7 +4,6 @@ from __future__ import annotations
 
 __all__ = ["ApprovedKnowledgeResult", "KnowledgeRetrievalService"]
 
-from dataclasses import dataclass
 from typing import Any
 import uuid
 
@@ -14,33 +13,9 @@ from mugen.core.contract.gateway.knowledge import (
     KnowledgeSearchQuery,
 )
 from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorageGateway
-
-
-# pylint: disable=too-many-instance-attributes
-@dataclass(slots=True, frozen=True)
-class ApprovedKnowledgeResult:
-    """Authoritative relational content with gateway score and provenance."""
-
-    tenant_id: uuid.UUID
-    knowledge_pack_id: uuid.UUID
-    knowledge_pack_version_id: uuid.UUID
-    knowledge_entry_id: uuid.UUID
-    knowledge_entry_revision_id: uuid.UUID
-    knowledge_scope_id: uuid.UUID
-    entry_key: str
-    title: str
-    body: str | None
-    body_json: dict[str, Any] | None
-    channel: str | None
-    locale: str | None
-    category: str | None
-    service_route_key: str | None
-    client_profile_key: str | None
-    service_profile_id: uuid.UUID | None
-    similarity: float | None
-    distance: float | None
-    projection_provider: str
-    projection_target_fingerprint: str
+from mugen.core.plugin.knowledge_pack.contract.service.knowledge_conversation import (
+    ApprovedKnowledgeResult,
+)
 
 
 class KnowledgeRetrievalService:
@@ -256,6 +231,12 @@ class KnowledgeRetrievalService:
             distance=hit.distance,
             projection_provider=self._gateway.provider_name,
             projection_target_fingerprint=(self._gateway.configuration_fingerprint()),
+            knowledge_pack_active=pack.get("is_active") is True,
+            knowledge_pack_version_status=str(version.get("status")),
+            knowledge_entry_active=entry.get("is_active") is True,
+            knowledge_entry_revision_status=str(revision.get("status")),
+            knowledge_scope_active=scope.get("is_active") is True,
+            projection_ready=True,
         )
         return result, self._specificity(effective_scope, query)
 

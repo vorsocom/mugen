@@ -8,6 +8,13 @@ __all__ = [
     "IKnowledgeApprovalService",
     "IKnowledgeScopeService",
     "IKnowledgeIndexProjectionService",
+    "ApprovedKnowledgeResult",
+    "IKnowledgeConversationSelector",
+    "KnowledgeConversationCandidate",
+    "KnowledgeConversationDecisionType",
+    "KnowledgeConversationSelection",
+    "KnowledgeConversationSelectionPolicy",
+    "KnowledgeConversationSelectionProvenance",
 ]
 
 from mugen.core.plugin.knowledge_pack.contract.service.knowledge_pack import (
@@ -30,4 +37,13 @@ from mugen.core.plugin.knowledge_pack.contract.service.knowledge_scope import (
 )
 from .knowledge_index_projection import (
     IKnowledgeIndexProjectionService,
+)
+from .knowledge_conversation import (
+    ApprovedKnowledgeResult,
+    IKnowledgeConversationSelector,
+    KnowledgeConversationCandidate,
+    KnowledgeConversationDecisionType,
+    KnowledgeConversationSelection,
+    KnowledgeConversationSelectionPolicy,
+    KnowledgeConversationSelectionProvenance,
 )
