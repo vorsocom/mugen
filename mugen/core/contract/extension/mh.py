@@ -53,7 +53,10 @@ class IMHExtension(IExtensionBase):
         *,
         scope: ContextScope,
     ) -> list[dict] | None:
-        """Handle a message."""
+        """Handle a message.
+
+        Return ``None`` to decline handling, or a possibly empty list after handling.
+        """
 
     async def handle_delivery_receipt(
         self,
