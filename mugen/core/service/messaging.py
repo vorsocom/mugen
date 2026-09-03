@@ -442,7 +442,7 @@ class DefaultMessagingService(IMessagingService):
                 scope=scope,
             )
         )
-        handler_responses = await self._collect_message_handler_responses(
+        _, handler_responses = await self._collect_message_handler_responses(
             platform=platform,
             room_id=room_id,
             sender=sender,
@@ -562,7 +562,7 @@ class DefaultMessagingService(IMessagingService):
                 scope=scope,
             )
         )
-        handler_responses = await self._collect_message_handler_responses(
+        _, handler_responses = await self._collect_message_handler_responses(
             platform=platform,
             room_id=room_id,
             sender=sender,
@@ -612,7 +612,7 @@ class DefaultMessagingService(IMessagingService):
                 scope=scope,
             )
         )
-        handler_responses = await self._collect_message_handler_responses(
+        _, handler_responses = await self._collect_message_handler_responses(
             platform=platform,
             room_id=room_id,
             sender=sender,
@@ -675,20 +675,22 @@ class DefaultMessagingService(IMessagingService):
         if command_matched:
             return command_responses
 
-        handler_responses = await self._collect_message_handler_responses(
-            platform=platform,
-            room_id=room_id,
-            sender=sender,
-            message=message,
-            message_types={"text"},
-            message_context=resolved_context,
-            attachment_context=resolved_attachments,
-            ingress_metadata=resolved_metadata,
-            message_id=message_id,
-            trace_id=trace_id,
-            scope=resolved_scope,
+        handler_handled, handler_responses = (
+            await self._collect_message_handler_responses(
+                platform=platform,
+                room_id=room_id,
+                sender=sender,
+                message=message,
+                message_types={"text"},
+                message_context=resolved_context,
+                attachment_context=resolved_attachments,
+                ingress_metadata=resolved_metadata,
+                message_id=message_id,
+                trace_id=trace_id,
+                scope=resolved_scope,
+            )
         )
-        if not handler_responses:
+        if not handler_handled:
             if self._mh_mode == "required":
                 raise RuntimeError(
                     "Messaging runtime requires at least one MH extension for text handling "
@@ -732,7 +734,7 @@ class DefaultMessagingService(IMessagingService):
                 scope=scope,
             )
         )
-        handler_responses = await self._collect_message_handler_responses(
+        _, handler_responses = await self._collect_message_handler_responses(
             platform=platform,
             room_id=room_id,
             sender=sender,
@@ -863,7 +865,8 @@ class DefaultMessagingService(IMessagingService):
         message_id: str | None = None,
         trace_id: str | None = None,
         scope: ContextScope,
-    ) -> list[dict]:
+    ) -> tuple[bool, list[dict]]:
+        handled = False
         handler_responses: list[dict] = []
         for mh_ext in self._mh_extensions:
             if not mh_ext.platform_supported(platform):
@@ -899,6 +902,7 @@ class DefaultMessagingService(IMessagingService):
                     f"response_type={type(resp).__name__})."
                 )
                 continue
+            handled = True
             for item in resp:
                 if isinstance(item, dict):
                     if "delivery_context" in item:
@@ -920,7 +924,7 @@ class DefaultMessagingService(IMessagingService):
                     f"(extension={extension_name} "
                     f"item_type={type(item).__name__})."
                 )
-        return handler_responses
+        return handled, handler_responses
 
     async def _collect_composed_media_context(
         self,
@@ -951,7 +955,7 @@ class DefaultMessagingService(IMessagingService):
             inferred_type = self._infer_media_message_type(
                 message_payload.get("mime_type")
             )
-            handler_responses = await self._collect_message_handler_responses(
+            _, handler_responses = await self._collect_message_handler_responses(
                 platform=platform,
                 room_id=room_id,
                 sender=sender,
