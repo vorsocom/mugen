@@ -199,7 +199,6 @@ class KnowledgeConversationSelector(
                         "type": "array",
                         "items": {"type": "string", "format": "uuid"},
                         "maxItems": max_answers,
-                        "uniqueItems": True,
                     },
                 },
                 "required": ["decision", "candidate_ids"],

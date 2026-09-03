@@ -445,6 +445,24 @@ class TestKnowledgeConversationCompletionAdjudication(unittest.IsolatedAsyncioTe
         self.assertEqual(request.vendor_params, {})
         self.assertEqual(len(request.tools), 1)
         self.assertTrue(request.tools[0].strict)
+        schema = request.tools[0].input_schema
+        self.assertIs(schema["additionalProperties"], False)
+        self.assertEqual(
+            set(schema["required"]),
+            set(schema["properties"]),
+        )
+        self.assertEqual(
+            schema["properties"]["candidate_ids"],
+            {
+                "type": "array",
+                "items": {"type": "string", "format": "uuid"},
+                "maxItems": 2,
+            },
+        )
+        self.assertNotIn(
+            "uniqueItems",
+            schema["properties"]["candidate_ids"],
+        )
         self.assertNotIn("Generated prose", repr(decision))
 
     async def test_llm_can_request_clarification_or_decline(self) -> None:
