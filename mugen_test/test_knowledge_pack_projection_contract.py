@@ -28,6 +28,9 @@ from mugen.core.gateway.knowledge.common import (
 from mugen.core.plugin.knowledge_pack.api.validation import (
     KnowledgeIndexProjectionRetryValidation,
 )
+from mugen.core.plugin.knowledge_pack.contract.service import (
+    KnowledgeConversationCandidate,
+)
 from mugen.core.plugin.knowledge_pack.domain import (
     KnowledgeEntryDE,
     KnowledgeEntryRevisionDE,
@@ -36,6 +39,7 @@ from mugen.core.plugin.knowledge_pack.domain import (
 )
 from mugen.core.plugin.knowledge_pack.model import (
     KnowledgeIndexProjection,
+    KnowledgePublicationStatus,
     KnowledgeScope,
 )
 from mugen.core.plugin.knowledge_pack.runtime import (
@@ -1129,6 +1133,49 @@ class TestKnowledgeSafeRetrieval(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(await service.search(pack_scoped_query), [])
 
+    async def test_search_normalizes_statuses_for_conversation_candidate(
+        self,
+    ) -> None:
+        ids = _ids()
+        query = KnowledgeSearchQuery(
+            tenant_id=ids["tenant"],
+            query_text="refund",
+            channel="web",
+        )
+        for status in ("published", KnowledgePublicationStatus.PUBLISHED):
+            with self.subTest(status=status):
+                fixture = _RelationalFixture(ids)
+                fixture.rows["knowledge_pack_knowledge_pack_version"][
+                    "status"
+                ] = status
+                fixture.rows["knowledge_pack_knowledge_entry_revision"][
+                    "status"
+                ] = status
+                service = KnowledgeRetrievalService(
+                    rsg=fixture,  # type: ignore[arg-type]
+                    gateway=_WritableGateway(
+                        KnowledgeSearchResult(items=[self._hit(ids)])
+                    ),
+                )
+
+                results = await service.search(query)
+
+                self.assertEqual(len(results), 1)
+                self.assertEqual(
+                    results[0].knowledge_pack_version_status,
+                    "published",
+                )
+                self.assertEqual(
+                    results[0].knowledge_entry_revision_status,
+                    "published",
+                )
+                self.assertTrue(results[0].approved_for_selection)
+                candidate = KnowledgeConversationCandidate(
+                    candidate_id=uuid.uuid4(),
+                    result=results[0],
+                )
+                self.assertIs(candidate.result, results[0])
+
     async def test_service_profile_scope_is_relationally_revalidated(self) -> None:
         ids = _ids()
         service_profile_id = uuid.uuid4()
@@ -1223,8 +1270,18 @@ class TestKnowledgeSafeRetrieval(unittest.IsolatedAsyncioTestCase):
         for table, field, value in (
             ("knowledge_pack_knowledge_pack", "current_version_id", uuid.uuid4()),
             ("knowledge_pack_knowledge_pack_version", "status", "archived"),
+            (
+                "knowledge_pack_knowledge_pack_version",
+                "status",
+                KnowledgePublicationStatus.ARCHIVED,
+            ),
             ("knowledge_pack_knowledge_entry", "entry_key", "changed"),
             ("knowledge_pack_knowledge_entry_revision", "status", "archived"),
+            (
+                "knowledge_pack_knowledge_entry_revision",
+                "status",
+                KnowledgePublicationStatus.ARCHIVED,
+            ),
             ("knowledge_pack_knowledge_scope", "channel", "voice"),
             ("knowledge_pack_knowledge_scope", "id", None),
             ("knowledge_pack_knowledge_index_projection", "id", None),
