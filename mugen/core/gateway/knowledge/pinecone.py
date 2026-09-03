@@ -766,7 +766,10 @@ class PineconeKnowledgeGateway(IKnowledgeGateway):
             return KnowledgeGatewayWriteResult(self.provider_name, 0, 0)
         try:
             embeddings = await asyncio.gather(
-                *(self._encode_search_term(document.content) for document in documents)
+                *(
+                    self._encode_search_term(document.index_content)
+                    for document in documents
+                )
             )
             vectors = []
             for document, embedding in zip(documents, embeddings):
