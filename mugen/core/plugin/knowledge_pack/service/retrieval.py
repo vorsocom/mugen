@@ -4,6 +4,7 @@ from __future__ import annotations
 
 __all__ = ["ApprovedKnowledgeResult", "KnowledgeRetrievalService"]
 
+from enum import Enum
 from typing import Any
 import uuid
 
@@ -113,6 +114,12 @@ class KnowledgeRetrievalService:
             if getattr(query, field_name) is not None
             and scope.get(field_name) == getattr(query, field_name)
         )
+
+    @staticmethod
+    def _publication_status(value: Any) -> str:
+        if isinstance(value, Enum):
+            value = value.value
+        return str(value)
 
     # pylint: disable=too-many-return-statements
     async def _rehydrate_hit(
@@ -232,9 +239,13 @@ class KnowledgeRetrievalService:
             projection_provider=self._gateway.provider_name,
             projection_target_fingerprint=(self._gateway.configuration_fingerprint()),
             knowledge_pack_active=pack.get("is_active") is True,
-            knowledge_pack_version_status=str(version.get("status")),
+            knowledge_pack_version_status=self._publication_status(
+                version.get("status")
+            ),
             knowledge_entry_active=entry.get("is_active") is True,
-            knowledge_entry_revision_status=str(revision.get("status")),
+            knowledge_entry_revision_status=self._publication_status(
+                revision.get("status")
+            ),
             knowledge_scope_active=scope.get("is_active") is True,
             projection_ready=True,
         )
