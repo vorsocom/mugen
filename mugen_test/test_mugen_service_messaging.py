@@ -222,6 +222,128 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
                 message="hello",
             )
 
+    async def test_handle_text_message_uses_builtin_when_matching_handler_declines(
+        self,
+    ) -> None:
+        svc = self._new_service()
+        ext = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["text"],
+            response=None,
+        )
+        svc._mh_extensions = [ext]  # pylint: disable=protected-access
+
+        result = await svc.handle_text_message(
+            platform="matrix",
+            room_id="!room",
+            sender="@alice",
+            message="hello",
+            scope=_scope(),
+        )
+
+        self.assertEqual(result, [{"type": "text", "content": "builtin-response"}])
+        ext.handle_message.assert_awaited_once()
+        svc._builtin_text_handler.handle_message.assert_awaited_once()  # pylint: disable=protected-access
+
+    async def test_handle_text_message_required_mode_rejects_declined_handler(
+        self,
+    ) -> None:
+        svc = self._new_service(mh_mode="required")
+        ext = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["text"],
+            response=None,
+        )
+        svc._mh_extensions = [ext]  # pylint: disable=protected-access
+
+        with self.assertRaisesRegex(RuntimeError, "mugen.messaging.mh_mode='required'"):
+            await svc.handle_text_message(
+                platform="matrix",
+                room_id="!room",
+                sender="@alice",
+                message="hello",
+                scope=_scope(),
+            )
+
+        ext.handle_message.assert_awaited_once()
+        svc._builtin_text_handler.handle_message.assert_not_awaited()  # pylint: disable=protected-access
+
+    async def test_handle_text_message_empty_response_suppresses_optional_fallback(
+        self,
+    ) -> None:
+        svc = self._new_service()
+        ext = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["text"],
+            response=[],
+        )
+        svc._mh_extensions = [ext]  # pylint: disable=protected-access
+
+        result = await svc.handle_text_message(
+            platform="matrix",
+            room_id="!room",
+            sender="@alice",
+            message="hello",
+            scope=_scope(),
+        )
+
+        self.assertEqual(result, [])
+        ext.handle_message.assert_awaited_once()
+        svc._builtin_text_handler.handle_message.assert_not_awaited()  # pylint: disable=protected-access
+
+    async def test_handle_text_message_empty_response_satisfies_required_mode(
+        self,
+    ) -> None:
+        svc = self._new_service(mh_mode="required")
+        ext = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["text"],
+            response=[],
+        )
+        svc._mh_extensions = [ext]  # pylint: disable=protected-access
+
+        result = await svc.handle_text_message(
+            platform="matrix",
+            room_id="!room",
+            sender="@alice",
+            message="hello",
+            scope=_scope(),
+        )
+
+        self.assertEqual(result, [])
+        ext.handle_message.assert_awaited_once()
+        svc._builtin_text_handler.handle_message.assert_not_awaited()  # pylint: disable=protected-access
+
+    async def test_handle_text_message_retry_cannot_trigger_builtin_after_handling(
+        self,
+    ) -> None:
+        svc = self._new_service()
+        ext = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["text"],
+        )
+        ext.handle_message.side_effect = [
+            [{"type": "text", "content": "handled"}],
+            [],
+        ]
+        svc._mh_extensions = [ext]  # pylint: disable=protected-access
+        request = {
+            "platform": "matrix",
+            "room_id": "!room",
+            "sender": "@alice",
+            "message": "hello",
+            "message_id": "event-1",
+            "scope": _scope(),
+        }
+
+        first_result = await svc.handle_text_message(**request)
+        retry_result = await svc.handle_text_message(**request)
+
+        self.assertEqual(first_result, [{"type": "text", "content": "handled"}])
+        self.assertEqual(retry_result, [])
+        self.assertEqual(ext.handle_message.await_count, 2)
+        svc._builtin_text_handler.handle_message.assert_not_awaited()  # pylint: disable=protected-access
+
     async def test_handle_text_message_aggregates_matching_handler_responses(
         self,
     ) -> None:
@@ -236,12 +358,28 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
             message_types=["text"],
             response=[{"type": "text", "content": "b"}],
         )
+        ext_silent = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["text"],
+            response=[],
+        )
+        ext_declined = _DummyMhExt(
+            platforms=["matrix"],
+            message_types=["text"],
+            response=None,
+        )
         ext_c = _DummyMhExt(
             platforms=["whatsapp"],
             message_types=["text"],
             response=[{"type": "text", "content": "c"}],
         )
-        svc._mh_extensions = [ext_a, ext_b, ext_c]  # pylint: disable=protected-access
+        svc._mh_extensions = [  # pylint: disable=protected-access
+            ext_a,
+            ext_silent,
+            ext_declined,
+            ext_b,
+            ext_c,
+        ]
 
         scope = _scope()
         result = await svc.handle_text_message(
@@ -261,6 +399,8 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
             ],
         )
         ext_a.handle_message.assert_awaited_once()
+        ext_silent.handle_message.assert_awaited_once()
+        ext_declined.handle_message.assert_awaited_once()
         ext_b.handle_message.assert_awaited_once()
         ext_c.handle_message.assert_not_awaited()
         self.assertIs(ext_a.handle_message.await_args.kwargs["scope"], scope)
@@ -667,7 +807,7 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
             scope=_scope(),
         )
 
-        self.assertEqual(result, [{"type": "text", "content": "ok"}])
+        self.assertEqual(result, (True, [{"type": "text", "content": "ok"}]))
         svc._logging_gateway.warning.assert_called()  # pylint: disable=protected-access
         ignored_type.handle_message.assert_not_awaited()
 
@@ -700,28 +840,34 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
     async def test_invoke_message_handler_fail_closed_raises_for_critical_extension(
         self,
     ) -> None:
-        svc = self._new_service()
-        ext = _DummyMhExt(
-            platforms=["matrix"],
-            message_types=["text"],
-            side_effect=asyncio.TimeoutError(),
-        )
-        svc.bind_mh_extension(ext, critical=True)
+        for failure in (asyncio.TimeoutError(), RuntimeError("boom")):
+            with self.subTest(failure=type(failure).__name__):
+                svc = self._new_service()
+                ext = _DummyMhExt(
+                    platforms=["matrix"],
+                    message_types=["text"],
+                    side_effect=failure,
+                )
+                svc.bind_mh_extension(ext, critical=True)
 
-        with self.assertRaises(RuntimeError):
-            await svc._invoke_message_handler(  # pylint: disable=protected-access
-                extension=ext,
-                platform="matrix",
-                room_id="!room",
-                sender="@alice",
-                message="hello",
-                scope=_scope(),
-            )
+                with self.assertRaises(RuntimeError):
+                    await svc.handle_text_message(
+                        platform="matrix",
+                        room_id="!room",
+                        sender="@alice",
+                        message="hello",
+                        scope=_scope(),
+                    )
 
-        self.assertIn(
-            ("mh", f"{type(ext).__module__}.{type(ext).__qualname__}", ("matrix",)),
-            svc._critical_extension_keys,  # pylint: disable=protected-access
-        )
+                self.assertIn(
+                    (
+                        "mh",
+                        f"{type(ext).__module__}.{type(ext).__qualname__}",
+                        ("matrix",),
+                    ),
+                    svc._critical_extension_keys,  # pylint: disable=protected-access
+                )
+                svc._builtin_text_handler.handle_message.assert_not_awaited()  # pylint: disable=protected-access
 
     async def test_handle_media_message_collects_context_then_calls_text_pipeline(
         self,
@@ -1541,7 +1687,7 @@ class TestMugenServiceMessaging(unittest.IsolatedAsyncioTestCase):
                 message_types={"text"},
                 scope=_scope(),
             ),
-            [],
+            (False, []),
         )
         skipped.handle_message.assert_not_awaited()
 
