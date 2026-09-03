@@ -146,8 +146,37 @@ class TestKnowledgeGatewayContracts(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(query.top_k, 2)
 
         document = _document(ids)
+        self.assertEqual(document.index_content, document.content)
+        legacy_positional_values = [
+            getattr(document, field.name)
+            for field in document.__dataclass_fields__.values()
+            if field.name != "search_content"
+        ]
+        self.assertEqual(
+            KnowledgeIndexDocument(*legacy_positional_values),  # type: ignore[arg-type]
+            document,
+        )
+        search_document = KnowledgeIndexDocument(
+            **{
+                field.name: getattr(document, field.name)
+                for field in document.__dataclass_fields__.values()
+                if field.name != "search_content"
+            },
+            search_content="  customer search wording  ",
+        )
+        self.assertEqual(search_document.index_content, "customer search wording")
+        blank_search_document = KnowledgeIndexDocument(
+            **{
+                field.name: getattr(document, field.name)
+                for field in document.__dataclass_fields__.values()
+                if field.name != "search_content"
+            },
+            search_content="  ",
+        )
+        self.assertEqual(blank_search_document.index_content, document.content)
         metadata = document_metadata(document)
         self.assertEqual(metadata["tenant_id"], str(ids["tenant"]))
+        self.assertNotIn("search_content", metadata)
         selector = KnowledgeDeleteSelector(
             tenant_id=ids["tenant"],
             knowledge_pack_id=ids["pack"],
@@ -367,9 +396,25 @@ class TestProjectionDocumentsAndQueue(unittest.IsolatedAsyncioTestCase):
                     {
                         "id": ids["entry"],
                         "entry_key": "refund",
-                        "title": "Refund policy",
+                        "title": "  Refund policy  ",
+                        "summary": "How   refunds work",
+                        "attributes": {
+                            "search_aliases": [
+                                " When can I return payment? ",
+                                "refund POLICY",
+                                "How refunds work",
+                                "Approved   content",
+                                "When can I return payment?",
+                            ]
+                        },
                     },
-                    {"id": second_entry, "entry_key": "json", "title": "JSON"},
+                    {
+                        "id": second_entry,
+                        "entry_key": "json",
+                        "title": "JSON",
+                        "summary": "   ",
+                        "attributes": {},
+                    },
                     {"id": None},
                 ],
                 [
@@ -432,11 +477,141 @@ class TestProjectionDocumentsAndQueue(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(refund.locale, "en-US")
         self.assertEqual(refund.service_route_key, "support")
         self.assertEqual(refund.service_profile_id, ids["pack"])
-        self.assertEqual(PROJECTION_SCHEMA_VERSION, 2)
+        self.assertEqual(PROJECTION_SCHEMA_VERSION, 3)
+        self.assertEqual(
+            refund.search_content,
+            "Refund policy\nHow refunds work\nWhen can I return payment?\n"
+            "Approved content",
+        )
+        self.assertEqual(refund.content, "Approved content")
         self.assertIn(
             '"answer":"yes"',
             next(item for item in documents if item.entry_key == "json").content,
         )
+
+    async def test_document_checksums_track_title_summary_and_aliases(self) -> None:
+        """Retrieval inputs participate in document and projection checksums."""
+        ids = _ids()
+
+        async def build(**entry_changes):
+            entry = {
+                "id": ids["entry"],
+                "entry_key": "hours",
+                "title": "Opening hours",
+                "summary": "Times we are open",
+                "attributes": {"search_aliases": ["When are you open?"]},
+                **entry_changes,
+            }
+            rsg = Mock()
+            rsg.find_many = AsyncMock(
+                side_effect=[
+                    [entry],
+                    [
+                        {
+                            "id": ids["revision"],
+                            "knowledge_entry_id": ids["entry"],
+                            "body": "Open from 09:00 to 17:00.",
+                        }
+                    ],
+                    [
+                        {
+                            "id": ids["scope"],
+                            "knowledge_entry_revision_id": ids["revision"],
+                        }
+                    ],
+                ]
+            )
+            documents, projection_checksum = await KnowledgeProjectionDocumentBuilder(
+                rsg
+            ).build(
+                tenant_id=ids["tenant"],
+                knowledge_pack_id=ids["pack"],
+                knowledge_pack_version_id=ids["version"],
+            )
+            return documents[0].content_checksum, projection_checksum
+
+        baseline = await build()
+        variants = (
+            await build(title="Business hours"),
+            await build(summary="Our weekly schedule"),
+            await build(summary=None),
+            await build(attributes={"search_aliases": ["What are your hours?"]}),
+        )
+        for variant in variants:
+            with self.subTest(checksum=variant):
+                self.assertNotEqual(variant[0], baseline[0])
+                self.assertNotEqual(variant[1], baseline[1])
+
+    async def test_document_builder_rejects_invalid_search_aliases(self) -> None:
+        """Projection fails closed when governed retrieval aliases are malformed."""
+        ids = _ids()
+        invalid_aliases = (
+            "When are you open?",
+            ["valid", 7],
+            ["valid", "   "],
+            ["x" * 513],
+            [f"alias {index}" for index in range(33)],
+        )
+        for search_aliases in invalid_aliases:
+            rsg = Mock()
+            rsg.find_many = AsyncMock(
+                side_effect=[
+                    [
+                        {
+                            "id": ids["entry"],
+                            "entry_key": "hours",
+                            "title": "Opening hours",
+                            "attributes": {"search_aliases": search_aliases},
+                        }
+                    ],
+                    [
+                        {
+                            "id": ids["revision"],
+                            "knowledge_entry_id": ids["entry"],
+                            "body": "Open from 09:00 to 17:00.",
+                        }
+                    ],
+                    [
+                        {
+                            "id": ids["scope"],
+                            "knowledge_entry_revision_id": ids["revision"],
+                        }
+                    ],
+                ]
+            )
+            with self.subTest(search_aliases=search_aliases), self.assertRaisesRegex(
+                ValueError, "search_aliases"
+            ):
+                await KnowledgeProjectionDocumentBuilder(rsg).build(
+                    tenant_id=ids["tenant"],
+                    knowledge_pack_id=ids["pack"],
+                    knowledge_pack_version_id=ids["version"],
+                )
+
+    async def test_invalid_aliases_do_not_queue_a_projection(self) -> None:
+        """Malformed aliases fail before a publish projection row is created."""
+        ids = _ids()
+        service = KnowledgeIndexProjectionService(
+            table="knowledge_pack_knowledge_index_projection",
+            rsg=Mock(),
+            gateway_provider=lambda: _WritableGateway(),
+        )
+        service.list = AsyncMock(return_value=[])
+        service.create = AsyncMock()
+        service._document_builder.build = AsyncMock(  # pylint: disable=protected-access
+            side_effect=ValueError(
+                "Knowledge entry search_aliases cannot contain blanks."
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "search_aliases"):
+            await service.queue_projection(
+                tenant_id=ids["tenant"],
+                knowledge_pack_id=ids["pack"],
+                knowledge_pack_version_id=ids["version"],
+                requested_by_user_id=uuid.uuid4(),
+                operation="publish",
+            )
+        service.create.assert_not_awaited()
 
     async def test_runtime_queue_success_duplicate_cleanup_and_errors(self) -> None:
         ids = _ids()

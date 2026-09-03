@@ -83,6 +83,8 @@ Example denormalized projection:
 ## Validation
 
 - Publish transitions make new revisions searchable.
+- Entry titles, summaries, and governed `Attributes.search_aliases` influence
+  retrieval without becoming customer-facing response text.
 - Archive transitions remove archived revisions from retrieval.
 - Rollback swaps active revision set to target version.
 - Duplicate event delivery does not create duplicates.
