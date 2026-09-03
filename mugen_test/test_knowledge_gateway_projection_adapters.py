@@ -43,6 +43,7 @@ def _document(ids=None, **changes) -> KnowledgeIndexDocument:
         "content": "Approved refund content",
         "content_checksum": "a" * 64,
         "projection_schema_version": 1,
+        "search_content": "Refund question and approved answer",
         "channel": "web",
         "locale": "en-US",
         "category": "billing",
@@ -229,8 +230,16 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
         )  # pylint: disable=protected-access
         self.assertEqual((await gateway.upsert_documents([])).affected_count, 0)
         result = await gateway.upsert_documents([document])
+        # pylint: disable=protected-access
+        gateway._encode_search_term.assert_awaited_once_with(
+            document.search_content
+        )
         self.assertEqual(result.affected_count, 1)
-        metadata = collection.upsert.call_args.kwargs["metadatas"][0]
+        upsert_kwargs = collection.upsert.call_args.kwargs
+        metadata = upsert_kwargs["metadatas"][0]
+        self.assertEqual(upsert_kwargs["documents"], [document.content])
+        self.assertEqual(metadata["body"], document.content)
+        self.assertNotIn("search_content", metadata)
         self.assertEqual(metadata["client_profile_key"], "")
         self.assertEqual(metadata["document_id"], document.document_id)
         self.assertEqual(metadata["service_profile_id"], str(service_profile_id))
@@ -277,8 +286,14 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
         )  # pylint: disable=protected-access
         self.assertEqual((await gateway.upsert_documents([])).requested_count, 0)
         await gateway.upsert_documents([document])
+        # pylint: disable=protected-access
+        gateway._encode_search_term.assert_awaited_once_with(
+            document.search_content
+        )
         row = client.upsert.call_args.kwargs["data"][0]
         self.assertEqual(row["id"], document.document_id)
+        self.assertEqual(row["body"], document.content)
+        self.assertNotIn("search_content", row)
         self.assertEqual(row["service_profile_id"], str(service_profile_id))
         await gateway.delete_documents(
             _selector(ids, document_ids=(document.document_id,))
@@ -312,9 +327,16 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
         )  # pylint: disable=protected-access
         self.assertEqual((await gateway.upsert_documents([])).affected_count, 0)
         await gateway.upsert_documents([document])
-        self.assertEqual(connection.calls[0][1]["document_id"], document.document_id)
+        # pylint: disable=protected-access
+        gateway._encode_search_term.assert_awaited_once_with(
+            document.search_content
+        )
+        stored = connection.calls[0][1]
+        self.assertEqual(stored["document_id"], document.document_id)
+        self.assertEqual(stored["body"], document.content)
+        self.assertNotIn("search_content", stored)
         self.assertEqual(
-            connection.calls[0][1]["service_profile_id"],
+            stored["service_profile_id"],
             str(service_profile_id),
         )
         deleted = await gateway.delete_documents(
@@ -375,11 +397,17 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
         )  # pylint: disable=protected-access
         self.assertEqual((await gateway.upsert_documents([])).requested_count, 0)
         await gateway.upsert_documents(documents)
-        self.assertEqual(index.upsert.await_args.kwargs["namespace"], "tenant")
         self.assertEqual(
-            index.upsert.await_args.kwargs["vectors"][0]["metadata"][
-                "service_profile_id"
-            ],
+            # pylint: disable=protected-access
+            gateway._encode_search_term.await_args_list[0].args[0],
+            documents[0].search_content,
+        )
+        self.assertEqual(index.upsert.await_args.kwargs["namespace"], "tenant")
+        first_metadata = index.upsert.await_args.kwargs["vectors"][0]["metadata"]
+        self.assertEqual(first_metadata["body"], documents[0].content)
+        self.assertNotIn("search_content", first_metadata)
+        self.assertEqual(
+            first_metadata["service_profile_id"],
             str(service_profile_id),
         )
         self.assertEqual(
@@ -439,8 +467,14 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
         )  # pylint: disable=protected-access
         self.assertEqual((await gateway.upsert_documents([])).requested_count, 0)
         await gateway.upsert_documents([document])
+        # pylint: disable=protected-access
+        gateway._encode_search_term.assert_awaited_once_with(
+            document.search_content
+        )
         point = client.upsert.await_args.kwargs["points"][0]
         self.assertEqual(str(point.id), document.document_id)
+        self.assertEqual(point.payload["body"], document.content)
+        self.assertNotIn("search_content", point.payload)
         self.assertEqual(point.payload["service_profile_id"], str(service_profile_id))
         await gateway.delete_documents(
             _selector(ids, document_ids=(document.document_id,))
@@ -478,8 +512,16 @@ class TestKnowledgeGatewayProjectionAdapters(unittest.IsolatedAsyncioTestCase):
         )  # pylint: disable=protected-access
         self.assertEqual((await gateway.upsert_documents([])).requested_count, 0)
         await gateway.upsert_documents(documents)
+        self.assertEqual(
+            # pylint: disable=protected-access
+            gateway._encode_search_term.await_args_list[0].args[0],
+            documents[0].search_content,
+        )
         data.insert.assert_called_once()
         data.replace.assert_called_once()
+        insert_properties = data.insert.call_args.kwargs["properties"]
+        self.assertEqual(insert_properties["body"], documents[0].content)
+        self.assertNotIn("search_content", insert_properties)
         self.assertEqual(data.replace.call_args.kwargs["properties"]["channel"], "")
         self.assertEqual(
             data.insert.call_args.kwargs["properties"]["service_profile_id"],

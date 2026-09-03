@@ -16,8 +16,10 @@ from mugen.core.contract.gateway.storage.rdbms.types import (
     ScalarFilterOp,
 )
 
-PROJECTION_SCHEMA_VERSION = 2
+PROJECTION_SCHEMA_VERSION = 3
 _DOCUMENT_NAMESPACE = uuid.UUID("28702d73-85a3-4c06-b9f3-0f52d250eb9d")
+_MAX_SEARCH_ALIASES = 32
+_MAX_SEARCH_ALIAS_CHARS = 512
 
 
 def _canonical_json(value: object) -> str:
@@ -32,6 +34,53 @@ def _canonical_json(value: object) -> str:
 
 def _checksum(value: object) -> str:
     return sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _search_aliases(attributes: object) -> tuple[str, ...]:
+    if not isinstance(attributes, dict) or "search_aliases" not in attributes:
+        return ()
+    raw_aliases = attributes["search_aliases"]
+    if not isinstance(raw_aliases, list):
+        raise ValueError("Knowledge entry search_aliases must be a list of strings.")
+    if len(raw_aliases) > _MAX_SEARCH_ALIASES:
+        raise ValueError(
+            f"Knowledge entry search_aliases cannot exceed {_MAX_SEARCH_ALIASES} items."
+        )
+    aliases: list[str] = []
+    for raw_alias in raw_aliases:
+        if not isinstance(raw_alias, str):
+            raise ValueError("Knowledge entry search_aliases must contain strings.")
+        alias = " ".join(raw_alias.strip().split())
+        if not alias:
+            raise ValueError("Knowledge entry search_aliases cannot contain blanks.")
+        if len(alias) > _MAX_SEARCH_ALIAS_CHARS:
+            raise ValueError(
+                "Knowledge entry search_aliases values cannot exceed "
+                f"{_MAX_SEARCH_ALIAS_CHARS} characters."
+            )
+        aliases.append(alias)
+    return tuple(aliases)
+
+
+def _search_content(entry: dict, content: str) -> str:
+    parts = (
+        entry.get("title"),
+        entry.get("summary"),
+        *_search_aliases(entry.get("attributes")),
+        content,
+    )
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_part in parts:
+        if not isinstance(raw_part, str):
+            continue
+        part = " ".join(raw_part.strip().split())
+        key = part.casefold()
+        if not part or key in seen:
+            continue
+        seen.add(key)
+        normalized.append(part)
+    return "\n".join(normalized)
 
 
 class KnowledgeProjectionDocumentBuilder:  # pylint: disable=too-few-public-methods
@@ -146,10 +195,12 @@ class KnowledgeProjectionDocumentBuilder:  # pylint: disable=too-few-public-meth
                     "service_profile_id": scope.get("service_profile_id"),
                 }
             )
+            search_content = _search_content(entry, content)
             content_checksum = _checksum(
                 {
                     "content": content,
                     "entry_key": entry.get("entry_key"),
+                    "search_content": search_content,
                     "title": entry.get("title"),
                     "scope": effective_scope,
                     "schema": PROJECTION_SCHEMA_VERSION,
@@ -169,6 +220,7 @@ class KnowledgeProjectionDocumentBuilder:  # pylint: disable=too-few-public-meth
                     content=content,
                     content_checksum=content_checksum,
                     projection_schema_version=PROJECTION_SCHEMA_VERSION,
+                    search_content=search_content,
                     **effective_scope,
                 )
             )

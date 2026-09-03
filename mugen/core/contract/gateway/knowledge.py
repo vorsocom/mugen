@@ -120,6 +120,7 @@ class KnowledgeIndexDocument:
     service_route_key: str | None = None
     client_profile_key: str | None = None
     service_profile_id: uuid.UUID | None = None
+    search_content: str | None = None
 
     def __post_init__(self) -> None:
         if not str(self.document_id).strip():
@@ -148,12 +149,18 @@ class KnowledgeIndexDocument:
             "category",
             "service_route_key",
             "client_profile_key",
+            "search_content",
         ):
             object.__setattr__(
                 self,
                 field_name,
                 _normalize_optional_text(getattr(self, field_name)),
             )
+
+    @property
+    def index_content(self) -> str:
+        """Return retrieval-only text without changing approved response content."""
+        return self.search_content or self.content
 
     def metadata(self) -> dict[str, Any]:
         """Return provider-independent metadata for tenant/scope enforcement."""

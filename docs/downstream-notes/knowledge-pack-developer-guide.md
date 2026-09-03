@@ -308,6 +308,18 @@ Projection content/scope data should include, at minimum:
 - searchable text fields
 - projection/index metadata
 
+Core projection documents keep approved response content separate from
+retrieval-only text. The retrieval text is assembled from the entry title,
+optional summary, optional `Attributes.search_aliases`, and the approved
+revision body. `search_aliases` must be a list of at most 32 non-blank strings,
+each no longer than 512 characters. Gateways embed this richer text while
+continuing to store and return only the approved revision body.
+
+Adding or changing aliases requires a governed version publication or an
+explicit reindex of the current published version. Alias content is included in
+the projection checksum and never bypasses relational publication and scope
+checks.
+
 The recommended retrieval flow is:
 
 1. Use `KnowledgeScopeService.list_published_revisions(...)` to resolve the

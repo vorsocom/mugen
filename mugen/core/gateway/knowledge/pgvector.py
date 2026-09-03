@@ -778,7 +778,10 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
         )
         try:
             embeddings = await asyncio.gather(
-                *(self._encode_search_term(document.content) for document in documents)
+                *(
+                    self._encode_search_term(document.index_content)
+                    for document in documents
+                )
             )
 
             async def write() -> None:
