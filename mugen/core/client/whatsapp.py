@@ -13,7 +13,7 @@ import os
 import tempfile
 import time
 from types import SimpleNamespace
-from typing import TypedDict
+from typing import Literal, NotRequired, TypedDict
 import uuid
 
 import aiohttp
@@ -53,6 +53,7 @@ class WhatsAppAPIResponse(TypedDict):
     data: dict | None
     error: str | None
     raw: str | None
+    delivery_outcome: NotRequired[Literal["ambiguous"]]
 
 
 # pylint: disable=too-many-instance-attributes
@@ -219,14 +220,18 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         data: dict | None = None,
         error: str | None = None,
         raw: str | None = None,
+        delivery_outcome: Literal["ambiguous"] | None = None,
     ) -> WhatsAppAPIResponse:
-        return {
+        response: WhatsAppAPIResponse = {
             "ok": ok,
             "status": status,
             "data": data,
             "error": error,
             "raw": raw,
         }
+        if delivery_outcome is not None:
+            response["delivery_outcome"] = delivery_outcome
+        return response
 
     @staticmethod
     def _is_retryable_status(status: int) -> bool:
@@ -631,8 +636,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         ok = isinstance(response, dict) and response.get("ok") is True
         if not ok:
             self._logging_gateway.warning(
-                "WhatsApp thinking signal did not succeed "
-                f"state={normalized_state}."
+                "WhatsApp thinking signal did not succeed " f"state={normalized_state}."
             )
             return False
 
@@ -701,6 +705,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
         files_factory: Callable[[], tuple[aiohttp.FormData, list]] | None = None,
         method: str = HTTPMethod.POST,
         correlation_id: str | None = None,
+        message_submission: bool = False,
     ) -> dict | None:
         """Make a call to Graph API."""
         resolved_correlation_id = self._resolve_correlation_id(correlation_id)
@@ -772,7 +777,8 @@ class DefaultWhatsAppClient(IWhatsAppClient):
 
                 error = f"Graph API call failed ({response.status}) for {method}."
                 if (
-                    self._is_retryable_status(response.status)
+                    not message_submission
+                    and self._is_retryable_status(response.status)
                     and attempt < self._max_api_retries
                 ):
                     self._logging_gateway.warning(
@@ -788,6 +794,15 @@ class DefaultWhatsAppClient(IWhatsAppClient):
                     )
                     continue
 
+                delivery_outcome = None
+                if message_submission and self._is_retryable_status(response.status):
+                    delivery_outcome = "ambiguous"
+                    self._logging_gateway.warning(
+                        f"[cid={resolved_correlation_id}] Graph API message "
+                        "submission outcome is ambiguous; not retrying "
+                        f"status={response.status}."
+                    )
+
                 self._logging_gateway.debug(
                     f"[cid={resolved_correlation_id}] Graph API terminal failure "
                     f"method={method} status={response.status} "
@@ -800,9 +815,10 @@ class DefaultWhatsAppClient(IWhatsAppClient):
                     data=response_data,
                     error=error,
                     raw=response_text,
+                    delivery_outcome=delivery_outcome,
                 )
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                if attempt < self._max_api_retries:
+                if not message_submission and attempt < self._max_api_retries:
                     await self._wait_before_retry(
                         attempt=attempt,
                         correlation_id=resolved_correlation_id,
@@ -819,10 +835,20 @@ class DefaultWhatsAppClient(IWhatsAppClient):
                     f"attempt={attempt + 1}."
                 )
                 self._logging_gateway.error(
-                    "Graph API transport failure"
-                    f" error_type={type(e).__name__}."
+                    "Graph API transport failure" f" error_type={type(e).__name__}."
                 )
-                return self._build_api_response(ok=False, status=None, error=error)
+                if message_submission:
+                    self._logging_gateway.warning(
+                        f"[cid={resolved_correlation_id}] Graph API message "
+                        "submission outcome is ambiguous; not retrying after "
+                        "transport failure."
+                    )
+                return self._build_api_response(
+                    ok=False,
+                    status=None,
+                    error=error,
+                    delivery_outcome=("ambiguous" if message_submission else None),
+                )
             finally:
                 for resource in resources_to_close:
                     resource.close()
@@ -978,6 +1004,7 @@ class DefaultWhatsAppClient(IWhatsAppClient):
             content_type="application/json",
             data=data,
             correlation_id=correlation_id,
+            message_submission=True,
         )
 
 
