@@ -963,6 +963,77 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["data"], {"id": "ok"})
         self.assertEqual(session.get.await_count, 2)
 
+    async def test_send_message_does_not_retry_transport_failure(self) -> None:
+        client = self._new_client()
+        client._max_api_retries = 2  # pylint: disable=protected-access
+        client._retry_backoff_seconds = 0  # pylint: disable=protected-access
+        session = Mock()
+        session.post = AsyncMock(
+            side_effect=[
+                aiohttp.ClientConnectionError("response lost"),
+                _Response(
+                    status=200,
+                    text='{"messages":[{"id":"duplicate"}]}',
+                ),
+            ]
+        )
+        client._client_session = session  # pylint: disable=protected-access
+
+        result = await client.send_text_message("hello", "15550002")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["delivery_outcome"], "ambiguous")
+        self.assertEqual(result["error"], "response lost")
+        session.post.assert_awaited_once()
+
+    async def test_send_message_does_not_retry_retryable_http_failure(self) -> None:
+        client = self._new_client()
+        client._max_api_retries = 2  # pylint: disable=protected-access
+        client._retry_backoff_seconds = 0  # pylint: disable=protected-access
+        session = Mock()
+        session.post = AsyncMock(
+            side_effect=[
+                _Response(status=503, text='{"error":"temporary"}'),
+                _Response(
+                    status=200,
+                    text='{"messages":[{"id":"duplicate"}]}',
+                ),
+            ]
+        )
+        client._client_session = session  # pylint: disable=protected-access
+
+        result = await client.send_text_message("hello", "15550002")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], 503)
+        self.assertEqual(result["delivery_outcome"], "ambiguous")
+        session.post.assert_awaited_once()
+
+    async def test_send_message_success_response_is_unchanged(self) -> None:
+        client = self._new_client()
+        session = Mock()
+        session.post = AsyncMock(
+            return_value=_Response(
+                status=200,
+                text='{"messages":[{"id":"wamid-1"}]}',
+            )
+        )
+        client._client_session = session  # pylint: disable=protected-access
+
+        result = await client.send_text_message("hello", "15550002")
+
+        self.assertEqual(
+            result,
+            {
+                "ok": True,
+                "status": 200,
+                "data": {"messages": [{"id": "wamid-1"}]},
+                "error": None,
+                "raw": '{"messages":[{"id":"wamid-1"}]}',
+            },
+        )
+        session.post.assert_awaited_once()
+
     async def test_call_api_success_with_non_dict_json_body_returns_none_data(
         self,
     ) -> None:
@@ -1235,6 +1306,7 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
             content_type="application/json",
             data={"type": "text"},
             correlation_id=None,
+            message_submission=True,
         )
 
     async def test_send_message_uses_context_message_id_as_correlation_id(self) -> None:
@@ -1262,6 +1334,7 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
                 },
             },
             correlation_id="wamid-context",
+            message_submission=True,
         )
 
     async def test_send_message_ignores_empty_context_message_id(self) -> None:
@@ -1289,6 +1362,7 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
                 },
             },
             correlation_id=None,
+            message_submission=True,
         )
 
     async def test_send_message_uses_reaction_message_id_as_correlation_id(
@@ -1320,6 +1394,7 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
                 },
             },
             correlation_id="wamid-reaction",
+            message_submission=True,
         )
 
     async def test_send_message_ignores_empty_reaction_message_id(self) -> None:
@@ -1349,4 +1424,5 @@ class TestMugenClientWhatsApp(unittest.IsolatedAsyncioTestCase):
                 },
             },
             correlation_id=None,
+            message_submission=True,
         )

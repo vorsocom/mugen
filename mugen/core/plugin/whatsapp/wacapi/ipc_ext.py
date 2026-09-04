@@ -169,6 +169,12 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             self._logging_gateway.error(f"Unexpected payload type for {context}.")
             return None
 
+        if payload.get("delivery_outcome") == "ambiguous":
+            self._logging_gateway.warning(
+                f"{context} has an ambiguous provider delivery outcome."
+            )
+            return None
+
         if payload.get("ok") is not True:
             self._logging_gateway.error(f"{context} failed.")
             error = payload.get("error")
@@ -317,6 +323,21 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                 result=result,
                 classification_type="invalid_provider_response",
             )
+        if result.get("delivery_outcome") == "ambiguous":
+            receipt = self._base_delivery_receipt(
+                response_type=response_type,
+                correlation_id=correlation_id,
+                occurred_at=occurred_at,
+                outcome="ambiguous",
+            )
+            receipt["error_classification"] = self._error_classification(
+                result,
+                default_type="ambiguous_delivery",
+            )
+            status = self._safe_http_status(result.get("status"))
+            if status is not None:
+                receipt["http_status"] = status
+            return receipt
         if "ok" in result and result.get("ok") is not True:
             return self._failed_delivery_receipt(
                 response_type=response_type,
@@ -677,8 +698,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         except SQLAlchemyError as exc:
             self._increment_metric("whatsapp.ipc.dedupe.error")
             self._logging_gateway.error(
-                "WhatsApp dedupe lookup failed."
-                f" error_type={type(exc).__name__}."
+                "WhatsApp dedupe lookup failed." f" error_type={type(exc).__name__}."
             )
             return False
 
@@ -1251,8 +1271,9 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                 occurred_at=occurred_at,
                 result=send_result,
             )
-            if receipt["outcome"] == "failed":
+            if receipt["outcome"] != "accepted":
                 self._extract_api_data(send_result, send_context)
+            if receipt["outcome"] == "failed":
                 self._logging_gateway.error(
                     f"{send_context} did not return an accepted provider message."
                 )
