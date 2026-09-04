@@ -1493,6 +1493,85 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("access_token", serialized_receipt)
                 self.assertNotIn("secret-trace", serialized_receipt)
 
+    async def test_delivery_receipt_preserves_ambiguous_send_outcome(self) -> None:
+        client = _make_client()
+        client.send_text_message = AsyncMock(
+            return_value={
+                "ok": False,
+                "status": 503,
+                "data": {"error": {"type": "GraphMethodException", "code": 2}},
+                "error": "Graph API call failed (503) for POST.",
+                "raw": '{"error":{"type":"GraphMethodException","code":2}}',
+                "delivery_outcome": "ambiguous",
+            }
+        )
+        callback = AsyncMock()
+        response = MessageHandlerResponse(
+            {
+                "type": "text",
+                "content": "hello",
+                "delivery_context": {"correlation_id": "ledger-ambiguous"},
+            },
+            delivery_receipt_callback=callback,
+        )
+        logging_gateway = Mock()
+        ext = _new_extension(
+            config=_make_config(beta_active=False),
+            client=client,
+            logging_gateway=logging_gateway,
+        )
+
+        with patch.object(
+            ipc_ext,
+            "_utc_now_iso",
+            return_value="2026-08-06T12:25:33Z",
+        ):
+            await ext._send_response_to_user(  # pylint: disable=protected-access
+                response,
+                "15550090",
+            )
+
+        callback.assert_awaited_once_with(
+            {
+                "platform": "whatsapp",
+                "channel": "whatsapp",
+                "response_type": "text",
+                "correlation_id": "ledger-ambiguous",
+                "outcome": "ambiguous",
+                "occurred_at": "2026-08-06T12:25:33Z",
+                "error_classification": {
+                    "type": "GraphMethodException",
+                    "code": 2,
+                },
+                "http_status": 503,
+            }
+        )
+        logging_gateway.warning.assert_any_call(
+            "text send has an ambiguous provider delivery outcome."
+        )
+
+        transport_receipt = (
+            ext._delivery_receipt_from_result(  # pylint: disable=protected-access
+                response_type="text",
+                correlation_id="ledger-transport-ambiguous",
+                occurred_at="2026-08-06T12:25:34Z",
+                result={
+                    "ok": False,
+                    "status": None,
+                    "data": None,
+                    "error": "response lost",
+                    "raw": None,
+                    "delivery_outcome": "ambiguous",
+                },
+            )
+        )
+        self.assertEqual(transport_receipt["outcome"], "ambiguous")
+        self.assertEqual(
+            transport_receipt["error_classification"],
+            {"type": "ambiguous_delivery"},
+        )
+        self.assertNotIn("http_status", transport_receipt)
+
     async def test_delivery_receipt_sanitizes_client_exception(self) -> None:
         client = _make_client()
         client.send_text_message = AsyncMock(
@@ -2306,8 +2385,7 @@ class TestMugenWhatsAppWacapiIpcExt(unittest.IsolatedAsyncioTestCase):
             "processing_exception",
         )
         logger.error.assert_any_call(
-            "Unhandled WhatsApp event processing failure."
-            " error_type=RuntimeError."
+            "Unhandled WhatsApp event processing failure." " error_type=RuntimeError."
         )
 
     def test_get_contact_for_sender_edge_paths(self) -> None:

@@ -228,7 +228,7 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ingress_route["client_profile_key"], "whatsapp-a")
         logger.debug.assert_any_call("Skip duplicate WhatsApp message event.")
 
-    async def test_transient_graph_failure_recovers_via_retry(self) -> None:
+    async def test_transient_graph_message_failure_is_not_retried(self) -> None:
         config = _make_config()
         config.whatsapp.graphapi.typing_indicator_enabled = False
         relational_gateway = _MemoryRelational()
@@ -300,7 +300,7 @@ class TestMugenWhatsAppReliabilityE2E(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response, {"response": "OK"})
-        self.assertEqual(session.post.await_count, 2)
+        session.post.assert_awaited_once()
         kwargs = messaging_service.handle_text_message.await_args.kwargs
         self.assertEqual(kwargs["room_id"], "15551230001")
         self.assertEqual(kwargs["sender"], "15551230001")
