@@ -91,6 +91,10 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(chat._config_provider(), "cfg")
             self.assertEqual(chat._logger_provider(), "logger")
             self.assertEqual(chat._web_client_provider(), "web-client")
+            self.assertEqual(
+                chat._auth_provider(),
+                f"svc:{chat.di.EXT_SERVICE_ADMIN_SVC_AUTH}",
+            )
 
         with patch.object(web_decorator.di, "container", new=container):
             self.assertEqual(
@@ -1721,7 +1725,10 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
         async def _stream():
             yield "id: 1\nevent: ack\ndata: {}\n\n"
 
-        web_client = SimpleNamespace(stream_events=AsyncMock(return_value=_stream()))
+        web_client = SimpleNamespace(
+            stream_events=AsyncMock(return_value=_stream()),
+            get_conversation_tenant_id=AsyncMock(return_value=chat.GLOBAL_TENANT_ID),
+        )
 
         request_obj = SimpleNamespace(
             args={"conversation_id": "conv-1", "last_event_id": "3"},
@@ -1730,9 +1737,12 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(chat, "request", new=request_obj):
             response = await endpoint(
-                auth_user="user-1",
+                auth_user=str(uuid.uuid4()),
                 logger_provider=lambda: Mock(),
                 web_client_provider=lambda: web_client,
+                auth_provider=lambda: SimpleNamespace(
+                    has_permission_for_any_tenant=AsyncMock(return_value=True),
+                ),
             )
 
         self.assertEqual(response.mimetype, "text/event-stream")
@@ -1741,6 +1751,134 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
             web_client.stream_events.await_args.kwargs["last_event_id"],
             "5",
         )
+
+    async def test_open_events_stream_stops_when_web_access_is_revoked(self) -> None:
+        endpoint = unwrap(chat.web_events_stream)
+        auth_user = uuid.uuid4()
+        permission = AsyncMock(return_value=True)
+        closed = Mock()
+
+        async def _stream():
+            try:
+                yield "data: authorized\n\n"
+                yield ": ping\n\n"
+            finally:
+                closed()
+
+        web_client = SimpleNamespace(
+            stream_events=AsyncMock(return_value=_stream()),
+            get_conversation_tenant_id=AsyncMock(return_value=chat.GLOBAL_TENANT_ID),
+        )
+        request_obj = SimpleNamespace(
+            args={"conversation_id": "conv-1"},
+            headers={},
+        )
+        with patch.object(chat, "request", new=request_obj):
+            response = await endpoint(
+                auth_user=str(auth_user),
+                logger_provider=lambda: Mock(),
+                web_client_provider=lambda: web_client,
+                auth_provider=lambda: SimpleNamespace(
+                    has_permission_for_any_tenant=permission,
+                ),
+            )
+
+        async with response.response as body:
+            stream = body.__aiter__()
+            self.assertEqual(await anext(stream), "data: authorized\n\n")
+            permission.return_value = False
+            with self.assertRaises(StopAsyncIteration):
+                await anext(stream)
+
+        self.assertEqual(permission.await_count, 3)
+        permission.assert_awaited_with(
+            user_id=auth_user,
+            permission_object=chat.WEB_PLATFORM_ACCESS_PERMISSION,
+            permission_type=chat.WEB_PLATFORM_ACCESS_PERMISSION,
+            allow_global_admin=True,
+        )
+        closed.assert_called_once()
+
+    async def test_tenant_stream_revocation_ignores_access_to_another_tenant(
+        self,
+    ) -> None:
+        endpoint = unwrap(chat.web_events_stream)
+        auth_user = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        permission = AsyncMock(return_value=True)
+        auth_svc = SimpleNamespace(
+            has_permission=permission,
+            has_permission_for_any_tenant=AsyncMock(return_value=True),
+        )
+        closed = Mock()
+
+        async def _stream():
+            try:
+                yield "data: before suspension\n\n"
+                yield "data: after suspension\n\n"
+            finally:
+                closed()
+
+        client = SimpleNamespace(
+            stream_events=AsyncMock(return_value=_stream()),
+            get_conversation_tenant_id=AsyncMock(return_value=tenant_id),
+        )
+        request_obj = SimpleNamespace(
+            args={"conversation_id": " tenant-conversation "},
+            headers={},
+        )
+        with patch.object(chat, "request", new=request_obj):
+            response = await endpoint(
+                auth_user=str(auth_user),
+                logger_provider=lambda: Mock(),
+                web_client_provider=lambda: client,
+                auth_provider=lambda: auth_svc,
+            )
+
+        async with response.response as body:
+            stream = body.__aiter__()
+            self.assertEqual(await anext(stream), "data: before suspension\n\n")
+            permission.return_value = False
+            with self.assertRaises(StopAsyncIteration):
+                await anext(stream)
+
+        self.assertEqual(permission.await_count, 3)
+        permission.assert_awaited_with(
+            user_id=auth_user,
+            tenant_id=tenant_id,
+            permission_object=chat.WEB_PLATFORM_ACCESS_PERMISSION,
+            permission_type=chat.WEB_PLATFORM_ACCESS_PERMISSION,
+            allow_global_admin=True,
+        )
+        auth_svc.has_permission_for_any_tenant.assert_not_awaited()
+        self.assertEqual(client.get_conversation_tenant_id.await_count, 3)
+        client.get_conversation_tenant_id.assert_awaited_with(
+            auth_user=str(auth_user),
+            conversation_id="tenant-conversation",
+        )
+        closed.assert_called_once()
+
+    async def test_events_stream_rejects_missing_conversation_scope(
+        self,
+    ) -> None:
+        endpoint = unwrap(chat.web_events_stream)
+        request_obj = SimpleNamespace(args={"conversation_id": "conv-1"}, headers={})
+        client = SimpleNamespace(
+            stream_events=AsyncMock(),
+            get_conversation_tenant_id=AsyncMock(return_value=None),
+        )
+        with (
+            patch.object(chat, "request", new=request_obj),
+            patch.object(chat, "abort", side_effect=_abort_raiser),
+        ):
+            with self.assertRaises(_AbortCalled) as exc:
+                await endpoint(
+                    auth_user=str(uuid.uuid4()),
+                    logger_provider=lambda: Mock(),
+                    web_client_provider=lambda: client,
+                )
+        self.assertEqual(exc.exception.code, 403)
+        client.stream_events.assert_not_awaited()
 
     async def test_events_stream_error_paths(self) -> None:
         endpoint = unwrap(chat.web_events_stream)
@@ -1783,10 +1921,16 @@ class TestMugenWebApiChat(unittest.IsolatedAsyncioTestCase):
             ):
                 with self.assertRaises(_AbortCalled) as ex:
                     await endpoint(
-                        auth_user="user-1",
+                        auth_user=str(uuid.uuid4()),
                         logger_provider=lambda: logger,
                         web_client_provider=lambda: SimpleNamespace(
-                            stream_events=AsyncMock(side_effect=side_effect)
+                            stream_events=AsyncMock(side_effect=side_effect),
+                            get_conversation_tenant_id=AsyncMock(
+                                return_value=chat.GLOBAL_TENANT_ID,
+                            ),
+                        ),
+                        auth_provider=lambda: SimpleNamespace(
+                            has_permission_for_any_tenant=AsyncMock(return_value=True),
                         ),
                     )
                 self.assertEqual(ex.exception.code, expected_code)

@@ -1243,6 +1243,9 @@ class TestDependencyInjector(unittest.TestCase):
             ) -> dict:
                 pass
 
+            async def get_conversation_tenant_id(self, **_kwargs):
+                return None
+
             async def stream_events(
                 self,
                 *,
