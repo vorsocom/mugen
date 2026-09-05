@@ -82,8 +82,9 @@ def _prop_path(expr: Expr) -> str:
         while isinstance(cur, MemberAccess):
             segments.append(cur.member)
             cur = cur.base
-        if isinstance(cur, Identifier):
-            segments.append(cur.name)
+        if not isinstance(cur, Identifier):
+            raise ValueError("Property paths must be rooted in an identifier.")
+        segments.append(cur.name)
         segments.reverse()
         return "/".join(segments)
 
@@ -125,6 +126,10 @@ class RGQLToRelationalAdapter:
     ) -> Tuple[Sequence[FilterGroup], Sequence[OrderClause], int | None, int | None]:
         """
         Convert RGQLQueryOptions into (filter_groups, order_by, limit, offset).
+
+        Callers must authorize every referenced resource before invoking this
+        method. A path planner resolves storage mappings; it does not grant read
+        permission to the navigation targets.
         """
         filter_groups: List[FilterGroup] = []
 
@@ -302,7 +307,8 @@ class RGQLToRelationalAdapter:
                 prop_path = _try_prop_path(expr.left)
                 if prop_path is not None and path_planner(prop_path) is not None:
                     raise ValueError(
-                        f"Nested navigation paths are not supported for operator {op!r}."
+                        "Nested navigation paths are not supported for operator "
+                        f"{op!r}."
                     )
 
         if isinstance(expr, FunctionCall):
