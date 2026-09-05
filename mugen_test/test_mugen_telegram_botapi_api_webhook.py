@@ -1,5 +1,7 @@
 """Unit tests for mugen.core.plugin.telegram.botapi.api.webhook."""
 
+from werkzeug.exceptions import InternalServerError
+
 from inspect import unwrap
 from types import SimpleNamespace
 import unittest
@@ -94,11 +96,12 @@ class TestMugenTelegramBotapiWebhook(unittest.IsolatedAsyncioTestCase):
             request_payload.data,
             {
                 "path_token": "path-token",
+                "authenticated_client_profile_id": None,
                 "payload": {"update_id": 1},
             },
         )
 
-    async def test_event_returns_ok_and_logs_when_ipc_has_errors(self) -> None:
+    async def test_event_returns_failure_and_logs_ipc_errors(self) -> None:
         endpoint = unwrap(webhook.telegram_botapi_webhook_event)
         logger = Mock()
         ipc_service = SimpleNamespace(
@@ -125,12 +128,12 @@ class TestMugenTelegramBotapiWebhook(unittest.IsolatedAsyncioTestCase):
             "request",
             new=SimpleNamespace(get_json=AsyncMock(return_value={"update_id": 1})),
         ):
-            response = await endpoint(
-                path_token="path-token",
-                ipc_provider=lambda: ipc_service,
-                logger_provider=lambda: logger,
-            )
-        self.assertEqual(response, {"response": "OK"})
+            with self.assertRaises(InternalServerError):
+                await endpoint(
+                    path_token="path-token",
+                    ipc_provider=lambda: ipc_service,
+                    logger_provider=lambda: logger,
+                )
         logger.warning.assert_called_once()
 
     async def test_event_stages_ingress_entries_when_ipc_provider_is_absent(self) -> None:

@@ -222,6 +222,34 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
             "events": [],
         }
 
+    async def get_conversation_tenant_id(
+        self,
+        *,
+        auth_user: str,
+        conversation_id: str,
+    ) -> uuid.UUID | None:
+        """Read current tenant scope only for the authenticated owner."""
+        async with self._relational_session() as session:
+            result = await session.execute(
+                self._schema_sql(
+                    "SELECT tenant_id "
+                    "FROM mugen.web_conversation_state "
+                    "WHERE conversation_id = :conversation_id "
+                    "AND owner_user_id = :auth_user"
+                ),
+                {
+                    "conversation_id": conversation_id,
+                    "auth_user": auth_user,
+                },
+            )
+            row = result.mappings().one_or_none()
+            if row is None:
+                return None
+            try:
+                return uuid.UUID(str(row.get("tenant_id")))
+            except (TypeError, ValueError):
+                return None
+
     async def ensure_conversation_owner(
         self,
         *,

@@ -45,6 +45,15 @@ class IWebRuntimeStore(ABC):
         """Validate backend connectivity and required tables."""
 
     @abstractmethod
+    async def get_conversation_tenant_id(
+        self,
+        *,
+        auth_user: str,
+        conversation_id: str,
+    ) -> uuid.UUID | None:
+        """Read the owned conversation's tenant, or None for unavailable scope."""
+
+    @abstractmethod
     async def ensure_conversation_owner(
         self,
         *,

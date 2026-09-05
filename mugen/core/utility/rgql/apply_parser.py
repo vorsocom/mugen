@@ -16,6 +16,7 @@ performed.
 from dataclasses import dataclass
 from typing import List, Optional
 
+from mugen.core.utility.rgql.query_budget import current_parse_budget, parser_scope
 from mugen.core.utility.rgql.expr_parser import parse_rgql_expr, ParseError
 from mugen.core.utility.rgql.ast import Expr, is_boolean_expr
 from mugen.core.utility.rgql.orderby_parser import parse_orderby, OrderByItem
@@ -141,8 +142,8 @@ class FilterTransform(ApplyNode):
 class OrderByTransform(ApplyNode):
     """``orderby(...)`` transformation.
 
-    ``items`` is the list of :class:`~mugen.core.utility.rgql_parser.orderby_parser.OrderByItem`
-    produced by the order-by parser, describing the sort keys and their
+    ``items`` is the list of :class:`OrderByItem` produced by the order-by
+    parser, describing the sort keys and their
     directions.
     """
 
@@ -260,6 +261,7 @@ class CustomApplyTransform(ApplyNode):
 # ----------------------------------------------------------------------
 
 
+@parser_scope
 def parse_apply(apply_value: str) -> List[ApplyNode]:
     """Parse a textual $apply transformation pipeline into a list of
     :class:`ApplyNode` instances.
@@ -438,7 +440,7 @@ def _parse_single_transform(text: str) -> ApplyNode:
     if name_lower == "concat":
         return _parse_concat(args)
 
-    return CustomApplyTransform(name=name, raw_args=args)
+    return current_parse_budget().node(CustomApplyTransform, name=name, raw_args=args)
 
 
 # ----------------------------------------------------------------------
@@ -466,7 +468,8 @@ def _parse_aggregate(args: str) -> AggregateTransform:
             if not alias_str:
                 raise ParseError(f"Missing alias after 'as' in aggregate: {s!r}")
             aggs.append(
-                AggregateExpression(
+                current_parse_budget().node(
+                    AggregateExpression,
                     expr=None,
                     method=None,
                     alias=alias_str,
@@ -496,7 +499,8 @@ def _parse_aggregate(args: str) -> AggregateTransform:
 
         expr = parse_rgql_expr(expr_str)
         aggs.append(
-            AggregateExpression(
+            current_parse_budget().node(
+                AggregateExpression,
                 expr=expr,
                 method=method_str,
                 alias=alias_str,
@@ -504,7 +508,7 @@ def _parse_aggregate(args: str) -> AggregateTransform:
             )
         )
 
-    return AggregateTransform(aggregates=aggs)
+    return current_parse_budget().node(AggregateTransform, aggregates=aggs)
 
 
 def _find_keyword_top_level(text: str, keyword: str) -> Optional[int]:
@@ -574,8 +578,8 @@ def _parse_groupby(args: str) -> GroupByTransform:
             )
         sub_transforms = parse_apply(rest[1:].strip())
 
-    return GroupByTransform(
-        grouping_paths=grouping_paths, sub_transforms=sub_transforms
+    return current_parse_budget().node(
+        GroupByTransform, grouping_paths=grouping_paths, sub_transforms=sub_transforms
     )
 
 
@@ -625,7 +629,9 @@ def _parse_bottom_top(kind: str, args: str) -> BottomTopTransform:
 
     n_expr = parse_rgql_expr(pieces[0])
     value_expr = parse_rgql_expr(pieces[1])
-    return BottomTopTransform(kind=kind, n_expr=n_expr, value_expr=value_expr)
+    return current_parse_budget().node(
+        BottomTopTransform, kind=kind, n_expr=n_expr, value_expr=value_expr
+    )
 
 
 # ----------------------------------------------------------------------
@@ -637,17 +643,17 @@ def _parse_filter(args: str) -> FilterTransform:
     expr = parse_rgql_expr(args)
     if not is_boolean_expr(expr):
         raise ParseError(f"filter(...) predicate must be boolean: {args!r}")
-    return FilterTransform(predicate=expr)
+    return current_parse_budget().node(FilterTransform, predicate=expr)
 
 
 def _parse_orderby_transform(args: str) -> OrderByTransform:
     items = parse_orderby(args)
-    return OrderByTransform(items=items)
+    return current_parse_budget().node(OrderByTransform, items=items)
 
 
 def _parse_search_transform(args: str) -> SearchTransform:
     search_ast = parse_rgql_search(args)
-    return SearchTransform(search=search_ast)
+    return current_parse_budget().node(SearchTransform, search=search_ast)
 
 
 def _parse_skip(args: str) -> SkipTransform:
@@ -657,7 +663,7 @@ def _parse_skip(args: str) -> SkipTransform:
         raise ParseError(f"skip(...) expects an integer, got: {args!r}") from exc
     if count < 0:
         raise ParseError("skip(...) count must be non-negative")
-    return SkipTransform(count=count)
+    return current_parse_budget().node(SkipTransform, count=count)
 
 
 def _parse_top(args: str) -> TopTransform:
@@ -667,13 +673,15 @@ def _parse_top(args: str) -> TopTransform:
         raise ParseError(f"top(...) expects an integer, got: {args!r}") from exc
     if count < 0:
         raise ParseError("top(...) count must be non-negative")
-    return TopTransform(count=count)
+    return current_parse_budget().node(TopTransform, count=count)
 
 
 def _parse_identity(args: str) -> IdentityTransform:
     if args.strip():
         raise ParseError("identity() does not take any arguments")
-    return IdentityTransform()
+    return current_parse_budget().node(
+        IdentityTransform,
+    )
 
 
 # ----------------------------------------------------------------------
@@ -703,11 +711,14 @@ def _parse_compute(args: str) -> ComputeTransform:
             raise ParseError(f"Missing alias after 'as' in compute expression: {s!r}")
 
         expr = parse_rgql_expr(expr_str)
-        computes.append(ComputeExpression(expr=expr, alias=alias_str))
+        computes.append(
+            current_parse_budget().node(ComputeExpression, expr=expr, alias=alias_str)
+        )
 
-    return ComputeTransform(computes=computes)
+    return current_parse_budget().node(ComputeTransform, computes=computes)
 
 
+@parser_scope
 def parse_compute_option(text: str) -> List[ComputeExpression]:
     """Parse the value of a ``$compute`` system query option.
 
@@ -742,4 +753,4 @@ def _parse_concat(args: str) -> ConcatTransform:
             continue
         sequences.append(parse_apply(seq_str))
 
-    return ConcatTransform(sequences=sequences)
+    return current_parse_budget().node(ConcatTransform, sequences=sequences)

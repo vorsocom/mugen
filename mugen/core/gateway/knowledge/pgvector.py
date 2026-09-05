@@ -25,6 +25,7 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.gateway.knowledge.common import (
     apply_query_scope,
     resolve_hugging_face_token,
+    resolve_encoder_revision,
 )
 from mugen.core.gateway.storage.rdbms.sqla.shared_runtime import SharedSQLAlchemyRuntime
 from mugen.core.utility.config_value import (
@@ -288,6 +289,11 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
     def _build_encoder(self) -> SentenceTransformer:
         return SentenceTransformer(
             model_name_or_path=self._encoder_model_name,
+            revision=resolve_encoder_revision(
+                self._encoder_model_name, self._section("pgvector", "encoder")
+            ),
+            trust_remote_code=False,
+            model_kwargs={"use_safetensors": True},
             processor_kwargs={
                 "clean_up_tokenization_spaces": False,
             },

@@ -10,6 +10,7 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.plugin.acp.service.messaging_client_profile import (
     MessagingClientProfileService,
 )
+from mugen.core.utility.client_profile_runtime import client_profile_scope
 
 
 def _config_provider():
@@ -152,7 +153,9 @@ def wechat_provider_required(
                     config=config,
                     client_profile=client_profile,
                 )
-                configured_provider = str(runtime_config.wechat.provider).strip().lower()
+                configured_provider = (
+                    str(runtime_config.wechat.provider).strip().lower()
+                )
             except (AttributeError, KeyError, RuntimeError, TypeError):
                 logger.error("WeChat provider configuration missing.")
                 abort(500)
@@ -164,7 +167,8 @@ def wechat_provider_required(
                 )
                 abort(501)
 
-            return await func(*args, **kwargs)
+            with client_profile_scope(getattr(client_profile, "id", None)):
+                return await func(*args, **kwargs)
 
         return wrapper
 

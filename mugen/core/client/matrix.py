@@ -1657,6 +1657,9 @@ class DefaultMatrixClient(  # pylint: disable=too-many-instance-attributes
                         identifier_type="recipient_user_id",
                         identifier_value=recipient_user_id,
                         claims=claims,
+                        authenticated_client_profile_id=(
+                            self._resolve_client_profile_id()
+                        ),
                     )
                 )
             except Exception as exc:  # pylint: disable=broad-exception-caught

@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -34,6 +35,7 @@ from mugen.core.service.context_scope_resolution import (
 from mugen.core.utility.client_profile_runtime import (
     client_profile_id_from_ingress_route,
     client_profile_scope,
+    normalize_client_profile_id,
 )
 from mugen.core.utility.messaging_client_user_access import (
     MessagingClientUserAccessPolicy,
@@ -572,6 +574,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         *,
         phone_number_id: str | None,
         webhook_payload: dict[str, Any],
+        authenticated_client_profile_id: uuid.UUID | None = None,
     ) -> dict[str, Any] | None:
         claims = (
             {"phone_number_id": phone_number_id} if phone_number_id is not None else {}
@@ -583,6 +586,7 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                 identifier_type="phone_number_id",
                 identifier_value=phone_number_id,
                 claims=claims,
+                authenticated_client_profile_id=authenticated_client_profile_id,
             )
         )
         try:
@@ -1318,6 +1322,15 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
         provider_context = (
             provider_context if isinstance(provider_context, dict) else {}
         )
+        client_profile_id = normalize_client_profile_id(
+            payload.get("client_profile_id")
+            or provider_context.get("client_profile_id")
+        )
+        if client_profile_id is None:
+            raise ContextScopeResolutionError(
+                reason_code="client_profile_mismatch",
+                detail="whatsapp delivery requires its receiving client profile.",
+            )
         ingress_route = self._normalize_ingress_route(
             provider_context.get("ingress_route")
         )
@@ -1336,19 +1349,20 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
             resolved = await self._resolve_ingress_route(
                 phone_number_id=phone_number_id,
                 webhook_payload=resolve_payload,
+                authenticated_client_profile_id=client_profile_id,
             )
-            if resolved is not None:
-                ingress_route = resolved
+            if resolved is None:
+                raise ContextScopeResolutionError(
+                    reason_code="route_unresolved",
+                    detail="whatsapp delivery could not resolve its route.",
+                )
+            ingress_route = resolved
 
-        route_client_profile_id = client_profile_id_from_ingress_route(ingress_route)
-        client_profile_id = self._coerce_nonempty_string(
-            payload.get("client_profile_id")
-        ) or self._coerce_nonempty_string(provider_context.get("client_profile_id"))
-        if client_profile_id is None and route_client_profile_id is not None:
-            client_profile_id = str(route_client_profile_id)
-        if client_profile_id is None:
-            return
-
+        if client_profile_id_from_ingress_route(ingress_route) != client_profile_id:
+            raise ContextScopeResolutionError(
+                reason_code="client_profile_mismatch",
+                detail="whatsapp route does not belong to its receiving client.",
+            )
         with client_profile_scope(client_profile_id):
             message = event_payload.get("message")
             if isinstance(message, dict):
@@ -1413,15 +1427,24 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
                     ingress_route = await self._resolve_ingress_route(
                         phone_number_id=phone_number_id,
                         webhook_payload=event_value,
+                        authenticated_client_profile_id=normalize_client_profile_id(
+                            event_payload.get("authenticated_client_profile_id")
+                        ),
                     )
                     if ingress_route is None:
-                        continue
+                        raise ContextScopeResolutionError(
+                            reason_code="route_unresolved",
+                            detail="WhatsApp delivery could not resolve its route.",
+                        )
                     self._active_ingress_route = ingress_route
                     route_client_profile_id = client_profile_id_from_ingress_route(
                         ingress_route
                     )
                     if route_client_profile_id is None:
-                        continue
+                        raise ContextScopeResolutionError(
+                            reason_code="route_unresolved",
+                            detail="WhatsApp delivery could not resolve its client.",
+                        )
                     with client_profile_scope(route_client_profile_id):
                         messages = event_value.get("messages")
                         if isinstance(messages, list):
@@ -1446,6 +1469,9 @@ class WhatsAppWACAPIIPCExtension(IIPCExtension):
 
             if not found_event_payload:
                 raise TypeError
+        except ContextScopeResolutionError:
+            self._increment_metric("whatsapp.ipc.event.processed_failed")
+            raise
         except (KeyError, TypeError):
             self._increment_metric("whatsapp.ipc.event.malformed")
             self._logging_gateway.error("Malformed WhatsApp event payload.")

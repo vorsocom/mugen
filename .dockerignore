@@ -33,6 +33,9 @@ node_modules
 dist
 build
 
+# Verification reports are produced after building the image they identify.
+docs/security/sec06-container-review.md
+
 .DS_Store
 .idea
 .vscode

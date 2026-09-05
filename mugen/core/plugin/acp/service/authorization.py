@@ -19,6 +19,8 @@ from mugen.core.plugin.acp.contract.service import (
     IPermissionObjectService,
     IPermissionTypeService,
     IRoleMembershipService,
+    ITenantMembershipService,
+    ITenantService,
     IUserService,
 )
 from mugen.core.plugin.acp.utility.identity import resolve_acp_admin_namespace
@@ -32,6 +34,8 @@ _EDM_PERMISSION_ENTRY = "ACP.PermissionEntry"
 _EDM_PERMISSION_OBJECT = "ACP.PermissionObject"
 _EDM_PERMISSION_TYPE = "ACP.PermissionType"
 _EDM_ROLE_MEMBERSHIP = "ACP.RoleMembership"
+_EDM_TENANT = "ACP.Tenant"
+_EDM_TENANT_MEMBERSHIP = "ACP.TenantMembership"
 _EDM_USER = "ACP.User"
 
 
@@ -88,6 +92,14 @@ class AuthorizationService(IAuthorizationService):
         )
         self._role_mship_svc: IRoleMembershipService = self._registry.get_edm_service(
             admin_ns.key(_EDM_ROLE_MEMBERSHIP),
+        )
+        self._tenant_svc: ITenantService = self._registry.get_edm_service(
+            admin_ns.key(_EDM_TENANT),
+        )
+        self._tenant_mship_svc: ITenantMembershipService = (
+            self._registry.get_edm_service(
+                admin_ns.key(_EDM_TENANT_MEMBERSHIP),
+            )
         )
         self._user_svc: IUserService = self._registry.get_edm_service(
             admin_ns.key(_EDM_USER),
@@ -148,15 +160,37 @@ class AuthorizationService(IAuthorizationService):
         if obj_id is None or typ_id is None:
             return False
 
-        # Global admin override.
-        if allow_global_admin:
+        # Tenant lifecycle state must be read on every decision, before grants.
+        if tenant_id is not None:
+            tenant = await self._tenant_svc.get({"id": tenant_id})
+            if (
+                tenant is None
+                or tenant.status != "active"
+                or tenant.deleted_at is not None
+            ):
+                return False
+
+        is_global_admin = False
+        if tenant_id is not None or allow_global_admin:
             user = await self._user_svc.get_expanded({"id": user_id})
             if user:
                 global_roles = {
                     f"{r.namespace}:{r.name}" for r in (user.global_roles or [])
                 }
-                if self._admin_fqn in global_roles:
-                    return True
+                is_global_admin = self._admin_fqn in global_roles
+
+        # Global administrators retain cross-tenant administration. Other global
+        # grants do not exempt a user from the active membership requirement.
+        if tenant_id is not None and not is_global_admin:
+            membership = await self._tenant_mship_svc.get(
+                {"tenant_id": tenant_id, "user_id": user_id},
+            )
+            if membership is None or membership.status != "active":
+                return False
+
+        # Only an explicit override bypasses permission grants and their denies.
+        if allow_global_admin and is_global_admin:
+            return True
 
         # 1) Global permissions (global roles)
         global_role_ids = [

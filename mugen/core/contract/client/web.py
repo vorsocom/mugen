@@ -5,6 +5,7 @@ __all__ = ["IWebClient", "WebConversationTenantConflictError"]
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import Any
+import uuid
 
 
 class WebConversationTenantConflictError(RuntimeError):
@@ -52,6 +53,15 @@ class IWebClient(ABC):
     ) -> dict[str, Any]:
         """Append one human handoff reply to a web conversation stream."""
         raise NotImplementedError
+
+    @abstractmethod
+    async def get_conversation_tenant_id(
+        self,
+        *,
+        auth_user: str,
+        conversation_id: str,
+    ) -> uuid.UUID | None:
+        """Return the persisted tenant for a conversation owned by the user."""
 
     @abstractmethod
     async def stream_events(

@@ -24,6 +24,7 @@ from mugen.core.utility.rgql.apply_parser import (
 from mugen.core.utility.rgql.ast import Expr, is_boolean_expr
 from mugen.core.utility.rgql.expr_parser import parse_rgql_expr, ParseError
 from mugen.core.utility.rgql.orderby_parser import parse_orderby, OrderByItem
+from mugen.core.utility.rgql.query_budget import current_parse_budget, parser_scope
 from mugen.core.utility.rgql.search_parser import parse_rgql_search, SearchExpr
 
 
@@ -227,7 +228,7 @@ def _split_semicolons_top_level(text: str) -> List[str]:
 
 def _split_expand_item(text: str) -> tuple[str, Optional[str]]:
     """
-    Split "Orders($filter=...;$expand=Items)" into ("Orders", "$filter=...;$expand=Items")
+    Split an expand item into its path and parenthesized options.
     """
     text = text.strip()
     in_string = False
@@ -307,7 +308,9 @@ def _parse_key_predicate(text: str) -> List[KeyComponent]:
         except ParseError as exc:
             raise ParseError(f"Invalid key value {value_text!r}: {exc}") from exc
 
-        components.append(KeyComponent(name=name, expr=expr))
+        components.append(
+            current_parse_budget().node(KeyComponent, name=name, expr=expr)
+        )
 
     return components
 
@@ -395,6 +398,7 @@ def _parse_expand_options(item: ExpandItem, options: str) -> None:
         raise ParseError(f"Unsupported expand option: {name_part!r}")
 
 
+@parser_scope
 def parse_expand(expand_value: str) -> List[ExpandItem]:
     """Parse the value of a ``$expand`` query option into a list of
     :class:`ExpandItem` objects.
@@ -453,7 +457,7 @@ def parse_expand(expand_value: str) -> List[ExpandItem]:
         if not path:
             raise ParseError(f"Empty path in $expand item: {item_str!r}")
 
-        item = ExpandItem(path=path, is_ref=is_ref)
+        item = current_parse_budget().node(ExpandItem, path=path, is_ref=is_ref)
         if options:
             _parse_expand_options(item, options)
         items.append(item)
@@ -471,7 +475,11 @@ def _parse_path(path: str) -> List[RGQLPathSegment]:
 
     for p in parts:
         if p == "$count":
-            segments.append(RGQLPathSegment(name="$count", is_count=True))
+            segments.append(
+                current_parse_budget().node(
+                    RGQLPathSegment, name="$count", is_count=True
+                )
+            )
             continue
 
         name = p
@@ -486,7 +494,8 @@ def _parse_path(path: str) -> List[RGQLPathSegment]:
             key_components = _parse_key_predicate(key_predicate)
 
         segments.append(
-            RGQLPathSegment(
+            current_parse_budget().node(
+                RGQLPathSegment,
                 name=name,
                 key_predicate=key_predicate,
                 key_components=key_components,
@@ -496,6 +505,7 @@ def _parse_path(path: str) -> List[RGQLPathSegment]:
     return segments
 
 
+@parser_scope
 def parse_rgql_url(url: str) -> RGQLUrl:
     """Parse a RGQL-style URL into an :class:`RGQLUrl` structure.
 
@@ -517,7 +527,9 @@ def parse_rgql_url(url: str) -> RGQLUrl:
     path = parsed.path or ""
     resource_path = _parse_path(path)
 
-    opts = RGQLQueryOptions()
+    opts = current_parse_budget().node(
+        RGQLQueryOptions,
+    )
     for raw_name, raw_value in parse_qsl(parsed.query, keep_blank_values=True):
         if not raw_name:
             continue
@@ -628,7 +640,8 @@ def parse_rgql_url(url: str) -> RGQLUrl:
             # Unknown query option – ignored for now, or could be recorded.
             pass
 
-    return RGQLUrl(
+    return current_parse_budget().node(
+        RGQLUrl,
         raw_url=url,
         path=path,
         resource_path=resource_path,

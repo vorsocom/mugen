@@ -63,6 +63,41 @@ Practical rules:
 - `room_id` remains conversation/reply context, not the tenant-routing key.
 - `provider_context` may carry optional `client_profile_key` for logs/debugging.
 
+## Ingress Binding Ownership
+
+For messaging channels, an `IngressBinding` must reference an active
+`ChannelProfile` in its own tenant. Its identifier must equal the corresponding
+identifier of that channel's active, tenant-owned `MessagingClientProfile`.
+Creation, identifier/profile changes, and reactivation validate these references.
+A patch containing only `IsActive: false` can deactivate an invalid legacy binding.
+Custom channels retain their own identifier conventions; any referenced channel
+profile must still belong to the binding's tenant and channel.
+
+Routing uses the authenticated client profile to derive its tenant, restrict
+binding lookup, and verify that the resolved channel belongs to the same client.
+Webhook path tokens and provider payload identifiers do not select another tenant.
+Matrix supplies its configured receiving profile directly. Signal pins each event
+to the supervisor-selected receiving profile and revalidates that profile before
+routing; provider-supplied profile IDs cannot replace it. Staged webhook events
+retain their canonical client profile during replay, including any fresh lookup.
+A failed lookup or mismatched cached route remains a processing failure, so shared
+ingress retries or dead-letters the event rather than accepting a stale fallback.
+Active `(ChannelKey, IdentifierType, IdentifierValue)` combinations are globally
+unique, consistent with identifier lookup for transports without explicit scope.
+Messaging client identifiers already have matching global active uniqueness.
+
+Migration `d8f2b6c4a0e1` deliberately fails if existing active bindings collide
+across tenants. It preserves those rows instead of selecting an unverified owner.
+Before retrying, verify each collision against the actual messaging client profile
+and deactivate the invalid binding through ACP. Existing bindings whose channel
+profile or identifier ownership is invalid must be corrected before reactivation.
+
+Webhook staging fails with HTTP 500 if an event cannot resolve its client
+profile. The legacy IPC path records unresolved routes in its dead-letter store
+and returns a delivery failure; IPC errors also produce HTTP 500. These failures
+retain provider retry behavior and are included in webhook routing-failure logs
+and counters instead of acknowledging empty staging as successful delivery.
+
 ## Shared Persistence Model
 
 The shared ingress foundation uses four tables:

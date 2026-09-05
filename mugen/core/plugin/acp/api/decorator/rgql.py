@@ -25,6 +25,7 @@ from mugen.core.plugin.acp.contract.service.authorization import IAuthorizationS
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
 from mugen.core.plugin.acp.contract.sdk.resource import SoftDeleteMode
 from mugen.core.plugin.acp.utility.rgql.nav_filter_planner import plan_related_path
+from mugen.core.plugin.acp.utility.rgql.query_authorization import authorize_query_paths
 from mugen.core.plugin.acp.utility.rgql.default_where import (
     make_default_where_provider,
 )
@@ -36,10 +37,16 @@ from mugen.core.utility.rgql import ParseError as RGQLParseError
 from mugen.core.utility.rgql import parse_rgql_url, RGQLQueryOptions, SemanticChecker
 from mugen.core.utility.rgql import SemanticError as RGQLSemanticError
 from mugen.core.utility.rgql.model import EdmType
+from mugen.core.utility.rgql.query_budget import (
+    DEFAULT_MAX_TERMS,
+    QueryBudgetError,
+    check_normalization_budget,
+)
 from mugen.core.utility.rgql.search_parser import (
     SearchBinary,
     SearchExpr,
     SearchNot,
+    SearchParseError,
     SearchTerm,
 )
 from mugen.core.gateway.storage.rdbms.rgql_adapter.error import RGQLExpandError
@@ -104,17 +111,42 @@ def _merge_filter_groups(
     )
 
 
+def _filter_term_count(groups: Sequence[FilterGroup]) -> int:
+    """Count all stored predicates without constructing another group."""
+    return sum(
+        len(group.where)
+        + len(group.text_filters)
+        + len(group.scalar_filters)
+        + len(group.related_text_filters)
+        + len(group.related_scalar_filters)
+        for group in groups
+    )
+
+
 def _and_filter_groups(
     left: Sequence[FilterGroup] | None,
     right: Sequence[FilterGroup] | None,
+    *,
+    max_filter_terms: int = DEFAULT_MAX_TERMS,
 ) -> list[FilterGroup]:
     """Combine two DNF filter group sets with logical AND."""
     if not left:
+        check_normalization_budget(
+            len(right or []), _filter_term_count(right or []), max_filter_terms
+        )
         return list(right or [])
 
     if not right:
+        check_normalization_budget(
+            len(left), _filter_term_count(left), max_filter_terms
+        )
         return list(left)
 
+    check_normalization_budget(
+        len(left) * len(right),
+        _filter_term_count(left) * len(right) + _filter_term_count(right) * len(left),
+        max_filter_terms,
+    )
     return [
         _merge_filter_groups(left_group, right_group)
         for left_group in left
@@ -128,8 +160,10 @@ def _search_term_filter_groups(
     search_fields: Sequence[str],
     edm_type: EdmType,
     path_planner: PathPlanner,
+    max_filter_terms: int = DEFAULT_MAX_TERMS,
 ) -> list[FilterGroup]:
     """Build OR filter groups for a single configured search term."""
+    check_normalization_budget(len(search_fields), len(search_fields), max_filter_terms)
     groups: list[FilterGroup] = []
     for field in search_fields:
         path_plan = path_planner(field)
@@ -175,6 +209,7 @@ def _search_filter_groups(
     search_fields: Sequence[str],
     edm_type: EdmType,
     path_planner: PathPlanner,
+    max_filter_terms: int = DEFAULT_MAX_TERMS,
 ) -> list[FilterGroup]:
     """Translate a configured RGQL $search AST to DNF filter groups."""
     if isinstance(expr, SearchTerm):
@@ -183,6 +218,7 @@ def _search_filter_groups(
             search_fields=search_fields,
             edm_type=edm_type,
             path_planner=path_planner,
+            max_filter_terms=max_filter_terms,
         )
 
     if isinstance(expr, SearchBinary):
@@ -191,17 +227,24 @@ def _search_filter_groups(
             search_fields=search_fields,
             edm_type=edm_type,
             path_planner=path_planner,
+            max_filter_terms=max_filter_terms,
         )
         right = _search_filter_groups(
             expr.right,
             search_fields=search_fields,
             edm_type=edm_type,
             path_planner=path_planner,
+            max_filter_terms=max_filter_terms,
         )
         if expr.op == "or":
+            check_normalization_budget(
+                len(left) + len(right),
+                _filter_term_count(left) + _filter_term_count(right),
+                max_filter_terms,
+            )
             return [*left, *right]
         if expr.op == "and":
-            return _and_filter_groups(left, right)
+            return _and_filter_groups(left, right, max_filter_terms=max_filter_terms)
 
     if isinstance(expr, SearchNot):
         raise ValueError("$search not expressions are not supported.")
@@ -333,6 +376,7 @@ def rgql_enabled(
                 allow_global_admin = False
 
             self_tenant_discovery = _SelfTenantDiscoveryState()
+            read_permission_cache: dict[str, bool] = {}
 
             # --- helpers ---
             base_default_where_provider = make_default_where_provider(
@@ -456,6 +500,8 @@ def rgql_enabled(
             async def _resource_path_permitted(
                 edm_type: EdmType,
                 path: str,
+                *,
+                allow_self_discovery: bool = True,
             ) -> bool:
                 """Determine if a user is permitted to access the given
                 resource path."""
@@ -477,21 +523,26 @@ def rgql_enabled(
                     )
                     return False
 
-                permitted = await auth_svc.has_permission(
-                    user_id=auth_user_id,
-                    permission_object=(
-                        target_resource.permissions.permission_object
-                    ),
-                    permission_type=target_resource.permissions.read,
-                    tenant_id=tenant_id,
-                    allow_global_admin=allow_global_admin,
-                )
+                if tname not in read_permission_cache:
+                    read_permission_cache[tname] = await auth_svc.has_permission(
+                        user_id=auth_user_id,
+                        permission_object=(
+                            target_resource.permissions.permission_object
+                        ),
+                        permission_type=target_resource.permissions.read,
+                        tenant_id=tenant_id,
+                        allow_global_admin=allow_global_admin,
+                    )
+                permitted = read_permission_cache[tname]
                 if permitted:
                     return True
 
-                self_discovery_permitted = _self_tenant_discovery_path_permitted(
-                    edm_type,
-                    path,
+                self_discovery_permitted = (
+                    allow_self_discovery
+                    and _self_tenant_discovery_path_permitted(
+                        edm_type,
+                        path,
+                    )
                 )
                 if not self_discovery_permitted:
                     _logger.debug(
@@ -503,6 +554,12 @@ def rgql_enabled(
             admin_edm_schema = registry.schema
             semantic_checker = SemanticChecker(model=admin_edm_schema)
             edm_type = admin_edm_schema.get_type(registry.schema_index[entity_set])
+
+            default_top = getattr(config.acp, "rgql_default_top", 100)
+            max_top = getattr(config.acp, "rgql_max_top", 500)
+            max_skip = getattr(config.acp, "rgql_max_skip", 10_000)
+            limit: int | None = default_top if entity_id is None else None
+            offset: int | None = 0 if entity_id is None else None
 
             rgql_url = None
             raw_qs = (
@@ -518,7 +575,12 @@ def rgql_enabled(
                 try:
                     rgql_url = parse_rgql_url(synthetic_url)
                     semantic_checker.check_url(rgql_url)
-                except (RGQLParseError, RGQLSemanticError) as exc:
+                except (
+                    RGQLParseError,
+                    RGQLSemanticError,
+                    QueryBudgetError,
+                    SearchParseError,
+                ) as exc:
                     current_app.logger.debug(
                         f"Invalid RGQL query on {entity_set}: {exc}"
                     )
@@ -529,15 +591,9 @@ def rgql_enabled(
             response_columns: list[str] | None = None
             filter_groups: Sequence[FilterGroup] | None = None
             order_by: Sequence[OrderClause] | None = None
-            limit: int | None = None
-            offset: int | None = None
             expand_paths: set[str] = set()
 
             # RGQL safety limits.
-            default_top = getattr(config.acp, "rgql_default_top", 100)
-            max_top = getattr(config.acp, "rgql_max_top", 500)
-            max_skip = getattr(config.acp, "rgql_max_skip", 10_000)
-
             max_select = getattr(config.acp, "rgql_max_select", 50)
             max_orderby = getattr(config.acp, "rgql_max_orderby", 5)
             max_expand_paths = getattr(config.acp, "rgql_max_expand_paths", 10)
@@ -585,97 +641,75 @@ def rgql_enabled(
                     max_nav_depth=max_filter_nav_depth,
                 )
 
+            async def _query_path_permitted(
+                query_type: EdmType,
+                path: str,
+            ) -> bool:
+                return await _resource_path_permitted(
+                    query_type,
+                    path,
+                    allow_self_discovery=False,
+                )
+
+            async def _authorize_options(query_type: EdmType, options: Any) -> None:
+                query_resource = (
+                    resource
+                    if query_type.name == edm_type.name
+                    else registry.get_resource_by_type(query_type.name)
+                )
+                search_fields = getattr(
+                    getattr(query_resource, "behavior", None), "search_fields", ()
+                ) or ()
+                try:
+                    await authorize_query_paths(
+                        options=options,
+                        edm_type=query_type,
+                        model=admin_edm_schema,
+                        path_permission_provider=_query_path_permitted,
+                        search_fields=search_fields,
+                    )
+                except PermissionError:
+                    abort(403, "Read permission denied for a query resource.")
+
+            async def _authorize_expands(
+                query_type: EdmType,
+                items: list,
+            ) -> list:
+                permitted_items = []
+                for item in items:
+                    if "/" in (item.path or ""):
+                        abort(
+                            400,
+                            "Multi-hop $expand paths are not supported; use nested"
+                            " $expand=Nav($expand=...)",
+                        )
+                    if not await ctx.permitted(query_type, item.path):
+                        continue
+                    nav = query_type.nav_properties.get(item.path)
+                    if nav is not None:
+                        # Discovery grants a restricted projection, not permission
+                        # to infer other fields through predicates or sorting.
+                        if any(
+                            getattr(item, option, None) is not None
+                            for option in ("filter", "orderby", "search")
+                        ) and not await _query_path_permitted(query_type, item.path):
+                            abort(403, "Read permission denied for a query resource.")
+                        target_type = admin_edm_schema.get_type(nav.target_type.name)
+                        await _authorize_options(target_type, item)
+                        if getattr(item, "expand", None):
+                            item.expand = await _authorize_expands(
+                                target_type,
+                                item.expand,
+                            )
+                    permitted_items.append(item)
+                return permitted_items
+
             adapter: RGQLToRelationalAdapter = RGQLToRelationalAdapter()
             ctx: ExpansionContext = None
             if rgql_url is not None:
                 opts = rgql_url.query
 
-                if opts.select:
-                    if len(opts.select) > max_select:
-                        abort(400, f"Max $select ({max_select}) exceeded.")
-
-                    response_columns = [
-                        title_to_snake(p) for p in opts.select if "/" not in p
-                    ]
-
-                query_columns = (
-                    _selected_query_columns(edm_type, opts.select)
-                    if response_columns is not None
-                    else None
-                )
-
-                # Ensure query columns include join keys required to materialize
-                # any $expand, even when the client uses $select to omit them.
-                if (
-                    opts is not None
-                    and isinstance(opts.expand, list)
-                    and opts.expand
-                    and query_columns is not None
-                ):
-                    required_cols: set[str] = {"id"}
-                    for exp in opts.expand:
-                        nav_name = exp.path.split("/", 1)[0]
-                        try:
-                            nav_prop = edm_type.nav_properties[nav_name]
-                        except KeyError:
-                            nav_prop = None
-                        if (
-                            nav_prop is not None
-                            and not nav_prop.target_type.is_collection
-                        ):
-                            required_cols.add(title_to_snake(nav_prop.source_fk))
-                    for col in required_cols:
-                        if col not in query_columns:
-                            query_columns.append(col)
-
-                if entity_id is None:
-                    try:
-                        filter_groups, order_by, limit, offset = (
-                            adapter.build_relational_query(
-                                opts,
-                                path_planner=lambda path: _plan_nav_path(
-                                    edm_type.name, path
-                                ),
-                            )
-                        )
-                    except ValueError as exc:
-                        abort(400, str(exc))
-
-                    search_fields = tuple(
-                        getattr(resource.behavior, "search_fields", ()) or ()
-                    )
-                    search_expr = getattr(opts, "search", None)
-                    if search_expr is not None and search_fields:
-                        try:
-                            search_filter_groups = _search_filter_groups(
-                                search_expr,
-                                search_fields=search_fields,
-                                edm_type=edm_type,
-                                path_planner=lambda path: _plan_nav_path(
-                                    edm_type.name, path
-                                ),
-                            )
-                            filter_groups = _and_filter_groups(
-                                filter_groups,
-                                search_filter_groups,
-                            )
-                        except ValueError as exc:
-                            abort(400, str(exc))
-
-                    if order_by and len(order_by) > max_orderby:
-                        abort(400, f"Max $orderby ({max_orderby}) exceeded.")
-
-                    if limit is None:
-                        limit = default_top
-
-                    if limit > max_top:
-                        abort(400, f"$top exceeds max ({max_top}).")
-
-                    if offset is None:
-                        offset = 0
-
-                    if offset > max_skip:
-                        abort(400, f"$skip exceeds max ({max_skip}).")
+                await _authorize_options(edm_type, opts)
 
                 ctx = ExpansionContext(
                     model=admin_edm_schema,
@@ -709,25 +743,95 @@ def rgql_enabled(
 
                 if isinstance(opts.expand, list) and opts.expand:
                     opts.expand = semantic_checker.materialize_expand_for_url(rgql_url)
-                    for item in opts.expand:
-                        if "/" in (item.path or ""):
-                            abort(
-                                400,
-                                "Multi-hop $expand paths are not supported; use nested"
-                                " $expand=Nav($expand=...)",
-                            )
-                    opts.expand = [
-                        item
-                        for item in opts.expand
-                        if await ctx.permitted(
-                            edm_type=edm_type,
-                            path=item.path,
-                        )
-                    ]
+                    opts.expand = await _authorize_expands(edm_type, opts.expand)
 
                     expand_paths = {item.path for item in opts.expand}
                     if len(expand_paths) > max_expand_paths:
                         abort(400, f"Max $expand paths ({max_expand_paths}) exceeded.")
+
+                if opts.select:
+                    if len(opts.select) > max_select:
+                        abort(400, f"Max $select ({max_select}) exceeded.")
+
+                    response_columns = [
+                        title_to_snake(p) for p in opts.select if "/" not in p
+                    ]
+
+                query_columns = (
+                    _selected_query_columns(edm_type, opts.select)
+                    if response_columns is not None
+                    else None
+                )
+
+                # Ensure query columns include join keys required to materialize
+                # any $expand, even when the client uses $select to omit them.
+                if (
+                    opts is not None
+                    and isinstance(opts.expand, list)
+                    and opts.expand
+                    and query_columns is not None
+                ):
+                    required_cols: set[str] = {"id"}
+                    for exp in opts.expand:
+                        nav_prop = edm_type.nav_properties[exp.path]
+                        if not nav_prop.target_type.is_collection:
+                            required_cols.add(title_to_snake(nav_prop.source_fk))
+                    for col in required_cols:
+                        if col not in query_columns:
+                            query_columns.append(col)
+
+                if entity_id is None:
+                    try:
+                        filter_groups, order_by, limit, offset = (
+                            adapter.build_relational_query(
+                                opts,
+                                max_filter_terms=max_filter_terms,
+                                path_planner=lambda path: _plan_nav_path(
+                                    edm_type.name, path
+                                ),
+                            )
+                        )
+                    except ValueError as exc:
+                        abort(400, str(exc))
+
+                    search_fields = tuple(
+                        getattr(resource.behavior, "search_fields", ()) or ()
+                    )
+                    search_expr = getattr(opts, "search", None)
+                    if search_expr is not None and search_fields:
+                        try:
+                            search_filter_groups = _search_filter_groups(
+                                search_expr,
+                                max_filter_terms=max_filter_terms,
+                                search_fields=search_fields,
+                                edm_type=edm_type,
+                                path_planner=lambda path: _plan_nav_path(
+                                    edm_type.name, path
+                                ),
+                            )
+                            filter_groups = _and_filter_groups(
+                                filter_groups,
+                                search_filter_groups,
+                                max_filter_terms=max_filter_terms,
+                            )
+                        except ValueError as exc:
+                            abort(400, str(exc))
+
+                    if order_by and len(order_by) > max_orderby:
+                        abort(400, f"Max $orderby ({max_orderby}) exceeded.")
+
+            if entity_id is None:
+                if limit is None:
+                    limit = default_top
+
+                if limit > max_top:
+                    abort(400, f"$top exceeds max ({max_top}).")
+
+                if offset is None:
+                    offset = 0
+
+                if offset > max_skip:
+                    abort(400, f"$skip exceeds max ({max_skip}).")
 
             svc_key = resource.service_key
             svc = registry.get_edm_service(svc_key)

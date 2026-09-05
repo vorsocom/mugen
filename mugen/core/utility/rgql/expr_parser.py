@@ -17,6 +17,12 @@ import uuid
 import decimal
 import re
 
+from mugen.core.utility.rgql.query_budget import (
+    ParseBudget,
+    current_parse_budget,
+    parser_depth,
+    parser_scope,
+)
 from mugen.core.utility.rgql.lexer import RGQLLexer, Token, TokenKind
 from mugen.core.utility.rgql.ast import (
     Expr,
@@ -131,7 +137,9 @@ def _parse_datetimeoffset(text: str) -> datetime.datetime:
     return datetime.datetime.fromisoformat(text)
 
 
-def _parse_spatial_literal_payload(is_geography: bool, payload: str) -> SpatialLiteral:
+def _parse_spatial_literal_payload(
+    is_geography: bool, payload: str, *, budget: ParseBudget | None = None
+) -> SpatialLiteral:
     text = payload.strip()
     srid = None
 
@@ -146,7 +154,9 @@ def _parse_spatial_literal_payload(is_geography: bool, payload: str) -> SpatialL
     else:
         wkt = text
 
-    return SpatialLiteral(is_geography=is_geography, srid=srid, wkt=wkt)
+    return (budget or current_parse_budget()).node(
+        SpatialLiteral, is_geography=is_geography, srid=srid, wkt=wkt
+    )
 
 
 # ----------------------------------------------------------------------
@@ -174,6 +184,7 @@ class ExprParser:  # pylint: disable=too-few-public-methods
     """
 
     def __init__(self, tokens: List[Token]):
+        self.budget = current_parse_budget()
         self.tokens = tokens
         self.pos = 0
 
@@ -240,24 +251,26 @@ class ExprParser:  # pylint: disable=too-few-public-methods
 
     # Precedence --------------------------------------------------------
 
+    @parser_depth
     def _parse_or(self) -> Expr:
         expr = self._parse_and()
         while self._match(TokenKind.OR):
             right = self._parse_and()
-            expr = BinaryOp("or", expr, right)
+            expr = self.budget.node(BinaryOp, "or", expr, right)
         return expr
 
     def _parse_and(self) -> Expr:
         expr = self._parse_not()
         while self._match(TokenKind.AND):
             right = self._parse_not()
-            expr = BinaryOp("and", expr, right)
+            expr = self.budget.node(BinaryOp, "and", expr, right)
         return expr
 
+    @parser_depth
     def _parse_not(self) -> Expr:
         if self._match(TokenKind.NOT):
             operand = self._parse_not()
-            return UnaryOp("not", operand)
+            return self.budget.node(UnaryOp, "not", operand)
         return self._parse_comparison()
 
     def _parse_comparison(self) -> Expr:
@@ -296,10 +309,12 @@ class ExprParser:  # pylint: disable=too-few-public-methods
                                 break
 
                     self._expect(TokenKind.RPAREN)
-                    right: Expr = Literal([lit.value for lit in items])
+                    right: Expr = self.budget.node(
+                        Literal, [lit.value for lit in items]
+                    )
                 else:
                     right = self._parse_additive()
-                expr = BinaryOp(tok.text.lower(), expr, right)
+                expr = self.budget.node(BinaryOp, tok.text.lower(), expr, right)
             else:
                 break
         return expr
@@ -311,7 +326,7 @@ class ExprParser:  # pylint: disable=too-few-public-methods
             if tok.kind in (TokenKind.ADD, TokenKind.SUB):
                 self._advance()
                 right = self._parse_multiplicative()
-                expr = BinaryOp(tok.text.lower(), expr, right)
+                expr = self.budget.node(BinaryOp, tok.text.lower(), expr, right)
             else:
                 break
         return expr
@@ -323,17 +338,18 @@ class ExprParser:  # pylint: disable=too-few-public-methods
             if tok.kind in (TokenKind.MUL, TokenKind.DIV, TokenKind.MOD):
                 self._advance()
                 right = self._parse_unary_arith()
-                expr = BinaryOp(tok.text.lower(), expr, right)
+                expr = self.budget.node(BinaryOp, tok.text.lower(), expr, right)
             else:
                 break
         return expr
 
+    @parser_depth
     def _parse_unary_arith(self) -> Expr:
         tok = self._peek()
         if tok.kind == TokenKind.SUB:
             self._advance()
             operand = self._parse_unary_arith()
-            return UnaryOp("-", operand)
+            return self.budget.node(UnaryOp, "-", operand)
         return self._parse_primary()
 
     # Primary -----------------------------------------------------------
@@ -344,7 +360,7 @@ class ExprParser:  # pylint: disable=too-few-public-methods
         # JSON complex/collection literal
         if tok.kind == TokenKind.JSON_LITERAL:
             self._advance()
-            return Literal(tok.value)
+            return self.budget.node(Literal, tok.value)
 
         # Simple literals: string, numbers, booleans, null
         if tok.kind in (
@@ -357,7 +373,7 @@ class ExprParser:  # pylint: disable=too-few-public-methods
             TokenKind.NULL,
         ):
             self._advance()
-            return Literal(tok.value)
+            return self.budget.node(Literal, tok.value)
 
         # Parenthesized expression
         if tok.kind == TokenKind.LPAREN:
@@ -399,10 +415,10 @@ class ExprParser:  # pylint: disable=too-few-public-methods
         # NaN / INF
         if ident_lower == "nan":
             self._advance()
-            return Literal(float("nan"))
+            return self.budget.node(Literal, float("nan"))
         if ident_lower == "inf":
             self._advance()
-            return Literal(float("inf"))
+            return self.budget.node(Literal, float("inf"))
 
         # Unprefixed Edm.Duration in OData 4.01: durationValue (e.g. P2DT3H4M)
         try:
@@ -411,7 +427,7 @@ class ExprParser:  # pylint: disable=too-few-public-methods
             dt = None
         if dt is not None:
             self._advance()
-            return Literal(dt)
+            return self.budget.node(Literal, dt)
 
         # Prefix + string forms: guid'...', date'...', timeOfDay'...', duration'...'
         next_tok = self._peek_offset(1)
@@ -422,7 +438,7 @@ class ExprParser:  # pylint: disable=too-few-public-methods
                     py_value = uuid.UUID(value_text)
                     self._advance()
                     self._advance()
-                    return Literal(py_value)
+                    return self.budget.node(Literal, py_value)
 
                 if ident_lower in ("binary", "x"):
                     hex_str = value_text.replace(" ", "")
@@ -433,36 +449,37 @@ class ExprParser:  # pylint: disable=too-few-public-methods
                     py_value = bytes.fromhex(hex_str)
                     self._advance()
                     self._advance()
-                    return Literal(py_value)
+                    return self.budget.node(Literal, py_value)
 
                 if ident_lower == "date":
                     py_value = _parse_date(value_text)
                     self._advance()
                     self._advance()
-                    return Literal(py_value)
+                    return self.budget.node(Literal, py_value)
 
                 if ident_lower == "datetimeoffset":
                     py_value = _parse_datetimeoffset(value_text)
                     self._advance()
                     self._advance()
-                    return Literal(py_value)
+                    return self.budget.node(Literal, py_value)
 
                 if ident_lower == "duration":
                     py_value = _parse_duration(value_text)
                     self._advance()
                     self._advance()
-                    return Literal(py_value)
+                    return self.budget.node(Literal, py_value)
 
                 if ident_lower == "timeofday":
                     py_value = _parse_time_of_day(value_text)
                     self._advance()
                     self._advance()
-                    return Literal(py_value)
+                    return self.budget.node(Literal, py_value)
 
                 if ident_lower in ("geography", "geometry"):
                     spatial = _parse_spatial_literal_payload(
                         is_geography=(ident_lower == "geography"),
                         payload=value_text,
+                        budget=self.budget,
                     )
                     self._advance()
                     self._advance()
@@ -511,7 +528,7 @@ class ExprParser:  # pylint: disable=too-few-public-methods
         for _ in range(n_to_consume):
             self._advance()
 
-        return EnumLiteral(type_name=type_name, values=values)
+        return self.budget.node(EnumLiteral, type_name=type_name, values=values)
 
     # Type functions ----------------------------------------------------
 
@@ -536,10 +553,11 @@ class ExprParser:  # pylint: disable=too-few-public-methods
             self._expect(TokenKind.RPAREN)
 
         if func_name == "cast":
-            return CastExpr(source=source, type_ref=type_ref)
+            return self.budget.node(CastExpr, source=source, type_ref=type_ref)
 
-        return IsOfExpr(source=source, type_ref=type_ref)
+        return self.budget.node(IsOfExpr, source=source, type_ref=type_ref)
 
+    @parser_depth
     def _parse_type_name(self) -> TypeRef:
         ident_tok = self._expect(TokenKind.IDENT)
 
@@ -547,7 +565,8 @@ class ExprParser:  # pylint: disable=too-few-public-methods
             inner = self._parse_type_name()
             self._expect(TokenKind.RPAREN)
             full = f"Collection({inner.full_name})"
-            return TypeRef(
+            return self.budget.node(
+                TypeRef,
                 is_collection=True,
                 namespace=inner.namespace,
                 name=inner.name,
@@ -563,7 +582,8 @@ class ExprParser:  # pylint: disable=too-few-public-methods
         namespace = ".".join(parts[:-1]) if len(parts) > 1 else None
         name = parts[-1]
 
-        return TypeRef(
+        return self.budget.node(
+            TypeRef,
             is_collection=False,
             namespace=namespace,
             name=name,
@@ -575,7 +595,8 @@ class ExprParser:  # pylint: disable=too-few-public-methods
             full_name = expr.name
             namespace, _, short = full_name.rpartition(".")
             namespace = namespace or None
-            return TypeRef(
+            return self.budget.node(
+                TypeRef,
                 is_collection=False,
                 namespace=namespace,
                 name=short,
@@ -594,7 +615,8 @@ class ExprParser:  # pylint: disable=too-few-public-methods
                 full_name = ".".join(parts)
                 namespace = ".".join(parts[:-1]) if len(parts) > 1 else None
                 name = parts[-1]
-                return TypeRef(
+                return self.budget.node(
+                    TypeRef,
                     is_collection=False,
                     namespace=namespace,
                     name=name,
@@ -608,7 +630,7 @@ class ExprParser:  # pylint: disable=too-few-public-methods
     def _parse_identifier_or_call_or_member(self) -> Expr:
         tok = self._peek()
         self._advance()
-        expr: Expr = Identifier(tok.text)
+        expr: Expr = self.budget.node(Identifier, tok.text)
 
         # Function call: name(...)
         if self._match(TokenKind.LPAREN):
@@ -620,7 +642,7 @@ class ExprParser:  # pylint: disable=too-few-public-methods
                         continue
                     self._expect(TokenKind.RPAREN)
                     break
-            expr = FunctionCall(name=tok.text, args=args)
+            expr = self.budget.node(FunctionCall, name=tok.text, args=args)
 
         # Member access, navigation, lambdas
         while True:
@@ -636,7 +658,8 @@ class ExprParser:  # pylint: disable=too-few-public-methods
                     self._expect(TokenKind.LPAREN)
 
                     if self._match(TokenKind.RPAREN):
-                        expr = LambdaCall(
+                        expr = self.budget.node(
+                            LambdaCall,
                             kind=kind_str,
                             source=expr,
                             var=None,
@@ -647,7 +670,8 @@ class ExprParser:  # pylint: disable=too-few-public-methods
                         self._expect(TokenKind.COLON)
                         predicate = self._parse_or()
                         self._expect(TokenKind.RPAREN)
-                        expr = LambdaCall(
+                        expr = self.budget.node(
+                            LambdaCall,
                             kind=kind_str,
                             source=expr,
                             var=var_tok.text,
@@ -656,13 +680,13 @@ class ExprParser:  # pylint: disable=too-few-public-methods
                     continue
 
                 name_tok = self._expect(TokenKind.IDENT)
-                expr = MemberAccess(base=expr, member=name_tok.text)
+                expr = self.budget.node(MemberAccess, base=expr, member=name_tok.text)
                 continue
 
             if current.kind == TokenKind.DOT:
                 self._advance()
                 name_tok = self._expect(TokenKind.IDENT)
-                expr = MemberAccess(base=expr, member=name_tok.text)
+                expr = self.budget.node(MemberAccess, base=expr, member=name_tok.text)
                 continue
 
             break
@@ -673,6 +697,7 @@ class ExprParser:  # pylint: disable=too-few-public-methods
 # Convenience entry point -----------------------------------------------
 
 
+@parser_scope
 def parse_rgql_expr(expr_text: str) -> Expr:
     """Parse a single RGQL expression into an :class:`Expr` syntax tree.
 

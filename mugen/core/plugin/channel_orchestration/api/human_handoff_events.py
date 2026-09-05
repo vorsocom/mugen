@@ -11,6 +11,7 @@ from mugen.core import di
 from mugen.core.api import api
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.plugin.acp.api.decorator.auth import global_auth_required
+from mugen.core.plugin.acp.api.stream import authorized_stream
 from mugen.core.plugin.acp.contract.service import IAuthorizationService
 from mugen.core.plugin.channel_orchestration.human_handoff_auth import (
     HUMAN_HANDOFF_OPERATOR_PERMISSION,
@@ -63,13 +64,16 @@ async def human_handoff_events_stream(
         abort(400, "tenant_id and auth_user must be valid UUID values.")
 
     auth_svc: IAuthorizationService = auth_provider()
-    permitted = await auth_svc.has_permission(
-        user_id=auth_user_uuid,
-        permission_object=HUMAN_HANDOFF_OPERATOR_PERMISSION,
-        permission_type=HUMAN_HANDOFF_OPERATOR_PERMISSION,
-        tenant_id=tenant_uuid,
-    )
-    if not permitted:
+
+    async def _permitted() -> bool:
+        return await auth_svc.has_permission(
+            user_id=auth_user_uuid,
+            permission_object=HUMAN_HANDOFF_OPERATOR_PERMISSION,
+            permission_type=HUMAN_HANDOFF_OPERATOR_PERMISSION,
+            tenant_id=tenant_uuid,
+        )
+
+    if not await _permitted():
         abort(403)
 
     last_event_id = request.headers.get("Last-Event-ID")
@@ -100,7 +104,7 @@ async def human_handoff_events_stream(
         abort(500)
 
     return Response(
-        stream,
+        authorized_stream(stream, permitted=_permitted),
         mimetype="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

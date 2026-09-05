@@ -11,6 +11,12 @@ map to concrete full-text or field-specific search semantics.
 from dataclasses import dataclass
 from typing import List
 
+from mugen.core.utility.rgql.query_budget import (
+    current_parse_budget,
+    parser_depth,
+    parser_scope,
+)
+
 
 class SearchParseError(Exception):
     """Error raised when a search expression cannot be tokenized or parsed.
@@ -196,6 +202,7 @@ class _SearchLexer:  # pylint: disable=too-few-public-methods
 
 class _SearchParser:  # pylint: disable=too-few-public-methods
     def __init__(self, text: str):
+        self.budget = current_parse_budget()
         self.lexer = _SearchLexer(text)
         self.current = self.lexer.next_token()
 
@@ -223,12 +230,13 @@ class _SearchParser:  # pylint: disable=too-few-public-methods
             raise SearchParseError(f"Unexpected token {self.current}")
         return expr
 
+    @parser_depth
     def _parse_or(self) -> SearchExpr:
         expr = self._parse_and()
         while self.current.kind == "OR":
             self._advance()
             right = self._parse_and()
-            expr = SearchBinary("or", expr, right)
+            expr = self.budget.node(SearchBinary, "or", expr, right)
         return expr
 
     def _parse_and(self) -> SearchExpr:
@@ -238,24 +246,25 @@ class _SearchParser:  # pylint: disable=too-few-public-methods
             if self.current.kind == "AND":
                 self._advance()
             right = self._parse_unary()
-            expr = SearchBinary("and", expr, right)
+            expr = self.budget.node(SearchBinary, "and", expr, right)
         return expr
 
+    @parser_depth
     def _parse_unary(self) -> SearchExpr:
         if self.current.kind == "NOT":
             self._advance()
             operand = self._parse_unary()
-            return SearchNot(operand)
+            return self.budget.node(SearchNot, operand)
         return self._parse_primary()
 
     def _parse_primary(self) -> SearchExpr:
         tok = self.current
         if tok.kind == "WORD":
             self._advance()
-            return SearchTerm(text=tok.text, is_phrase=False)
+            return self.budget.node(SearchTerm, text=tok.text, is_phrase=False)
         if tok.kind == "PHRASE":
             self._advance()
-            return SearchTerm(text=tok.text, is_phrase=True)
+            return self.budget.node(SearchTerm, text=tok.text, is_phrase=True)
         if tok.kind == "LPAREN":
             self._advance()
             expr = self._parse_or()
@@ -264,6 +273,7 @@ class _SearchParser:  # pylint: disable=too-few-public-methods
         raise SearchParseError(f"Unexpected token in $search: {tok}")
 
 
+@parser_scope
 def parse_rgql_search(text: str) -> SearchExpr:
     """Parse a search string into a :class:`SearchExpr` tree.
 

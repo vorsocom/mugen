@@ -516,12 +516,66 @@ if ! jq -e '."@count" == 1 and .value[0].IsArchived == true' \
 fi
 
 expect_code \
+  "DISCOVER ACTIVE TENANT FOR ROUTE VALIDATION" \
+  200 \
+  "$tmp_dir/active_tenant.json" \
+  -G \
+  -H "$admin_auth_header" \
+  "$base_url/Tenants" \
+  --data-urlencode "\$filter=Status eq 'active'" \
+  --data-urlencode "\$top=1"
+route_tenant_id="$(jq -r '.value[0].Id // empty' "$tmp_dir/active_tenant.json")"
+if [[ -z "$route_tenant_id" ]]; then
+  route_tenant_slug="billing-runtime-route-${tmp_dir##*_}"
+  route_tenant_payload="$(jq -cn --arg slug "$route_tenant_slug" \
+    '{Name:"Billing runtime route validation",Slug:$slug}')"
+  expect_code \
+    "CREATE ACTIVE TENANT FOR ROUTE VALIDATION" \
+    201 \
+    "$tmp_dir/create_route_tenant.json" \
+    -H "$admin_auth_header" \
+    -H "Content-Type: application/json" \
+    -X POST "$base_url/Tenants" \
+    -d "$route_tenant_payload"
+  expect_code \
+    "LOOK UP ACTIVE TENANT FOR ROUTE VALIDATION" \
+    200 \
+    "$tmp_dir/active_tenant.json" \
+    -G \
+    -H "$admin_auth_header" \
+    "$base_url/Tenants" \
+    --data-urlencode "\$filter=Slug eq '$route_tenant_slug' and Status eq 'active'" \
+    --data-urlencode "\$top=1"
+  route_tenant_id="$(jq -r '.value[0].Id // empty' "$tmp_dir/active_tenant.json")"
+fi
+if [[ -z "$route_tenant_id" ]]; then
+  echo "ERROR: could not resolve an active tenant for route validation." >&2
+  exit 1
+fi
+
+expect_code \
   "TENANT ARCHIVED PRODUCT ROUTE REJECTED" \
   400 \
   "$tmp_dir/tenant_product.json" \
   -G \
   -H "$admin_auth_header" \
-  "$base_url/tenants/00000000-0000-0000-0000-000000000001/BillingProducts" \
+  "$base_url/tenants/$route_tenant_id/BillingProducts" \
+  --data-urlencode "\$deleted=archived"
+
+missing_tenant_id="38a8d553-547a-45a0-bb29-b7a4dbf1e60d"
+expect_code \
+  "CONFIRM NONEXISTENT TENANT" \
+  404 \
+  "$tmp_dir/missing_tenant.json" \
+  -H "$admin_auth_header" \
+  "$base_url/Tenants/$missing_tenant_id"
+expect_code \
+  "NONEXISTENT TENANT ARCHIVED PRODUCT ROUTE DENIED" \
+  403 \
+  "$tmp_dir/missing_tenant_product.json" \
+  -G \
+  -H "$admin_auth_header" \
+  "$base_url/tenants/$missing_tenant_id/BillingProducts" \
   --data-urlencode "\$deleted=archived"
 
 provision_user \

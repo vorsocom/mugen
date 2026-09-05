@@ -63,7 +63,8 @@ class TestMugenServiceMessagingIngressExtractors(unittest.IsolatedAsyncioTestCas
                 return_value={"client_profile_id": str(_CLIENT_PROFILE_ID)},
             ) as resolve_context,
         ):
-            route = await extractors._resolve_ingress_route(  # pylint: disable=protected-access
+            # pylint: disable=protected-access
+            route = await extractors._resolve_ingress_route(
                 platform="line",
                 channel_key="line",
                 identifier_type="path_token",
@@ -91,7 +92,8 @@ class TestMugenServiceMessagingIngressExtractors(unittest.IsolatedAsyncioTestCas
                 ),
             ),
         ):
-            route = await extractors._resolve_ingress_route(  # pylint: disable=protected-access
+            # pylint: disable=protected-access
+            route = await extractors._resolve_ingress_route(
                 platform="line",
                 channel_key="line",
                 identifier_type="path_token",
@@ -164,15 +166,13 @@ class TestMugenServiceMessagingIngressExtractors(unittest.IsolatedAsyncioTestCas
             "_resolve_ingress_route",
             new=AsyncMock(return_value={}),
         ):
-            self.assertEqual(
+            with self.assertRaises(ContextScopeResolutionError):
                 await extractors.extract_line_stage_entries(
                     path_token="path-1",
                     payload={"events": [{"type": "message"}]},
                     relational_storage_gateway=object(),
                     logging_gateway=logger,
-                ),
-                [],
-            )
+                )
         logger.warning.assert_called_once()
 
     async def test_telegram_extractor_covers_message_and_callback_query(self) -> None:
@@ -251,16 +251,14 @@ class TestMugenServiceMessagingIngressExtractors(unittest.IsolatedAsyncioTestCas
             "_resolve_ingress_route",
             new=AsyncMock(return_value={}),
         ):
-            self.assertEqual(
+            with self.assertRaises(ContextScopeResolutionError):
                 await extractors.extract_wechat_stage_entries(
                     path_token="wechat-path",
                     provider="official_account",
                     payload={"FromUserName": "wechat-user"},
                     relational_storage_gateway=object(),
                     logging_gateway=logger,
-                ),
-                [],
-            )
+                )
         logger.warning.assert_called_once()
 
     async def test_whatsapp_extractor_covers_skips_messages_and_statuses(self) -> None:
@@ -534,9 +532,8 @@ class TestMugenServiceMessagingIngressExtractors(unittest.IsolatedAsyncioTestCas
         for status in invalid_statuses:
             with self.subTest(status=status):
                 self.assertEqual(
-                    extractors._whatsapp_status_dedupe_key(  # pylint: disable=protected-access
-                        status
-                    ),
+                    # pylint: disable=protected-access
+                    extractors._whatsapp_status_dedupe_key(status),
                     extractors._dedupe_key(  # pylint: disable=protected-access
                         "status", None, status
                     ),
@@ -746,65 +743,65 @@ class TestMugenServiceMessagingIngressExtractors(unittest.IsolatedAsyncioTestCas
             "_resolve_ingress_route",
             new=AsyncMock(return_value=None),
         ):
-            message_only_entries = await extractors.extract_telegram_stage_entries(
-                path_token="telegram-path",
-                payload={
-                    "update_id": 42,
-                    "message": {
-                        "chat": {"id": 111},
-                        "text": "hello",
-                    },
-                },
-                relational_storage_gateway=object(),
-                logging_gateway=Mock(),
-            )
-            callback_only_entries = await extractors.extract_telegram_stage_entries(
-                path_token="telegram-path",
-                payload={
-                    "update_id": 43,
-                    "callback_query": {
-                        "message": {},
-                    },
-                },
-                relational_storage_gateway=object(),
-                logging_gateway=Mock(),
-            )
-
-            whatsapp_entries = await extractors.extract_whatsapp_stage_entries(
-                path_token="whatsapp-path",
-                payload={
-                    "entry": [
-                        {
-                            "changes": "skip",
+            with self.assertRaises(ContextScopeResolutionError):
+                await extractors.extract_telegram_stage_entries(
+                    path_token="telegram-path",
+                    payload={
+                        "update_id": 42,
+                        "message": {
+                            "chat": {"id": 111},
+                            "text": "hello",
                         },
-                        {
-                            "changes": [
-                                {"value": "skip"},
-                                {
-                                    "value": {
-                                        "messages": [
-                                            {
-                                                "id": "wamid-2",
-                                            }
-                                        ],
-                                        "contacts": [
-                                            "skip",
-                                            {"wa_id": "   "},
-                                            {"wa_id": "contact-2"},
-                                        ],
-                                    }
-                                },
-                            ]
+                    },
+                    relational_storage_gateway=object(),
+                    logging_gateway=Mock(),
+                )
+            with self.assertRaises(ContextScopeResolutionError):
+                await extractors.extract_telegram_stage_entries(
+                    path_token="telegram-path",
+                    payload={
+                        "update_id": 43,
+                        "callback_query": {
+                            "message": {},
                         },
-                    ]
-                },
-                relational_storage_gateway=object(),
-                logging_gateway=Mock(),
-            )
+                    },
+                    relational_storage_gateway=object(),
+                    logging_gateway=Mock(),
+                )
 
-        self.assertEqual(message_only_entries, [])
-        self.assertEqual(callback_only_entries, [])
-        self.assertEqual(whatsapp_entries, [])
+            with self.assertRaises(ContextScopeResolutionError):
+                await extractors.extract_whatsapp_stage_entries(
+                    path_token="whatsapp-path",
+                    payload={
+                        "entry": [
+                            {
+                                "changes": "skip",
+                            },
+                            {
+                                "changes": [
+                                    {"value": "skip"},
+                                    {
+                                        "value": {
+                                            "messages": [
+                                                {
+                                                    "id": "wamid-2",
+                                                }
+                                            ],
+                                            "contacts": [
+                                                "skip",
+                                                {"wa_id": "   "},
+                                                {"wa_id": "contact-2"},
+                                            ],
+                                        }
+                                    },
+                                ]
+                            },
+                        ]
+                    },
+                    relational_storage_gateway=object(),
+                    logging_gateway=Mock(),
+                )
+
         self.assertEqual(
             signal_ingress_mod.signal_event_type({"dataMessage": {"message": "hello"}}),
             "message",

@@ -8,6 +8,7 @@ from types import ModuleType, SimpleNamespace
 import sys
 import unittest
 import uuid
+from urllib.parse import urlencode
 from unittest.mock import AsyncMock, Mock, patch
 
 from quart import Quart
@@ -279,6 +280,93 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self) -> None:
         self.app = Quart("test-acp-rgql-decorator")
+
+    async def test_collection_pagination_applies_to_every_query_shape(self) -> None:
+        async def _endpoint(**kwargs):
+            return kwargs
+
+        service = SimpleNamespace(
+            list=AsyncMock(return_value=[]),
+            count=AsyncMock(return_value=0),
+        )
+        registry = _FakeRegistry(service=service)
+        config = _config()
+        wrapped = rgql_mod.rgql_enabled(
+            config_provider=lambda: config,
+            logger_provider=lambda: SimpleNamespace(debug=Mock(), error=Mock()),
+            auth_provider=lambda: SimpleNamespace(
+                has_permission=AsyncMock(return_value=True)
+            ),
+            registry_provider=lambda: registry,
+        )(_endpoint)
+
+        with (
+            patch.object(rgql_mod, "SemanticChecker", new=_FakeSemanticChecker),
+            patch.object(rgql_mod, "abort", side_effect=_abort_raiser),
+            patch.object(
+                rgql_mod,
+                "make_default_where_provider",
+                return_value=lambda _edm_type_name: {},
+            ),
+        ):
+            for query, expected_limit, expected_offset in (
+                ("", 3, 0),
+                ("?", 3, 0),
+                ("?tracking=example", 3, 0),
+                ("?$select=Name", 3, 0),
+                ("?$count=true", 3, 0),
+                ("?$top=0", 0, 0),
+                ("?$top=20&$skip=50", 20, 50),
+            ):
+                with self.subTest(query=query):
+                    service.list.reset_mock()
+                    async with self.app.test_request_context(
+                        f"/api/core/acp/v1/Users{query}", method="GET"
+                    ):
+                        result = await wrapped(
+                            entity_set="Users",
+                            entity_id=None,
+                            auth_user=str(uuid.uuid4()),
+                        )
+                    self.assertEqual(result["rgql"].limit, expected_limit)
+                    service.list.assert_awaited_once()
+                    self.assertEqual(
+                        service.list.await_args.kwargs["limit"], expected_limit
+                    )
+                    self.assertEqual(
+                        service.list.await_args.kwargs["offset"], expected_offset
+                    )
+
+            for query in ("?$top=21", "?$skip=51"):
+                with self.subTest(query=query):
+                    service.list.reset_mock()
+                    async with self.app.test_request_context(
+                        f"/api/core/acp/v1/Users{query}", method="GET"
+                    ):
+                        with self.assertRaises(_AbortCalled) as raised:
+                            await wrapped(
+                                entity_set="Users",
+                                entity_id=None,
+                                auth_user=str(uuid.uuid4()),
+                            )
+                    self.assertEqual(raised.exception.code, 400)
+                    service.list.assert_not_awaited()
+
+            config.acp.rgql_default_top = 21
+            for query in ("", "?", "?tracking=example", "?$select=Name"):
+                with self.subTest(overlarge_default=query):
+                    service.list.reset_mock()
+                    async with self.app.test_request_context(
+                        f"/api/core/acp/v1/Users{query}", method="GET"
+                    ):
+                        with self.assertRaises(_AbortCalled) as raised:
+                            await wrapped(
+                                entity_set="Users",
+                                entity_id=None,
+                                auth_user=str(uuid.uuid4()),
+                            )
+                    self.assertEqual(raised.exception.code, 400)
+                    service.list.assert_not_awaited()
 
     async def test_entity_soft_deleted_reference_filter_selection(self) -> None:
         async def _endpoint(**kwargs):
@@ -1321,7 +1409,7 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
             async with self.app.test_request_context(
                 (
                     f"/api/core/acp/v1/Users/{user_id}"
-                    "?$expand=TenantMemberships($expand=Tenant)"
+                    "?$select=Id&$expand=TenantMemberships($expand=Tenant)"
                 ),
                 method="GET",
             ):
@@ -1332,6 +1420,7 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
                 )
 
         membership_kwargs = membership_service.list_partitioned_by_fk.await_args.kwargs
+        self.assertEqual(user_service.get.await_args.kwargs["columns"], ["id"])
         self.assertEqual(membership_kwargs["fk_field"], "user_id")
         self.assertEqual(membership_kwargs["fk_values"], [user_id])
         self.assertEqual(
@@ -1356,6 +1445,62 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("RoleInTenant", memberships[0])
         self.assertEqual(auth_svc.has_permission.await_count, 2)
+
+    async def test_self_discovery_cannot_infer_fields_with_query_options(self) -> None:
+        user_id = uuid.uuid4()
+        expansions = (
+            "TenantMemberships($filter=RoleInTenant eq 'owner')",
+            "TenantMemberships($orderby=RoleInTenant)",
+            "TenantMemberships($search=owner)",
+            "TenantMemberships($expand=Tenant($filter=Status eq 'active'))",
+            "TenantMemberships($expand=Tenant($orderby=Status))",
+            "TenantMemberships($expand=Tenant($search=active))",
+            "TenantMemberships($filter=Tenant/Name eq 'hidden')",
+        )
+        for expansion in expansions:
+            with self.subTest(expansion=expansion):
+                services = {
+                    key: SimpleNamespace(
+                        get=AsyncMock(),
+                        list=AsyncMock(),
+                        count=AsyncMock(),
+                        list_partitioned_by_fk=AsyncMock(),
+                    )
+                    for key in ("user_svc", "membership_svc", "tenant_svc")
+                }
+                registry = _TenantDiscoveryRegistry(services=services)
+                auth = SimpleNamespace(has_permission=AsyncMock(return_value=False))
+                endpoint = AsyncMock()
+                wrapped = rgql_mod.rgql_enabled(
+                    config_provider=_config,
+                    logger_provider=lambda: SimpleNamespace(debug=Mock()),
+                    auth_provider=lambda: auth,
+                    registry_provider=lambda: registry,
+                )(endpoint)
+                with (
+                    patch.object(rgql_mod, "abort", side_effect=_abort_raiser),
+                    patch.object(
+                        rgql_mod.RGQLToRelationalAdapter, "build_relational_query"
+                    ) as build,
+                ):
+                    async with self.app.test_request_context(
+                        f"/api/core/acp/v1/Users/{user_id}?$expand={expansion}",
+                        method="GET",
+                    ):
+                        with self.assertRaises(_AbortCalled) as caught:
+                            await wrapped(
+                                entity_set="Users",
+                                entity_id=str(user_id),
+                                auth_user=str(user_id),
+                            )
+                self.assertEqual(caught.exception.code, 403)
+                build.assert_not_called()
+                endpoint.assert_not_awaited()
+                for service in services.values():
+                    service.get.assert_not_awaited()
+                    service.list.assert_not_awaited()
+                    service.count.assert_not_awaited()
+                    service.list_partitioned_by_fk.assert_not_awaited()
 
     async def test_other_user_cannot_use_self_tenant_discovery_expand(self) -> None:
         async def _endpoint(**kwargs):
@@ -2522,3 +2667,63 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
                     allow_global_admin=True,
                 )
         self.assertEqual(result["rgql"].values[0]["Name"], "Alice")
+
+    async def test_budget_rejections_precede_storage_queries(self) -> None:
+        async def endpoint(**kwargs):
+            return kwargs
+
+        service = SimpleNamespace(
+            list=AsyncMock(return_value=[]),
+            count=AsyncMock(return_value=0),
+        )
+        registry = _FakeRegistry(
+            service=service,
+            rgql_enabled=True,
+            search_fields=("Name",),
+        )
+        auth = SimpleNamespace(has_permission=AsyncMock(return_value=True))
+        logger = SimpleNamespace(debug=Mock(), error=Mock())
+        wrapped = rgql_mod.rgql_enabled(
+            config_provider=_config,
+            logger_provider=lambda: logger,
+            auth_provider=lambda: auth,
+            registry_provider=lambda: registry,
+        )(endpoint)
+        cases = [
+            {
+                "$filter": " and ".join(
+                    "(Name eq 'a' or Name eq 'b')" for _ in range(12)
+                )
+            },
+            {"$search": " and ".join("(a or b)" for _ in range(12))},
+            {
+                "$filter": "Name eq 'a' or Name eq 'b' or Name eq 'c'",
+                "$search": "d or e or f",
+            },
+            {"$filter": "(" * 100 + "true" + ")" * 100},
+            {"$search": "(" * 100 + "word" + ")" * 100},
+            {"$search": '"unterminated'},
+        ]
+        with (
+            patch.object(rgql_mod, "SemanticChecker", new=_FakeSemanticChecker),
+            patch.object(rgql_mod, "abort", side_effect=_abort_raiser),
+            patch.object(
+                rgql_mod,
+                "make_default_where_provider",
+                return_value=lambda _: {},
+            ),
+        ):
+            for options in cases:
+                with self.subTest(options=options):
+                    async with self.app.test_request_context(
+                        "/api/core/acp/v1/Users?" + urlencode(options), method="GET"
+                    ):
+                        with self.assertRaises(_AbortCalled) as caught:
+                            await wrapped(
+                                entity_set="Users",
+                                entity_id=None,
+                                auth_user=str(uuid.uuid4()),
+                            )
+                        self.assertEqual(caught.exception.code, 400)
+        service.list.assert_not_awaited()
+        service.count.assert_not_awaited()

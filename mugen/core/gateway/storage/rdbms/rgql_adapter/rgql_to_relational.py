@@ -52,6 +52,7 @@ from mugen.core.utility.rgql.ast import (
     MemberAccess,
     FunctionCall,
 )
+from mugen.core.utility.rgql.query_budget import DEFAULT_MAX_TERMS
 from mugen.core.utility.rgql.boolean_normalizer import to_dnf_clauses
 from mugen.core.utility.rgql.url_parser import RGQLQueryOptions, OrderByItem
 
@@ -82,8 +83,9 @@ def _prop_path(expr: Expr) -> str:
         while isinstance(cur, MemberAccess):
             segments.append(cur.member)
             cur = cur.base
-        if isinstance(cur, Identifier):
-            segments.append(cur.name)
+        if not isinstance(cur, Identifier):
+            raise ValueError("Property paths must be rooted in an identifier.")
+        segments.append(cur.name)
         segments.reverse()
         return "/".join(segments)
 
@@ -122,9 +124,14 @@ class RGQLToRelationalAdapter:
         opts: RGQLQueryOptions,
         *,
         path_planner: PathPlanner | None = None,
+        max_filter_terms: int = DEFAULT_MAX_TERMS,
     ) -> Tuple[Sequence[FilterGroup], Sequence[OrderClause], int | None, int | None]:
         """
         Convert RGQLQueryOptions into (filter_groups, order_by, limit, offset).
+
+        Callers must authorize every referenced resource before invoking this
+        method. A path planner resolves storage mappings; it does not grant read
+        permission to the navigation targets.
         """
         filter_groups: List[FilterGroup] = []
 
@@ -132,6 +139,7 @@ class RGQLToRelationalAdapter:
             filter_groups = self._filter_to_groups(
                 opts.filter,
                 path_planner=path_planner,
+                max_filter_terms=max_filter_terms,
             )
 
         order_by = self._orderby_to_order_by(
@@ -152,10 +160,11 @@ class RGQLToRelationalAdapter:
         expr: Expr,
         *,
         path_planner: PathPlanner | None = None,
+        max_filter_terms: int = DEFAULT_MAX_TERMS,
     ) -> List[FilterGroup]:
         groups: List[FilterGroup] = []
 
-        dnf_clauses = to_dnf_clauses(expr)
+        dnf_clauses = to_dnf_clauses(expr, max_terms=max_filter_terms)
         for clause in dnf_clauses:
             where: Dict[str, Any] = {}
             text_filters: List[TextFilter] = []
@@ -302,7 +311,8 @@ class RGQLToRelationalAdapter:
                 prop_path = _try_prop_path(expr.left)
                 if prop_path is not None and path_planner(prop_path) is not None:
                     raise ValueError(
-                        f"Nested navigation paths are not supported for operator {op!r}."
+                        "Nested navigation paths are not supported for operator "
+                        f"{op!r}."
                     )
 
         if isinstance(expr, FunctionCall):

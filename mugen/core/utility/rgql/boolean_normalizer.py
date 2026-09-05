@@ -42,6 +42,14 @@ by the semantic checker and is known to be boolean.
 
 from typing import List
 
+from mugen.core.utility.rgql.query_budget import (
+    DEFAULT_MAX_TERMS,
+    MAX_AST_DEPTH,
+    MAX_QUERY_NODES,
+    QueryBudgetError,
+    check_normalization_budget,
+)
+
 from mugen.core.utility.rgql.ast import (
     Expr,
     Literal,
@@ -213,7 +221,7 @@ DNFClauses = List[List[Expr]]
 # represents: (a1 and a2) or (b1) or (c1 and c2 and c3)
 
 
-def to_dnf_clauses(expr: Expr) -> DNFClauses:
+def to_dnf_clauses(expr: Expr, *, max_terms: int = DEFAULT_MAX_TERMS) -> DNFClauses:
     """
     Convert a boolean expression into Disjunctive Normal Form (DNF), returned
     as a list of conjunctions (disjunctive groups).
@@ -231,11 +239,29 @@ def to_dnf_clauses(expr: Expr) -> DNFClauses:
       * False -> []          (no groups)
       * True  -> [[]]        (single empty group, meaning "no filter")
     """
+    # Callers may supply an AST directly, bypassing the parser's guards.
+    pending = [(expr, 1)]
+    node_count = 0
+    while pending:
+        node, depth = pending.pop()
+        node_count += 1
+        if depth > MAX_AST_DEPTH or node_count > MAX_QUERY_NODES:
+            raise QueryBudgetError("Max query normalization tree budget exceeded.")
+        for value in vars(node).values():
+            children = value if isinstance(value, (list, tuple)) else (value,)
+            for child in children:
+                if isinstance(child, Expr):
+                    if node_count + len(pending) >= MAX_QUERY_NODES:
+                        raise QueryBudgetError(
+                            "Max query normalization tree budget exceeded."
+                        )
+                    pending.append((child, depth + 1))
+
     if not is_boolean_expr(expr):
         raise ValueError("Expression is not boolean; cannot convert to DNF")
 
     nnf = to_nnf(expr)
-    clauses = _dnf_from_nnf(nnf)
+    clauses = _dnf_from_nnf(nnf, max_terms=max_terms)
 
     # Optional: simplify tautological DNF (if True is present)
     # If we have an empty conjunction, the whole formula is True.
@@ -245,7 +271,7 @@ def to_dnf_clauses(expr: Expr) -> DNFClauses:
     return clauses
 
 
-def _dnf_from_nnf(expr: Expr) -> DNFClauses:
+def _dnf_from_nnf(expr: Expr, *, max_terms: int = DEFAULT_MAX_TERMS) -> DNFClauses:
     # Base cases -------------------------------------------------------
 
     # Boolean literal
@@ -258,9 +284,15 @@ def _dnf_from_nnf(expr: Expr) -> DNFClauses:
 
     # AND
     if _is_and(expr):
-        left_clauses = _dnf_from_nnf(expr.left)
-        right_clauses = _dnf_from_nnf(expr.right)
+        left_clauses = _dnf_from_nnf(expr.left, max_terms=max_terms)
+        right_clauses = _dnf_from_nnf(expr.right, max_terms=max_terms)
 
+        check_normalization_budget(
+            len(left_clauses) * len(right_clauses),
+            sum(map(len, left_clauses)) * len(right_clauses)
+            + sum(map(len, right_clauses)) * len(left_clauses),
+            max_terms,
+        )
         # Cross product of conjunctions
         result: DNFClauses = []
         for lc in left_clauses:
@@ -270,11 +302,17 @@ def _dnf_from_nnf(expr: Expr) -> DNFClauses:
 
     # OR
     if _is_or(expr):
-        left_clauses = _dnf_from_nnf(expr.left)
-        right_clauses = _dnf_from_nnf(expr.right)
+        left_clauses = _dnf_from_nnf(expr.left, max_terms=max_terms)
+        right_clauses = _dnf_from_nnf(expr.right, max_terms=max_terms)
+        check_normalization_budget(
+            len(left_clauses) + len(right_clauses),
+            sum(map(len, left_clauses)) + sum(map(len, right_clauses)),
+            max_terms,
+        )
         return left_clauses + right_clauses
 
     # NOT or any other atom (in NNF, NOT only wraps atoms)
+    check_normalization_budget(1, 1, max_terms)
     return [[expr]]
 
 

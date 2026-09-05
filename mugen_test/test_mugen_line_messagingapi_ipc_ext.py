@@ -9,6 +9,8 @@ import uuid
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from mugen.core.service.context_scope_resolution import ContextScopeResolutionError
+
 from mugen.core.contract.service.ingress_routing import (
     IngressRouteResolution,
     IngressRouteResult,
@@ -43,7 +45,9 @@ def _make_request(
     return IPCCommandRequest(
         platform="line",
         command=command,
-        data=payload,
+        data={"client_profile_id": str(_CLIENT_PROFILE_ID), **payload}
+        if isinstance(payload, dict) and command == "line_ingress_event"
+        else payload,
     )
 
 
@@ -279,18 +283,19 @@ class TestMugenLineMessagingapiIpcExt(unittest.IsolatedAsyncioTestCase):
         ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
             return_value=None
         )
-        await ext._line_ingress_event(  # pylint: disable=protected-access
-            _make_request(
-                {
-                    "payload": _message_event(),
-                    "provider_context": {
-                        "path_token": "line-path-token",
-                        "ingress_route": {},
+        with self.assertRaises(ContextScopeResolutionError):
+            await ext._line_ingress_event(  # pylint: disable=protected-access
+                _make_request(
+                    {
+                        "payload": _message_event(),
+                        "provider_context": {
+                            "path_token": "line-path-token",
+                            "ingress_route": {},
+                        },
                     },
-                },
-                command="line_ingress_event",
+                    command="line_ingress_event",
+                )
             )
-        )
         ext._resolve_ingress_route.assert_awaited_once()  # type: ignore[union-attr]
 
         ext._process_single_event.reset_mock()
@@ -1328,7 +1333,7 @@ class TestMugenLineMessagingapiIpcExt(unittest.IsolatedAsyncioTestCase):
         )
         logger.error.assert_any_call("Malformed LINE webhook payload.")
 
-    async def test_line_messagingapi_event_returns_early_when_route_unresolved(self) -> None:
+    async def test_line_messagingapi_event_fails_when_route_unresolved(self) -> None:
         ext = _new_extension(config=_make_config())
         with (
             patch.object(
@@ -1342,16 +1347,17 @@ class TestMugenLineMessagingapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(),
             ) as process_single_event,
         ):
-            await ext._line_messagingapi_event(  # pylint: disable=protected-access
-                _make_request({"events": [_message_event()]})
-            )
+            with self.assertRaises(ContextScopeResolutionError):
+                await ext._line_messagingapi_event(  # pylint: disable=protected-access
+                    _make_request({"events": [_message_event()]})
+                )
 
         process_single_event.assert_not_awaited()
         self.assertIsNone(
             ext._metrics.get("line.ipc.event.processed_ok")  # pylint: disable=protected-access
         )
 
-    async def test_line_messagingapi_event_skips_routes_without_client_profile_id(
+    async def test_line_messagingapi_event_rejects_routes_without_client_profile_id(
         self,
     ) -> None:
         ext = _new_extension(config=_make_config())
@@ -1367,9 +1373,10 @@ class TestMugenLineMessagingapiIpcExt(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(),
             ) as process_single_event,
         ):
-            await ext._line_messagingapi_event(  # pylint: disable=protected-access
-                _make_request({"events": [_message_event()]})
-            )
+            with self.assertRaises(ContextScopeResolutionError):
+                await ext._line_messagingapi_event(  # pylint: disable=protected-access
+                    _make_request({"events": [_message_event()]})
+                )
 
         process_single_event.assert_not_awaited()
 

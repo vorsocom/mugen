@@ -1,5 +1,7 @@
 """Unit tests for mugen.core.plugin.wechat.api.webhook."""
 
+from werkzeug.exceptions import InternalServerError
+
 from inspect import unwrap
 import struct
 from types import SimpleNamespace
@@ -859,7 +861,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request_payload.command, "wechat_official_account_event")
         self.assertEqual(request_payload.data["provider"], "official_account")
 
-    async def test_wecom_event_endpoint_logs_ipc_errors_and_returns_success(self) -> None:
+    async def test_wecom_event_endpoint_reports_ipc_failure(self) -> None:
         endpoint = unwrap(webhook.wechat_wecom_event)
         logger = Mock()
         config = _make_config(aes_enabled=False)
@@ -904,15 +906,15 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
                 get_data=AsyncMock(return_value=body_xml.encode("utf-8")),
             ),
         ):
-            response = await endpoint(
-                path_token="path-token",
-                config_provider=lambda: config,
-                ipc_provider=lambda: ipc_service,
-                logger_provider=lambda: logger,
-                client_profile_service_provider=lambda: _ClientProfileServiceStub(),
-            )
+            with self.assertRaises(InternalServerError):
+                await endpoint(
+                    path_token="path-token",
+                    config_provider=lambda: config,
+                    ipc_provider=lambda: ipc_service,
+                    logger_provider=lambda: logger,
+                    client_profile_service_provider=lambda: _ClientProfileServiceStub(),
+                )
 
-        self.assertEqual(response, "success")
         logger.warning.assert_called_once()
 
     async def test_handle_post_event_stages_ingress_entries_when_ipc_provider_is_absent(

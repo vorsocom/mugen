@@ -25,6 +25,7 @@ class IngressRouteReason(str, Enum):
     INVALID_TENANT_SLUG = "invalid_tenant_slug"
     INACTIVE_TENANT = "inactive_tenant"
     UNAUTHORIZED_TENANT = "unauthorized_tenant"
+    CLIENT_PROFILE_MISMATCH = "client_profile_mismatch"
     RESOLUTION_ERROR = "resolution_error"
 
 
@@ -40,6 +41,7 @@ class IngressRouteRequest:
     auth_user_id: uuid.UUID | None = None
     require_active_binding: bool = True
     claims: Mapping[str, str] = field(default_factory=dict)
+    authenticated_client_profile_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)

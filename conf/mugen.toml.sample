@@ -654,6 +654,8 @@ search.default_top_k = 10
 search.max_top_k = 50
 search.snippet_max_chars = 240
 encoder.model = "all-mpnet-base-v2"
+# Review the model and pin its immutable Hugging Face commit; safetensors is required.
+encoder.revision = "e8c3b32edf5434bc2275fc9bab85f82640a19130"
 encoder.max_concurrency = 4
 
 # === GCP Vertex (Gemini native generateContent) ===
@@ -772,6 +774,8 @@ search.default_top_k = 10
 search.max_top_k = 50
 search.snippet_max_chars = 240
 encoder.model = "all-mpnet-base-v2"
+# Review the model and pin its immutable Hugging Face commit; safetensors is required.
+encoder.revision = "e8c3b32edf5434bc2275fc9bab85f82640a19130"
 encoder.max_concurrency = 4
 
 # === OpenAI ===
@@ -836,6 +840,8 @@ api.timeout_seconds = 10.0
 api.max_retries = 2
 api.retry_backoff_seconds = 0.5
 encoder.model = "all-mpnet-base-v2"
+# Review the model and pin its immutable Hugging Face commit; safetensors is required.
+encoder.revision = "e8c3b32edf5434bc2275fc9bab85f82640a19130"
 encoder.max_concurrency = 4
 
 # === Pinecone ===
@@ -853,6 +859,8 @@ search.default_top_k = 10
 search.max_top_k = 50
 search.snippet_max_chars = 240
 encoder.model = "all-mpnet-base-v2"
+# Review the model and pin its immutable Hugging Face commit; safetensors is required.
+encoder.revision = "e8c3b32edf5434bc2275fc9bab85f82640a19130"
 encoder.max_concurrency = 4
 
 # === Qdrant ===
@@ -868,6 +876,8 @@ search.default_top_k = 10
 search.max_top_k = 50
 search.snippet_max_chars = 240
 encoder.model = "all-mpnet-base-v2"
+# Review the model and pin its immutable Hugging Face commit; safetensors is required.
+encoder.revision = "e8c3b32edf5434bc2275fc9bab85f82640a19130"
 encoder.max_concurrency = 4
 
 # === Quart ===
@@ -1051,6 +1061,8 @@ search.default_top_k = 10
 search.max_top_k = 50
 search.snippet_max_chars = 240
 encoder.model = "all-mpnet-base-v2"
+# Review the model and pin its immutable Hugging Face commit; safetensors is required.
+encoder.revision = "e8c3b32edf5434bc2275fc9bab85f82640a19130"
 encoder.max_concurrency = 4
 
 # === Web ===

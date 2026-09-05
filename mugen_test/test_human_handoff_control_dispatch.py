@@ -28,6 +28,9 @@ class _ConcreteWebClient(IWebClient):
     async def enqueue_message(self, **_kwargs):
         return {}
 
+    async def get_conversation_tenant_id(self, **_kwargs):
+        return None
+
     async def stream_events(self, **_kwargs):
         if False:
             yield ""

@@ -122,6 +122,50 @@ class TestMugenChannelOrchestrationHandoffEventsApi(
                     handoff_service_provider=lambda: SimpleNamespace(),
                 )
 
+    async def test_open_handoff_stream_stops_when_tenant_permission_is_revoked(
+        self,
+    ) -> None:
+        app = Quart("handoff_events_revocation_test")
+        tenant_id = uuid.uuid4()
+        auth_user = uuid.uuid4()
+        permission = AsyncMock(return_value=True)
+        auth_svc = SimpleNamespace(has_permission=permission)
+        closed = Mock()
+
+        async def _stream():
+            try:
+                yield "data: authorized\n\n"
+                yield "data: revoked\n\n"
+            finally:
+                closed()
+
+        service = SimpleNamespace(
+            stream_handoff_events=AsyncMock(return_value=_stream()),
+        )
+        async with app.test_request_context(
+            f"/api/core/acp/v1/tenants/{tenant_id}/HumanHandoffEvents/stream",
+        ):
+            response = await handoff_events_api.human_handoff_events_stream.__wrapped__(
+                tenant_id=str(tenant_id),
+                auth_user=str(auth_user),
+                logger_provider=lambda: SimpleNamespace(error=Mock()),
+                auth_provider=lambda: auth_svc,
+                handoff_service_provider=lambda: service,
+            )
+
+        async with response.response as body:
+            stream = body.__aiter__()
+            self.assertEqual(await anext(stream), "data: authorized\n\n")
+            permission.return_value = False
+            with self.assertRaises(StopAsyncIteration):
+                await anext(stream)
+
+        self.assertEqual(permission.await_count, 3)
+        for call in permission.await_args_list:
+            self.assertEqual(call.kwargs["user_id"], auth_user)
+            self.assertEqual(call.kwargs["tenant_id"], tenant_id)
+        closed.assert_called_once()
+
     async def test_handoff_events_stream_rejects_invalid_session_id(self) -> None:
         app = Quart("handoff_events_stream_invalid_session_test")
         tenant_id = uuid.uuid4()

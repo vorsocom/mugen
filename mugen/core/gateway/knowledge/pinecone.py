@@ -25,6 +25,7 @@ from mugen.core.gateway.completion.timeout_config import require_fields_in_produ
 from mugen.core.gateway.knowledge.common import (
     apply_query_scope,
     resolve_hugging_face_token,
+    resolve_encoder_revision,
     selector_metadata,
 )
 from mugen.core.utility.config_value import (
@@ -344,6 +345,11 @@ class PineconeKnowledgeGateway(IKnowledgeGateway):
     def _build_encoder(self) -> SentenceTransformer:
         return SentenceTransformer(
             model_name_or_path=self._encoder_model_name,
+            revision=resolve_encoder_revision(
+                self._encoder_model_name, self._section("pinecone", "encoder")
+            ),
+            trust_remote_code=False,
+            model_kwargs={"use_safetensors": True},
             processor_kwargs={
                 "clean_up_tokenization_spaces": False,
             },

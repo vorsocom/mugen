@@ -12,6 +12,7 @@ __all__ = [
 
 import hashlib
 import json
+import uuid
 from types import SimpleNamespace
 from typing import Any
 
@@ -77,6 +78,7 @@ async def _resolve_ingress_route(
     claims: dict[str, str],
     relational_storage_gateway: IRelationalStorageGateway,
     logging_gateway: ILoggingGateway,
+    authenticated_client_profile_id: uuid.UUID | None = None,
 ) -> dict[str, Any] | None:
     if identifier_value is None:
         return None
@@ -91,6 +93,7 @@ async def _resolve_ingress_route(
             identifier_type=identifier_type,
             identifier_value=identifier_value,
             claims=claims,
+            authenticated_client_profile_id=authenticated_client_profile_id,
         )
     )
     try:
@@ -118,15 +121,18 @@ def _resolved_client_profile_id(
     platform: str,
     identifier_type: str,
     identifier_value: str | None,
-):
+) -> uuid.UUID:
     client_profile_id = client_profile_id_from_ingress_route(ingress_route)
     if client_profile_id is not None:
         return client_profile_id
     logging_gateway.warning(
-        "Dropping staged ingress event without resolved client profile "
+        "Ingress delivery failed without resolved client profile "
         f"(platform={platform} identifier_type={identifier_type})."
     )
-    return None
+    raise ContextScopeResolutionError(
+        reason_code="route_unresolved",
+        detail=f"{platform} delivery could not resolve its client profile.",
+    )
 
 
 async def extract_line_stage_entries(
@@ -155,8 +161,6 @@ async def extract_line_stage_entries(
         identifier_type="path_token",
         identifier_value=path_token,
     )
-    if client_profile_id is None:
-        return []
     entries: list[MessagingIngressStageEntry] = []
     for event in events:
         if not isinstance(event, dict):
@@ -223,8 +227,6 @@ async def extract_telegram_stage_entries(
         identifier_type="path_token",
         identifier_value=path_token,
     )
-    if client_profile_id is None:
-        return []
     update_id = payload.get("update_id")
     update_id_text = str(update_id) if update_id is not None else None
     entries: list[MessagingIngressStageEntry] = []
@@ -342,8 +344,6 @@ async def extract_wechat_stage_entries(
         identifier_type="path_token",
         identifier_value=path_token,
     )
-    if client_profile_id is None:
-        return []
     sender = _nonempty_text(payload.get("FromUserName"))
     event_id = _nonempty_text(payload.get("MsgId"))
     event_type = f"{provider}:event"
@@ -383,6 +383,7 @@ async def extract_whatsapp_stage_entries(
     payload: dict[str, Any],
     relational_storage_gateway: IRelationalStorageGateway,
     logging_gateway: ILoggingGateway,
+    authenticated_client_profile_id: uuid.UUID | None = None,
 ) -> list[MessagingIngressStageEntry]:
     entries: list[MessagingIngressStageEntry] = []
     entry_list = payload.get("entry")
@@ -418,6 +419,7 @@ async def extract_whatsapp_stage_entries(
                 claims=claims,
                 relational_storage_gateway=relational_storage_gateway,
                 logging_gateway=logging_gateway,
+                authenticated_client_profile_id=authenticated_client_profile_id,
             )
             client_profile_id = _resolved_client_profile_id(
                 ingress_route=ingress_route,
@@ -426,8 +428,6 @@ async def extract_whatsapp_stage_entries(
                 identifier_type="phone_number_id",
                 identifier_value=phone_number_id,
             )
-            if client_profile_id is None:
-                continue
             contacts = event_value.get("contacts")
             messages = event_value.get("messages")
             if isinstance(messages, list):

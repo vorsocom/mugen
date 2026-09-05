@@ -171,6 +171,8 @@ class TestACPDiRuntimeRegression(unittest.IsolatedAsyncioTestCase):
                 "com.test.admin:ACP.PermissionObject",
                 "com.test.admin:ACP.PermissionType",
                 "com.test.admin:ACP.RoleMembership",
+                "com.test.admin:ACP.Tenant",
+                "com.test.admin:ACP.TenantMembership",
                 "com.test.admin:ACP.User",
             ],
         )

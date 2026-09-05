@@ -637,6 +637,20 @@ class DefaultWebClient(IWebClient):
             "event_id": event.get("id"),
         }
 
+    async def get_conversation_tenant_id(
+        self,
+        *,
+        auth_user: str,
+        conversation_id: str,
+    ) -> uuid.UUID | None:
+        """Read the current tenant for a conversation owned by the user."""
+        auth_user_id = self._require_non_empty(auth_user, "auth_user")
+        conversation = self._require_non_empty(conversation_id, "conversation_id")
+        return await self._runtime_store().get_conversation_tenant_id(
+            auth_user=auth_user_id,
+            conversation_id=conversation,
+        )
+
     async def stream_events(
         self,
         *,

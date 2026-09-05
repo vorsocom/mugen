@@ -15,6 +15,7 @@ from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.plugin.acp.service.messaging_client_profile import (
     MessagingClientProfileService,
 )
+from mugen.core.utility.client_profile_runtime import client_profile_scope
 
 
 def _config_provider():
@@ -161,7 +162,10 @@ def line_webhook_signature_required(
                 abort(500)
 
             supplied_signature = request.headers.get("X-Line-Signature")
-            if not isinstance(supplied_signature, str) or supplied_signature.strip() == "":
+            if (
+                not isinstance(supplied_signature, str)
+                or supplied_signature.strip() == ""
+            ):
                 logger.error("LINE webhook signature header missing.")
                 abort(401)
 
@@ -174,11 +178,15 @@ def line_webhook_signature_required(
                 ).digest()
             ).decode("utf-8")
 
-            if hmac.compare_digest(supplied_signature.strip(), expected_signature) is not True:
+            if (
+                hmac.compare_digest(supplied_signature.strip(), expected_signature)
+                is not True
+            ):
                 logger.error("LINE webhook signature verification failed.")
                 abort(401)
 
-            return await func(*args, **kwargs)
+            with client_profile_scope(getattr(client_profile, "id", None)):
+                return await func(*args, **kwargs)
 
         return wrapper
 

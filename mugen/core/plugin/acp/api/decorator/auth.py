@@ -175,28 +175,27 @@ def permission_required(  # pylint: disable=too-many-arguments
                 if is_admin_action and not is_admin:
                     abort(403, "Action requires administrator privilege.")
 
-            if not (is_admin and allow_global_admin):
-                tenant_id = None
-                if tenant_kw:
-                    raw = kwargs.get(tenant_kw)
-                    if raw is None:
-                        abort(400, f"Missing required path parameter: {tenant_kw}.")
+            tenant_id = None
+            if tenant_kw:
+                raw = kwargs.get(tenant_kw)
+                if raw is None:
+                    abort(400, f"Missing required path parameter: {tenant_kw}.")
 
-                    try:
-                        tenant_id = uuid.UUID(str(raw))
-                    except ValueError:
-                        abort(400, f"Invalid UUID for path parameter: {tenant_kw}.")
+                try:
+                    tenant_id = uuid.UUID(str(raw))
+                except ValueError:
+                    abort(400, f"Invalid UUID for path parameter: {tenant_kw}.")
 
-                auth_svc: IAuthorizationService = auth_provider()
-                ok = await auth_svc.has_permission(
-                    user_id=user.id,
-                    permission_object=resource.perm_obj,
-                    permission_type=perm_type,
-                    tenant_id=tenant_id,
-                    allow_global_admin=allow_global_admin,
-                )
-                if not ok:
-                    abort(403)
+            auth_svc: IAuthorizationService = auth_provider()
+            ok = await auth_svc.has_permission(
+                user_id=user.id,
+                permission_object=resource.perm_obj,
+                permission_type=perm_type,
+                tenant_id=tenant_id,
+                allow_global_admin=allow_global_admin,
+            )
+            if not ok:
+                abort(403)
 
             kwargs["allow_global_admin"] = allow_global_admin
             kwargs["auth_user"] = str(user.id)

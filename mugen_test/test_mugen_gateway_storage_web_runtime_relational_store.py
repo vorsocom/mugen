@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import sqlite3
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock
@@ -11,6 +12,8 @@ import uuid
 from mugen.core.gateway.storage.web_runtime.relational_store import (
     RelationalWebRuntimeStore,
 )
+from mugen.core.constants import GLOBAL_TENANT_ID
+from mugen.core.contract.gateway.storage.web_runtime import IWebRuntimeStore
 
 
 class _ResultMappings:
@@ -331,3 +334,88 @@ class TestRelationalWebRuntimeStore(unittest.IsolatedAsyncioTestCase):
                 stream_generation="gen-1",
                 stream_version=1,
             )
+
+    async def test_conversation_tenant_lookup_enforces_owner_and_refreshes_scope(
+        self,
+    ) -> None:
+        tenant_id = uuid.uuid4()
+        store, session = self._build_store(
+            row=None,
+            config=SimpleNamespace(
+                rdbms=SimpleNamespace(
+                    migration_tracks=SimpleNamespace(
+                        core=SimpleNamespace(schema="web_runtime_test"),
+                    ),
+                ),
+            ),
+        )
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        connection.row_factory = sqlite3.Row
+        connection.execute("ATTACH DATABASE ':memory:' AS web_runtime_test")
+        connection.execute(
+            "CREATE TABLE web_runtime_test.web_conversation_state "
+            "(conversation_id TEXT, owner_user_id TEXT, tenant_id TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO web_runtime_test.web_conversation_state VALUES (?, ?, ?)",
+            [
+                ("conv-1", "owner-1", str(tenant_id)),
+                ("conv-global", "owner-1", str(GLOBAL_TENANT_ID)),
+            ],
+        )
+
+        def execute_query(statement, params):
+            rows = connection.execute(str(statement), params).fetchall()
+            return _Result([dict(row) for row in rows])
+
+        session.execute.side_effect = execute_query
+        for conversation_id, owner, expected in (
+            ("conv-1", "owner-1", tenant_id),
+            ("conv-1", "owner-2", None),
+            ("missing", "owner-1", None),
+            ("conv-global", "owner-1", GLOBAL_TENANT_ID),
+        ):
+            with self.subTest(conversation_id=conversation_id, owner=owner):
+                self.assertEqual(
+                    await store.get_conversation_tenant_id(
+                        auth_user=owner,
+                        conversation_id=conversation_id,
+                    ),
+                    expected,
+                )
+
+        connection.execute(
+            "UPDATE web_runtime_test.web_conversation_state "
+            "SET owner_user_id = 'owner-2' WHERE conversation_id = 'conv-1'"
+        )
+        self.assertIsNone(
+            await store.get_conversation_tenant_id(
+                auth_user="owner-1",
+                conversation_id="conv-1",
+            )
+        )
+        self.assertEqual(store._runtime.session_maker.call_count, 5)
+
+    async def test_conversation_tenant_lookup_rejects_invalid_persisted_scope(
+        self,
+    ) -> None:
+        for row in ({}, {"tenant_id": None}, {"tenant_id": "invalid"}):
+            with self.subTest(row=row):
+                store, _ = self._build_store(row=row)
+                self.assertIsNone(
+                    await store.get_conversation_tenant_id(
+                        auth_user="owner-1",
+                        conversation_id="conv-1",
+                    )
+                )
+
+    def test_runtime_store_contract_requires_conversation_tenant_lookup(self) -> None:
+        self.assertIn(
+            "get_conversation_tenant_id",
+            IWebRuntimeStore.__abstractmethods__,
+        )
+        self.assertNotIn(
+            "get_conversation_tenant_id",
+            RelationalWebRuntimeStore.__abstractmethods__,
+        )

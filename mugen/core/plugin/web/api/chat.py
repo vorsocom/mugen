@@ -11,16 +11,19 @@ from quart import Response, abort, jsonify, request, send_file
 
 from mugen.core import di
 from mugen.core.api import api
+from mugen.core.constants import GLOBAL_TENANT_ID
 from mugen.core.contract.client.web import (
     IWebClient,
     WebConversationTenantConflictError,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
 from mugen.core.plugin.acp.api.decorator.auth import global_auth_required
+from mugen.core.plugin.acp.api.stream import authorized_stream
 from mugen.core.plugin.web.api.decorator import (
     web_access_required,
     web_platform_required,
 )
+from mugen.core.plugin.web.auth import WEB_PLATFORM_ACCESS_PERMISSION
 
 _ALLOWED_MESSAGE_TYPES = {"text", "audio", "video", "file", "image"}
 _MEDIA_MESSAGE_TYPES = {"audio", "video", "file", "image"}
@@ -66,6 +69,10 @@ def _logger_provider():
 
 def _web_client_provider():
     return di.container.web_client
+
+
+def _auth_provider():
+    return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_SVC_AUTH)
 
 
 def _resolve_media_storage_path(config: SimpleNamespace) -> str:
@@ -785,6 +792,7 @@ async def web_events_stream(
     auth_user: str,
     logger_provider=_logger_provider,
     web_client_provider=_web_client_provider,
+    auth_provider=_auth_provider,
 ):
     """Stream web chat events over Server-Sent Events (SSE)."""
     logger: ILoggingGateway = logger_provider()
@@ -793,12 +801,34 @@ async def web_events_stream(
     conversation_id = request.args.get("conversation_id")
     if not isinstance(conversation_id, str) or conversation_id.strip() == "":
         abort(400, "conversation_id is required")
+    conversation_id = conversation_id.strip()
 
     last_event_id = request.headers.get("Last-Event-ID")
     if not isinstance(last_event_id, str) or last_event_id.strip() == "":
         last_event_id = request.args.get("last_event_id")
 
+    async def _permitted() -> bool:
+        tenant_id = await web_client.get_conversation_tenant_id(
+            auth_user=auth_user,
+            conversation_id=conversation_id,
+        )
+        if tenant_id is None:
+            return False
+
+        auth_svc = auth_provider()
+        permission_args = {
+            "user_id": uuid.UUID(str(auth_user)),
+            "permission_object": WEB_PLATFORM_ACCESS_PERMISSION,
+            "permission_type": WEB_PLATFORM_ACCESS_PERMISSION,
+            "allow_global_admin": True,
+        }
+        if tenant_id == GLOBAL_TENANT_ID:
+            return await auth_svc.has_permission_for_any_tenant(**permission_args)
+        return await auth_svc.has_permission(tenant_id=tenant_id, **permission_args)
+
     try:
+        if not await _permitted():
+            raise PermissionError("web conversation access revoked")
         stream = await web_client.stream_events(
             auth_user=auth_user,
             conversation_id=conversation_id,
@@ -815,7 +845,7 @@ async def web_events_stream(
         abort(500)
 
     return Response(
-        stream,
+        authorized_stream(stream, permitted=_permitted),
         mimetype="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

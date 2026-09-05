@@ -4,6 +4,7 @@ __all__ = ["WeChatIPCExtension"]
 
 import hashlib
 import json
+import uuid
 import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -30,6 +31,7 @@ from mugen.core.service.context_scope_resolution import (
 from mugen.core.utility.client_profile_runtime import (
     client_profile_id_from_ingress_route,
     client_profile_scope,
+    normalize_client_profile_id,
 )
 from mugen.core.service.ingress_routing import (
     DefaultIngressRoutingService,
@@ -296,6 +298,7 @@ class WeChatIPCExtension(IIPCExtension):
         *,
         path_token: str | None,
         webhook_payload: dict[str, Any],
+        authenticated_client_profile_id: uuid.UUID | None = None,
     ) -> dict[str, Any] | None:
         claims = {"path_token": path_token} if path_token is not None else {}
         resolution = await self._ingress_router().resolve(
@@ -305,6 +308,12 @@ class WeChatIPCExtension(IIPCExtension):
                 identifier_type="path_token",
                 identifier_value=path_token,
                 claims=claims,
+                authenticated_client_profile_id=(
+                    authenticated_client_profile_id
+                    or normalize_client_profile_id(
+                        webhook_payload.get("authenticated_client_profile_id")
+                    )
+                ),
             )
         )
         try:
@@ -654,17 +663,25 @@ class WeChatIPCExtension(IIPCExtension):
                 webhook_payload=event_payload,
             )
             if ingress_route is None:
-                return
+                raise ContextScopeResolutionError(
+                    reason_code="route_unresolved",
+                    detail="wechat delivery could not resolve its route.",
+                )
 
             route_client_profile_id = client_profile_id_from_ingress_route(ingress_route)
             if route_client_profile_id is None:
-                return
+                raise ContextScopeResolutionError(
+                    reason_code="route_unresolved",
+                    detail="wechat delivery could not resolve its client profile.",
+                )
             with client_profile_scope(route_client_profile_id):
                 await self._process_inbound_message(
                     provider=provider,
                     payload=payload,
                     ingress_route=ingress_route,
                 )
+        except ContextScopeResolutionError:
+            raise
         except (KeyError, TypeError):
             self._logging_gateway.error("Malformed WeChat event payload.")
             await self._record_dead_letter(
@@ -734,24 +751,35 @@ class WeChatIPCExtension(IIPCExtension):
         provider = str(provider_context.get("provider") or "").strip().lower()
         if provider not in {"official_account", "wecom"}:
             raise ValueError("WeChat ingress provider is required.")
+        client_profile_id = normalize_client_profile_id(
+            payload.get("client_profile_id")
+            or provider_context.get("client_profile_id")
+        )
+        if client_profile_id is None:
+            raise ContextScopeResolutionError(
+                reason_code="client_profile_mismatch",
+                detail="wechat delivery requires its receiving client profile.",
+            )
         ingress_route = self._normalize_ingress_route(provider_context.get("ingress_route"))
         path_token = self._coerce_nonempty_string(provider_context.get("path_token"))
         if ingress_route.get("client_profile_id") in [None, ""] and path_token is not None:
             resolved = await self._resolve_ingress_route(
                 path_token=path_token,
                 webhook_payload=event_payload,
+                authenticated_client_profile_id=client_profile_id,
             )
-            if resolved is not None:
-                ingress_route = resolved
+            if resolved is None:
+                raise ContextScopeResolutionError(
+                    reason_code="route_unresolved",
+                    detail="wechat delivery could not resolve its route.",
+                )
+            ingress_route = resolved
 
-        route_client_profile_id = client_profile_id_from_ingress_route(ingress_route)
-        client_profile_id = self._coerce_nonempty_string(
-            payload.get("client_profile_id")
-        ) or self._coerce_nonempty_string(provider_context.get("client_profile_id"))
-        if client_profile_id is None and route_client_profile_id is not None:
-            client_profile_id = str(route_client_profile_id)
-        if client_profile_id is None:
-            return
+        if client_profile_id_from_ingress_route(ingress_route) != client_profile_id:
+            raise ContextScopeResolutionError(
+                reason_code="client_profile_mismatch",
+                detail="wechat route does not belong to its receiving client.",
+            )
         with client_profile_scope(client_profile_id):
             await self._process_inbound_message(
                 provider=provider,

@@ -16,6 +16,13 @@ from typing import Any, List
 import decimal
 import json
 
+from mugen.core.utility.rgql.query_budget import (
+    MAX_QUERY_DEPTH,
+    MAX_QUERY_LENGTH,
+    MAX_QUERY_NODES,
+    QueryBudgetError,
+)
+
 
 class TokenKind(Enum):
     """Enumeration of all token categories produced by :class:`RGQLLexer`.
@@ -164,6 +171,8 @@ class RGQLLexer:  # pylint: disable=too-few-public-methods
     """
 
     def __init__(self, text: str):
+        if len(text) > MAX_QUERY_LENGTH:
+            raise QueryBudgetError("Max query length exceeded.")
         self.text = text
         self.length = len(text)
         self.pos = 0
@@ -187,6 +196,8 @@ class RGQLLexer:  # pylint: disable=too-few-public-methods
         """
         tokens: List[Token] = []
         while True:
+            if len(tokens) >= MAX_QUERY_NODES * 4:
+                raise QueryBudgetError("Max query tokens exceeded.")
             tok = self._next_token()
             tokens.append(tok)
             if tok.kind == TokenKind.EOF:
@@ -401,6 +412,8 @@ class RGQLLexer:  # pylint: disable=too-few-public-methods
         escape = False
 
         while stack:
+            if len(stack) > MAX_QUERY_DEPTH:
+                raise QueryBudgetError("Max query JSON depth exceeded.")
             ch = self._peek_char()
             if not ch:
                 raise ValueError(f"Unterminated JSON literal starting at {start}")

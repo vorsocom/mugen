@@ -5120,6 +5120,43 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             self.client._runtime_store()  # pylint: disable=protected-access
 
+    async def test_get_conversation_tenant_id_normalizes_and_reads_current_scope(
+        self,
+    ) -> None:
+        tenant_id = uuid.uuid4()
+        runtime_store = SimpleNamespace(
+            get_conversation_tenant_id=AsyncMock(side_effect=[tenant_id, None]),
+        )
+        self.client._web_runtime_store = runtime_store
+
+        self.assertEqual(
+            await self.client.get_conversation_tenant_id(
+                auth_user=" user-1 ",
+                conversation_id=" conversation-1 ",
+            ),
+            tenant_id,
+        )
+        self.assertIsNone(
+            await self.client.get_conversation_tenant_id(
+                auth_user="user-1",
+                conversation_id="conversation-1",
+            ),
+        )
+        self.assertEqual(runtime_store.get_conversation_tenant_id.await_count, 2)
+        runtime_store.get_conversation_tenant_id.assert_awaited_with(
+            auth_user="user-1",
+            conversation_id="conversation-1",
+        )
+
+        for auth_user, conversation_id in (("", "conversation-1"), ("user-1", " ")):
+            with self.subTest(auth_user=auth_user, conversation_id=conversation_id):
+                with self.assertRaises(ValueError):
+                    await self.client.get_conversation_tenant_id(
+                        auth_user=auth_user,
+                        conversation_id=conversation_id,
+                    )
+        self.assertEqual(runtime_store.get_conversation_tenant_id.await_count, 2)
+
     async def test_cleanup_media_tokens_skips_delete_when_expired_token_is_not_string(
         self,
     ) -> None:
