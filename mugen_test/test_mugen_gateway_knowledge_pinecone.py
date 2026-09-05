@@ -352,7 +352,7 @@ class TestMugenGatewayKnowledgePinecone(unittest.IsolatedAsyncioTestCase):
         self.assertIs(built_encoder, transformer.return_value)
         transformer.assert_called_once_with(
             model_name_or_path="all-mpnet-base-v2",
-            tokenizer_kwargs={"clean_up_tokenization_spaces": False},
+            processor_kwargs={"clean_up_tokenization_spaces": False},
             cache_folder="/tmp/hf",
         )
 

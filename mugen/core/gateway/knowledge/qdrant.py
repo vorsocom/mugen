@@ -274,7 +274,7 @@ class QdrantKnowledgeGateway(IKnowledgeGateway):
     def _build_encoder(self) -> SentenceTransformer:
         return SentenceTransformer(
             model_name_or_path=self._encoder_model_name,
-            tokenizer_kwargs={
+            processor_kwargs={
                 "clean_up_tokenization_spaces": False,
             },
             cache_folder=getattr(self._section("transformers", "hf"), "home", None),
