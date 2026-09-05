@@ -709,7 +709,7 @@ class MultiProfileSignalClient(SimpleProfileClientManager, ISignalClient):
                 if not isinstance(event, dict):
                     continue
                 payload = dict(event)
-                payload.setdefault("client_profile_id", client_profile_id)
+                payload["client_profile_id"] = client_profile_id
                 account_number = getattr(client, "_account_number", None)
                 if isinstance(account_number, str) and account_number.strip() != "":
                     payload.setdefault("account_number", account_number.strip())

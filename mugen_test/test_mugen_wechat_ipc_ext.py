@@ -9,6 +9,8 @@ import uuid
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from mugen.core.service.context_scope_resolution import ContextScopeResolutionError
+
 from mugen.core.contract.service.ingress_routing import (
     IngressRouteReason,
     IngressRouteResolution,
@@ -40,7 +42,9 @@ def _make_request(
     return IPCCommandRequest(
         platform="wechat",
         command=command,
-        data=payload,
+        data={"client_profile_id": str(_CLIENT_PROFILE_ID), **payload}
+        if isinstance(payload, dict) and command == "wechat_ingress_event"
+        else payload,
     )
 
 
@@ -239,38 +243,40 @@ class TestMugenWeChatIpcExt(unittest.IsolatedAsyncioTestCase):
         ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
             return_value=None
         )
-        await ext._wechat_ingress_event(  # pylint: disable=protected-access
-            _make_request(
-                {
-                    "payload": {"MsgType": "text", "FromUserName": "wechat-user"},
-                    "provider_context": {
-                        "provider": "official_account",
-                        "path_token": "wechat-path",
-                        "ingress_route": {},
+        with self.assertRaises(ContextScopeResolutionError):
+            await ext._wechat_ingress_event(  # pylint: disable=protected-access
+                _make_request(
+                    {
+                        "payload": {"MsgType": "text", "FromUserName": "wechat-user"},
+                        "provider_context": {
+                            "provider": "official_account",
+                            "path_token": "wechat-path",
+                            "ingress_route": {},
+                        },
                     },
-                },
-                command="wechat_ingress_event",
+                    command="wechat_ingress_event",
+                )
             )
-        )
         ext._resolve_ingress_route.assert_awaited_once()  # type: ignore[union-attr]
 
         ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
             return_value={"tenant_id": "tenant-a"}
         )
         ext._process_inbound_message.reset_mock()
-        await ext._wechat_ingress_event(  # pylint: disable=protected-access
-            _make_request(
-                {
-                    "payload": {"MsgType": "text", "FromUserName": "wechat-user"},
-                    "provider_context": {
-                        "provider": "official_account",
-                        "path_token": "wechat-path",
-                        "ingress_route": {},
+        with self.assertRaises(ContextScopeResolutionError):
+            await ext._wechat_ingress_event(  # pylint: disable=protected-access
+                _make_request(
+                    {
+                        "payload": {"MsgType": "text", "FromUserName": "wechat-user"},
+                        "provider_context": {
+                            "provider": "official_account",
+                            "path_token": "wechat-path",
+                            "ingress_route": {},
+                        },
                     },
-                },
-                command="wechat_ingress_event",
+                    command="wechat_ingress_event",
+                )
             )
-        )
         ext._process_inbound_message.assert_not_awaited()
 
         ext._resolve_ingress_route.reset_mock()  # type: ignore[union-attr]
@@ -853,16 +859,17 @@ class TestMugenWeChatIpcExt(unittest.IsolatedAsyncioTestCase):
             return_value={"tenant_id": "tenant-a"}
         )
         ext._process_inbound_message = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
-        await ext._wechat_event(  # pylint: disable=protected-access
-            _make_request(
-                {
-                    "provider": "official_account",
-                    "payload": _make_text_payload(),
-                },
-                command="wechat_official_account_event",
-            ),
-            expected_provider="official_account",
-        )
+        with self.assertRaises(ContextScopeResolutionError):
+            await ext._wechat_event(  # pylint: disable=protected-access
+                _make_request(
+                    {
+                        "provider": "official_account",
+                        "payload": _make_text_payload(),
+                    },
+                    command="wechat_official_account_event",
+                ),
+                expected_provider="official_account",
+            )
         ext._process_inbound_message.assert_not_awaited()
         self.assertEqual(relational.dead_letters[0]["reason_code"], "malformed_payload")
         self.assertEqual(relational.dead_letters[1]["reason_code"], "processing_exception")
@@ -909,7 +916,7 @@ class TestMugenWeChatIpcExt(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(merged["metadata"]["ingress_route"]["tenant_slug"], "tenant-a")
 
-    async def test_missing_binding_ingress_route_is_dead_lettered_and_dropped(self) -> None:
+    async def test_missing_binding_route_is_dead_lettered_and_failed(self) -> None:
         class _FallbackRouter:
             async def resolve(self, request):  # noqa: ARG002
                 return IngressRouteResolution(
@@ -929,13 +936,14 @@ class TestMugenWeChatIpcExt(unittest.IsolatedAsyncioTestCase):
             ingress_routing_service=_FallbackRouter(),
         )
 
-        await ext._wechat_event(  # pylint: disable=protected-access
-            _make_request(
-                {"provider": "official_account", "payload": _make_text_payload()},
-                command="wechat_official_account_event",
-            ),
-            expected_provider="official_account",
-        )
+        with self.assertRaises(ContextScopeResolutionError):
+            await ext._wechat_event(  # pylint: disable=protected-access
+                _make_request(
+                    {"provider": "official_account", "payload": _make_text_payload()},
+                    command="wechat_official_account_event",
+                ),
+                expected_provider="official_account",
+            )
         messaging.handle_text_message.assert_not_awaited()
         self.assertEqual(len(relational.dead_letters), 1)
         self.assertEqual(relational.dead_letters[0]["reason_code"], "route_unresolved")
@@ -968,7 +976,7 @@ class TestMugenWeChatIpcExt(unittest.IsolatedAsyncioTestCase):
             str(ext_with_detail._relational_storage_gateway.dead_letters[0]["error_message"]),  # pylint: disable=protected-access
         )
 
-    async def test_event_returns_early_when_ingress_route_resolution_returns_none(
+    async def test_event_fails_when_ingress_route_resolution_returns_none(
         self,
     ) -> None:
         messaging = _make_messaging_service()
@@ -978,12 +986,13 @@ class TestMugenWeChatIpcExt(unittest.IsolatedAsyncioTestCase):
         )
         ext._resolve_ingress_route = AsyncMock(return_value=None)  # type: ignore[method-assign]  # pylint: disable=protected-access
 
-        await ext._wechat_event(  # pylint: disable=protected-access
-            _make_request(
-                {"provider": "official_account", "payload": _make_text_payload()},
-                command="wechat_official_account_event",
-            ),
-            expected_provider="official_account",
-        )
+        with self.assertRaises(ContextScopeResolutionError):
+            await ext._wechat_event(  # pylint: disable=protected-access
+                _make_request(
+                    {"provider": "official_account", "payload": _make_text_payload()},
+                    command="wechat_official_account_event",
+                ),
+                expected_provider="official_account",
+            )
 
         messaging.handle_text_message.assert_not_awaited()

@@ -133,6 +133,7 @@ def _new_ipc_service(*, logger: Mock, ipc_ext: SignalRestAPIIPCExtension) -> Def
 
 def _make_text_event(*, text: str = "hello") -> dict:
     return {
+        "client_profile_id": str(_CLIENT_PROFILE_ID),
         "method": "receive",
         "params": {
             "envelope": {
