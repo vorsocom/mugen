@@ -48,6 +48,14 @@ class TestMugenAcpServiceAuthorization(unittest.IsolatedAsyncioTestCase):
             "ACP.RoleMembership": SimpleNamespace(
                 get_role_memberships_by_user=AsyncMock(return_value=[])
             ),
+            "ACP.Tenant": SimpleNamespace(
+                get=AsyncMock(
+                    return_value=SimpleNamespace(status="active", deleted_at=None)
+                )
+            ),
+            "ACP.TenantMembership": SimpleNamespace(
+                get=AsyncMock(return_value=SimpleNamespace(status="active"))
+            ),
             "ACP.User": SimpleNamespace(get_expanded=AsyncMock(return_value=None)),
         }
 
@@ -315,6 +323,185 @@ class TestMugenAcpServiceAuthorization(unittest.IsolatedAsyncioTestCase):
 
         services["ACP.PermissionObject"].get.assert_not_awaited()
         services["ACP.PermissionType"].get.assert_not_awaited()
+
+    def _granted_service(self, *, global_grant: bool = False):
+        svc, services = self._new_service()
+        services["ACP.PermissionObject"].get.return_value = _row_with_id(uuid.uuid4())
+        services["ACP.PermissionType"].get.return_value = _row_with_id(uuid.uuid4())
+        services["ACP.RoleMembership"].get_role_memberships_by_user.return_value = [
+            SimpleNamespace(role_id=uuid.uuid4())
+        ]
+        services["ACP.PermissionEntry"].list.return_value = [
+            SimpleNamespace(permitted=True)
+        ]
+        if global_grant:
+            services[
+                "ACP.GlobalRoleMembership"
+            ].get_role_memberships_by_user.return_value = [
+                SimpleNamespace(global_role_id=uuid.uuid4())
+            ]
+            services["ACP.GlobalPermissionEntry"].list.return_value = [
+                SimpleNamespace(permitted=True)
+            ]
+        return svc, services
+
+    async def test_membership_state_gates_tenant_and_global_grants(self) -> None:
+        user_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        for global_grant in (False, True):
+            for status in (None, "invited", "suspended", "unknown", "active"):
+                with self.subTest(global_grant=global_grant, status=status):
+                    svc, services = self._granted_service(global_grant=global_grant)
+                    services["ACP.User"].get_expanded.return_value = SimpleNamespace(
+                        global_roles=[
+                            SimpleNamespace(
+                                namespace="unrelated.namespace", name="administrator"
+                            )
+                        ]
+                    )
+                    services["ACP.TenantMembership"].get.return_value = (
+                        None if status is None else SimpleNamespace(status=status)
+                    )
+
+                    permitted = await svc.has_permission(
+                        user_id=user_id,
+                        permission_object=":users",
+                        permission_type=":read",
+                        tenant_id=tenant_id,
+                        allow_global_admin=True,
+                    )
+
+                    self.assertEqual(permitted, status == "active")
+                    services["ACP.Tenant"].get.assert_awaited_once_with(
+                        {"id": tenant_id}
+                    )
+                    services["ACP.TenantMembership"].get.assert_awaited_once_with(
+                        {"tenant_id": tenant_id, "user_id": user_id}
+                    )
+                    if status != "active":
+                        services["ACP.PermissionEntry"].list.assert_not_awaited()
+                        services["ACP.GlobalPermissionEntry"].list.assert_not_awaited()
+
+    async def test_inactive_tenants_deny_even_global_administrators(self) -> None:
+        for is_admin in (False, True):
+            for tenant in (
+                None,
+                SimpleNamespace(status="suspended", deleted_at=None),
+                SimpleNamespace(status=None, deleted_at=None),
+                SimpleNamespace(status="active", deleted_at="deleted"),
+            ):
+                with self.subTest(is_admin=is_admin, tenant=tenant):
+                    svc, services = self._granted_service(global_grant=True)
+                    services["ACP.Tenant"].get.return_value = tenant
+                    if is_admin:
+                        services["ACP.User"].get_expanded.return_value = (
+                            SimpleNamespace(
+                                global_roles=[
+                                    SimpleNamespace(
+                                        namespace="com.vorso", name="administrator"
+                                    )
+                                ]
+                            )
+                        )
+
+                    self.assertFalse(
+                        await svc.has_permission(
+                            user_id=uuid.uuid4(),
+                            permission_object=":users",
+                            permission_type=":read",
+                            tenant_id=uuid.uuid4(),
+                            allow_global_admin=True,
+                        )
+                    )
+                    services["ACP.TenantMembership"].get.assert_not_awaited()
+                    services["ACP.GlobalPermissionEntry"].list.assert_not_awaited()
+
+    async def test_admin_membership_exemption_preserves_grant_policy(self) -> None:
+        for override in (False, True):
+            for grant in (False, True):
+                with self.subTest(override=override, grant=grant):
+                    svc, services = self._granted_service(global_grant=True)
+                    services["ACP.User"].get_expanded.return_value = SimpleNamespace(
+                        global_roles=[
+                            SimpleNamespace(namespace="com.vorso", name="administrator")
+                        ]
+                    )
+                    services["ACP.TenantMembership"].get.return_value = None
+                    services["ACP.GlobalPermissionEntry"].list.return_value = [
+                        SimpleNamespace(permitted=grant)
+                    ]
+
+                    permitted = await svc.has_permission(
+                        user_id=uuid.uuid4(),
+                        permission_object=":users",
+                        permission_type=":read",
+                        tenant_id=uuid.uuid4(),
+                        allow_global_admin=override,
+                    )
+
+                    self.assertEqual(permitted, override or grant)
+                    services["ACP.TenantMembership"].get.assert_not_awaited()
+
+    async def test_warm_permission_cache_respects_membership_and_tenant_changes(
+        self,
+    ) -> None:
+        svc, services = self._granted_service()
+        user_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        tenant = services["ACP.Tenant"].get.return_value
+        membership = services["ACP.TenantMembership"].get.return_value
+
+        for tenant_status, membership_status, expected in (
+            ("active", "active", True),
+            ("active", "suspended", False),
+            ("active", "active", True),
+            ("suspended", "active", False),
+            ("active", "active", True),
+        ):
+            tenant.status = tenant_status
+            membership.status = membership_status
+            self.assertEqual(
+                await svc.has_permission(
+                    user_id=user_id,
+                    permission_object=":users",
+                    permission_type=":read",
+                    tenant_id=tenant_id,
+                ),
+                expected,
+            )
+
+        services["ACP.PermissionObject"].get.assert_awaited_once()
+        services["ACP.PermissionType"].get.assert_awaited_once()
+        self.assertEqual(services["ACP.Tenant"].get.await_count, 5)
+
+    async def test_any_tenant_access_excludes_suspended_memberships(self) -> None:
+        svc, services = self._granted_service()
+        revoked_tenant_id = uuid.uuid4()
+        active_tenant_id = uuid.uuid4()
+        memberships = {
+            revoked_tenant_id: SimpleNamespace(status="suspended"),
+            active_tenant_id: SimpleNamespace(status="active"),
+        }
+        services["ACP.TenantMembership"].get.side_effect = (
+            lambda where: memberships[where["tenant_id"]]
+        )
+        services["ACP.RoleMembership"].get_role_memberships_by_user.return_value = [
+            SimpleNamespace(tenant_id=revoked_tenant_id, role_id=uuid.uuid4()),
+            SimpleNamespace(tenant_id=active_tenant_id, role_id=uuid.uuid4()),
+        ]
+
+        for expected in (True, False):
+            self.assertEqual(
+                await svc.has_permission_for_any_tenant(
+                    user_id=uuid.uuid4(),
+                    permission_object=":users",
+                    permission_type=":read",
+                ),
+                expected,
+            )
+            memberships[active_tenant_id].status = "suspended"
+
+        self.assertEqual(services["ACP.PermissionEntry"].list.await_count, 1)
 
     async def test_has_permission_for_any_tenant_uses_tenant_role_grant(
         self,

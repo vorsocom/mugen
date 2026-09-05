@@ -604,7 +604,13 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
         ):
             bypass_result = await wrapped_admin_bypass(entity_set="Users")
         self.assertEqual(bypass_result["allow_global_admin"], True)
-        auth_svc.has_permission.assert_not_awaited()
+        auth_svc.has_permission.assert_awaited_once_with(
+            user_id=user_id,
+            permission_object=resource.perm_obj,
+            permission_type="com.test.admin:read",
+            tenant_id=None,
+            allow_global_admin=True,
+        )
 
         with (
             patch.object(auth_decorator, "abort", side_effect=_abort_raiser),
@@ -754,6 +760,65 @@ class TestMugenAcpAuthDecorator(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(_AbortCalled) as ex:
                 await denied(entity_set="Users")
             self.assertEqual(ex.exception.code, 403)
+
+    async def test_permission_required_admin_override_uses_tenant_guard(self) -> None:
+        user_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        admin_user = SimpleNamespace(
+            id=user_id,
+            global_roles=[
+                SimpleNamespace(namespace="com.test.admin", name="administrator")
+            ],
+        )
+        resource = SimpleNamespace(
+            capabilities=_FakeCapabilities(allowed_ops={"read"}),
+            permissions=SimpleNamespace(read="com.test.admin:read"),
+            perm_obj="com.test.admin:user",
+        )
+        auth_svc = SimpleNamespace(has_permission=AsyncMock(return_value=False))
+        endpoint = AsyncMock()
+        wrapped = auth_decorator.permission_required(
+            permission_type="com.test.admin:read",
+            tenant_kw="tenant_id",
+            allow_global_admin=True,
+            config_provider=self._config,
+            logger_provider=lambda: Mock(),
+            registry_provider=lambda: _FakeRegistry(resource=resource),
+            auth_provider=lambda: auth_svc,
+        )(endpoint)
+
+        with (
+            patch.object(auth_decorator, "abort", side_effect=_abort_raiser),
+            patch.object(
+                auth_decorator,
+                "_decode_access_token",
+                return_value={"sub": str(user_id)},
+            ),
+            patch.object(
+                auth_decorator,
+                "_require_user_from_token",
+                new=AsyncMock(return_value=admin_user),
+            ),
+        ):
+            for tenant_kwargs in ({}, {"tenant_id": "not-a-uuid"}):
+                with self.subTest(tenant_kwargs=tenant_kwargs):
+                    with self.assertRaises(_AbortCalled) as ex:
+                        await wrapped(entity_set="Users", **tenant_kwargs)
+                    self.assertEqual(ex.exception.code, 400)
+                    auth_svc.has_permission.assert_not_awaited()
+
+            with self.assertRaises(_AbortCalled) as ex:
+                await wrapped(entity_set="Users", tenant_id=str(tenant_id))
+            self.assertEqual(ex.exception.code, 403)
+
+        auth_svc.has_permission.assert_awaited_once_with(
+            user_id=user_id,
+            permission_object=resource.perm_obj,
+            permission_type="com.test.admin:read",
+            tenant_id=tenant_id,
+            allow_global_admin=True,
+        )
+        endpoint.assert_not_awaited()
 
     async def test_permission_required_enforces_handoff_operator_tenant_scope(
         self,
