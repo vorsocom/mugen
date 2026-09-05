@@ -514,7 +514,10 @@ class TestMugenRgqlExpandAsync(unittest.IsolatedAsyncioTestCase):
             levels_remaining=1,
         )
 
-        self.assertEqual(parent.children, [{"Name": "Alpha"}, {"Name": "Beta"}])  # type: ignore[attr-defined]
+        self.assertEqual(
+            parent.children,  # type: ignore[attr-defined]
+            [{"Name": "Alpha"}, {"Name": "Beta"}],
+        )
         self.assertIsNotNone(child_service.last_list_kwargs)
         self.assertEqual(child_service.last_list_kwargs["limit"], 10)
         self.assertEqual(child_service.last_list_kwargs["offset"], 0)
@@ -748,11 +751,15 @@ class TestMugenRgqlExpandAsync(unittest.IsolatedAsyncioTestCase):
             depth=0,
             levels_remaining=1,
         )
-        self.assertEqual(parent.children, [{"Id": 12, "ParentId": 1, "Name": "Solo"}])  # type: ignore[attr-defined]
+        self.assertEqual(
+            parent.children,  # type: ignore[attr-defined]
+            [{"Id": 12, "ParentId": 1, "Name": "Solo"}],
+        )
 
         # Force defensive branch where collection filter groups are empty.
         with patch(
-            "mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_expand.apply_to_filter_groups",
+            "mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_expand."
+            "apply_to_filter_groups",
             return_value=[],
         ):
             await expand_navs_recursive(
@@ -871,8 +878,14 @@ class TestMugenRgqlExpandAsync(unittest.IsolatedAsyncioTestCase):
             levels_remaining=1,
         )
 
-        self.assertEqual(roots[0].children, [{"Name": "One"}])  # type: ignore[attr-defined]
-        self.assertEqual(roots[1].children, [{"Name": "Two"}])  # type: ignore[attr-defined]
+        self.assertEqual(
+            roots[0].children,  # type: ignore[attr-defined]
+            [{"Name": "One"}],
+        )
+        self.assertEqual(
+            roots[1].children,  # type: ignore[attr-defined]
+            [{"Name": "Two"}],
+        )
 
         self.assertEqual(child_service.last_partition_kwargs["fk_field"], "parent_id")
         self.assertEqual(child_service.last_partition_kwargs["fk_values"], [10, 11])
@@ -918,8 +931,14 @@ class TestMugenRgqlExpandAsync(unittest.IsolatedAsyncioTestCase):
             levels_remaining=1,
         )
 
-        self.assertEqual(roots[0].owner, {"Name": "BossA"})  # type: ignore[attr-defined]
-        self.assertEqual(roots[1].owner, {"Name": "BossB"})  # type: ignore[attr-defined]
+        self.assertEqual(
+            roots[0].owner,  # type: ignore[attr-defined]
+            {"Name": "BossA"},
+        )
+        self.assertEqual(
+            roots[1].owner,  # type: ignore[attr-defined]
+            {"Name": "BossB"},
+        )
         self.assertFalse(hasattr(roots[2], "owner"))
 
         self.assertIn("name", child_service.last_list_kwargs["columns"])
@@ -1040,7 +1059,8 @@ class TestMugenRgqlExpandAsync(unittest.IsolatedAsyncioTestCase):
         )
         roots = [_Entity(id=10), _Entity(id=11)]
         with patch(
-            "mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_expand._augment_query_columns_for_nested_expands",
+            "mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_expand."
+            "_augment_query_columns_for_nested_expands",
             return_value=["name"],
         ):
             await expand_navs_bulk(
@@ -1150,12 +1170,16 @@ class TestMugenRgqlExpandAsync(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIn("id", child_service.last_list_kwargs["columns"])
-        self.assertEqual(roots[0].owner, {"Id": 42, "Name": "Owner"})  # type: ignore[attr-defined]
+        self.assertEqual(
+            roots[0].owner,  # type: ignore[attr-defined]
+            {"Id": 42, "Name": "Owner"},
+        )
         self.assertFalse(hasattr(roots[1], "owner"))
 
         # Force defensive branch where single-path filter groups are empty.
         with patch(
-            "mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_expand.apply_to_filter_groups",
+            "mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_expand."
+            "apply_to_filter_groups",
             return_value=[],
         ):
             await expand_navs_bulk(
@@ -1177,6 +1201,40 @@ class TestMugenRgqlExpandAsync(unittest.IsolatedAsyncioTestCase):
                 depth=0,
                 levels_remaining=1,
             )
+
+    async def test_expand_normalization_uses_context_budget_before_storage(
+        self,
+    ) -> None:
+        from mugen.core.utility.rgql.expr_parser import parse_rgql_expr
+
+        service = _FakeNavService()
+        ctx = self._make_context(
+            adapter=RGQLToRelationalAdapter(),
+            service_resolver=lambda _: service,
+            max_filter_terms=7,
+        )
+        item = ExpandItem(
+            path="Children",
+            filter=parse_rgql_expr("(A eq 1 or A eq 2) and (B eq 1 or B eq 2)"),
+        )
+        for expand in (expand_navs_recursive, expand_navs_bulk):
+            roots = (
+                {"root_entity": _Entity(id=1)}
+                if expand is expand_navs_recursive
+                else {"root_entities": [_Entity(id=1)]}
+            )
+            with self.subTest(expand=expand.__name__):
+                with self.assertRaisesRegex(RGQLExpandError, r"Max filter terms \(7\)"):
+                    await expand(
+                        **roots,
+                        ctx=ctx,
+                        expand_item=item,
+                        current_type_name="NS.Parent",
+                        depth=0,
+                        levels_remaining=1,
+                    )
+        self.assertIsNone(service.last_list_kwargs)
+        self.assertIsNone(service.last_partition_kwargs)
 
 
 if __name__ == "__main__":

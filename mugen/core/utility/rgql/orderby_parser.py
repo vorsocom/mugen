@@ -9,6 +9,7 @@ the semantic checker or execution engine.
 from dataclasses import dataclass
 from typing import List
 
+from mugen.core.utility.rgql.query_budget import current_parse_budget, parser_scope
 from mugen.core.utility.rgql.expr_parser import parse_rgql_expr, ParseError
 from mugen.core.utility.rgql.ast import Expr
 
@@ -80,6 +81,7 @@ def _split_commas_top_level(text: str) -> List[str]:
     return parts
 
 
+@parser_scope
 def parse_orderby(text: str) -> List[OrderByItem]:
     """
     Parse $orderby into a list of OrderByItem.
@@ -110,6 +112,8 @@ def parse_orderby(text: str) -> List[OrderByItem]:
             raise ParseError(f"Missing expression in $orderby segment: {part!r}")
 
         expr = parse_rgql_expr(expr_text)
-        items.append(OrderByItem(expr=expr, direction=direction))
+        items.append(
+            current_parse_budget().node(OrderByItem, expr=expr, direction=direction)
+        )
 
     return items

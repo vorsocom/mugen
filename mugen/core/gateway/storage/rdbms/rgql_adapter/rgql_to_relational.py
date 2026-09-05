@@ -52,6 +52,7 @@ from mugen.core.utility.rgql.ast import (
     MemberAccess,
     FunctionCall,
 )
+from mugen.core.utility.rgql.query_budget import DEFAULT_MAX_TERMS
 from mugen.core.utility.rgql.boolean_normalizer import to_dnf_clauses
 from mugen.core.utility.rgql.url_parser import RGQLQueryOptions, OrderByItem
 
@@ -123,6 +124,7 @@ class RGQLToRelationalAdapter:
         opts: RGQLQueryOptions,
         *,
         path_planner: PathPlanner | None = None,
+        max_filter_terms: int = DEFAULT_MAX_TERMS,
     ) -> Tuple[Sequence[FilterGroup], Sequence[OrderClause], int | None, int | None]:
         """
         Convert RGQLQueryOptions into (filter_groups, order_by, limit, offset).
@@ -137,6 +139,7 @@ class RGQLToRelationalAdapter:
             filter_groups = self._filter_to_groups(
                 opts.filter,
                 path_planner=path_planner,
+                max_filter_terms=max_filter_terms,
             )
 
         order_by = self._orderby_to_order_by(
@@ -157,10 +160,11 @@ class RGQLToRelationalAdapter:
         expr: Expr,
         *,
         path_planner: PathPlanner | None = None,
+        max_filter_terms: int = DEFAULT_MAX_TERMS,
     ) -> List[FilterGroup]:
         groups: List[FilterGroup] = []
 
-        dnf_clauses = to_dnf_clauses(expr)
+        dnf_clauses = to_dnf_clauses(expr, max_terms=max_filter_terms)
         for clause in dnf_clauses:
             where: Dict[str, Any] = {}
             text_filters: List[TextFilter] = []

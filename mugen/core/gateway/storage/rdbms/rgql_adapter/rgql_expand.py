@@ -311,6 +311,7 @@ async def expand_navs_recursive(
         child_filter_groups, child_order_by, child_limit, child_offset = (
             ctx.adapter.build_relational_query(
                 child_opts,
+                max_filter_terms=ctx.max_filter_terms,
                 path_planner=(
                     lambda path: (
                         ctx.nav_path_planner(nav_type.name, path)
@@ -595,6 +596,7 @@ async def expand_navs_bulk(
         child_filter_groups, child_order_by, child_limit, child_offset = (
             ctx.adapter.build_relational_query(
                 child_opts,
+                max_filter_terms=ctx.max_filter_terms,
                 path_planner=(
                     lambda path: (
                         ctx.nav_path_planner(nav_type.name, path)
