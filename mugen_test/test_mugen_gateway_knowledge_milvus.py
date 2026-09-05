@@ -313,6 +313,9 @@ class TestMugenGatewayKnowledgeMilvus(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIs(first_client, second_client)
 
+        gateway._config.transformers.hf.token = (  # pylint: disable=protected-access
+            "test-hf-token"
+        )
         with patch(
             "mugen.core.gateway.knowledge.milvus.SentenceTransformer"
         ) as transformer:
@@ -322,6 +325,7 @@ class TestMugenGatewayKnowledgeMilvus(unittest.IsolatedAsyncioTestCase):
             model_name_or_path="all-mpnet-base-v2",
             processor_kwargs={"clean_up_tokenization_spaces": False},
             cache_folder="/tmp/hf",
+            token="test-hf-token",
         )
 
         gateway._encoder = None  # pylint: disable=protected-access

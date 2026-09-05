@@ -390,9 +390,18 @@ class TestMugenGatewayKnowledgePgVector(unittest.IsolatedAsyncioTestCase):
 
     async def test_encoder_build_get_and_encode_branches(self) -> None:
         gateway, _, _ = _build_gateway(config=_make_config())
+        gateway._config.transformers.hf.token = (  # pylint: disable=protected-access
+            "test-hf-token"
+        )
         with patch("mugen.core.gateway.knowledge.pgvector.SentenceTransformer") as transformer:
             built = gateway._build_encoder()  # pylint: disable=protected-access
             self.assertIs(built, transformer.return_value)
+            transformer.assert_called_once_with(
+                model_name_or_path="all-mpnet-base-v2",
+                processor_kwargs={"clean_up_tokenization_spaces": False},
+                cache_folder="/tmp/hf",
+                token="test-hf-token",
+            )
 
         sentinel_encoder = object()
         gateway._encoder = sentinel_encoder  # pylint: disable=protected-access

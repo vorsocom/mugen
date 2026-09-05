@@ -21,7 +21,11 @@ from mugen.core.contract.gateway.knowledge import (
     KnowledgeSearchResult,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
-from mugen.core.gateway.knowledge.common import apply_query_scope, selector_metadata
+from mugen.core.gateway.knowledge.common import (
+    apply_query_scope,
+    resolve_hugging_face_token,
+    selector_metadata,
+)
 from mugen.core.utility.config_value import (
     parse_bool_flag,
     parse_nonnegative_finite_float,
@@ -455,6 +459,7 @@ class WeaviateKnowledgeGateway(IKnowledgeGateway):
                 "clean_up_tokenization_spaces": False,
             },
             cache_folder=getattr(self._section("transformers", "hf"), "home", None),
+            token=resolve_hugging_face_token(self._section("transformers", "hf")),
         )
 
     async def _get_encoder(self) -> SentenceTransformer:
