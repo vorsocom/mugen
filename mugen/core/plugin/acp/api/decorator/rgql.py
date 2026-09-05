@@ -37,10 +37,16 @@ from mugen.core.utility.rgql import ParseError as RGQLParseError
 from mugen.core.utility.rgql import parse_rgql_url, RGQLQueryOptions, SemanticChecker
 from mugen.core.utility.rgql import SemanticError as RGQLSemanticError
 from mugen.core.utility.rgql.model import EdmType
+from mugen.core.utility.rgql.query_budget import (
+    DEFAULT_MAX_TERMS,
+    QueryBudgetError,
+    check_normalization_budget,
+)
 from mugen.core.utility.rgql.search_parser import (
     SearchBinary,
     SearchExpr,
     SearchNot,
+    SearchParseError,
     SearchTerm,
 )
 from mugen.core.gateway.storage.rdbms.rgql_adapter.error import RGQLExpandError
@@ -105,17 +111,42 @@ def _merge_filter_groups(
     )
 
 
+def _filter_term_count(groups: Sequence[FilterGroup]) -> int:
+    """Count all stored predicates without constructing another group."""
+    return sum(
+        len(group.where)
+        + len(group.text_filters)
+        + len(group.scalar_filters)
+        + len(group.related_text_filters)
+        + len(group.related_scalar_filters)
+        for group in groups
+    )
+
+
 def _and_filter_groups(
     left: Sequence[FilterGroup] | None,
     right: Sequence[FilterGroup] | None,
+    *,
+    max_filter_terms: int = DEFAULT_MAX_TERMS,
 ) -> list[FilterGroup]:
     """Combine two DNF filter group sets with logical AND."""
     if not left:
+        check_normalization_budget(
+            len(right or []), _filter_term_count(right or []), max_filter_terms
+        )
         return list(right or [])
 
     if not right:
+        check_normalization_budget(
+            len(left), _filter_term_count(left), max_filter_terms
+        )
         return list(left)
 
+    check_normalization_budget(
+        len(left) * len(right),
+        _filter_term_count(left) * len(right) + _filter_term_count(right) * len(left),
+        max_filter_terms,
+    )
     return [
         _merge_filter_groups(left_group, right_group)
         for left_group in left
@@ -129,8 +160,10 @@ def _search_term_filter_groups(
     search_fields: Sequence[str],
     edm_type: EdmType,
     path_planner: PathPlanner,
+    max_filter_terms: int = DEFAULT_MAX_TERMS,
 ) -> list[FilterGroup]:
     """Build OR filter groups for a single configured search term."""
+    check_normalization_budget(len(search_fields), len(search_fields), max_filter_terms)
     groups: list[FilterGroup] = []
     for field in search_fields:
         path_plan = path_planner(field)
@@ -176,6 +209,7 @@ def _search_filter_groups(
     search_fields: Sequence[str],
     edm_type: EdmType,
     path_planner: PathPlanner,
+    max_filter_terms: int = DEFAULT_MAX_TERMS,
 ) -> list[FilterGroup]:
     """Translate a configured RGQL $search AST to DNF filter groups."""
     if isinstance(expr, SearchTerm):
@@ -184,6 +218,7 @@ def _search_filter_groups(
             search_fields=search_fields,
             edm_type=edm_type,
             path_planner=path_planner,
+            max_filter_terms=max_filter_terms,
         )
 
     if isinstance(expr, SearchBinary):
@@ -192,17 +227,24 @@ def _search_filter_groups(
             search_fields=search_fields,
             edm_type=edm_type,
             path_planner=path_planner,
+            max_filter_terms=max_filter_terms,
         )
         right = _search_filter_groups(
             expr.right,
             search_fields=search_fields,
             edm_type=edm_type,
             path_planner=path_planner,
+            max_filter_terms=max_filter_terms,
         )
         if expr.op == "or":
+            check_normalization_budget(
+                len(left) + len(right),
+                _filter_term_count(left) + _filter_term_count(right),
+                max_filter_terms,
+            )
             return [*left, *right]
         if expr.op == "and":
-            return _and_filter_groups(left, right)
+            return _and_filter_groups(left, right, max_filter_terms=max_filter_terms)
 
     if isinstance(expr, SearchNot):
         raise ValueError("$search not expressions are not supported.")
@@ -533,7 +575,12 @@ def rgql_enabled(
                 try:
                     rgql_url = parse_rgql_url(synthetic_url)
                     semantic_checker.check_url(rgql_url)
-                except (RGQLParseError, RGQLSemanticError) as exc:
+                except (
+                    RGQLParseError,
+                    RGQLSemanticError,
+                    QueryBudgetError,
+                    SearchParseError,
+                ) as exc:
                     current_app.logger.debug(
                         f"Invalid RGQL query on {entity_set}: {exc}"
                     )
@@ -738,6 +785,7 @@ def rgql_enabled(
                         filter_groups, order_by, limit, offset = (
                             adapter.build_relational_query(
                                 opts,
+                                max_filter_terms=max_filter_terms,
                                 path_planner=lambda path: _plan_nav_path(
                                     edm_type.name, path
                                 ),
@@ -754,6 +802,7 @@ def rgql_enabled(
                         try:
                             search_filter_groups = _search_filter_groups(
                                 search_expr,
+                                max_filter_terms=max_filter_terms,
                                 search_fields=search_fields,
                                 edm_type=edm_type,
                                 path_planner=lambda path: _plan_nav_path(
@@ -763,6 +812,7 @@ def rgql_enabled(
                             filter_groups = _and_filter_groups(
                                 filter_groups,
                                 search_filter_groups,
+                                max_filter_terms=max_filter_terms,
                             )
                         except ValueError as exc:
                             abort(400, str(exc))

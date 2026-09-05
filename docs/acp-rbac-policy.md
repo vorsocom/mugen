@@ -115,6 +115,21 @@ Authorization of `$apply` and `$compute` expressions does not add execution
 support for those options; the relational adapter currently executes filters,
 ordering, and paging only. Root `$search` is translated separately by ACP.
 
+Query construction also has fixed safety ceilings: 32,768 characters per URL or
+standalone parser input, 512 constructed nodes shared across the URL (including
+aliases and nested options), 32 active parser descent scopes, and 64 expression
+tree levels. Expression lexing allows at most 2,048 tokens and JSON literals at
+most 32 levels. Parser descent scopes include grammar calls, so they do not equal
+a count of literal parentheses. Previously accepted long or deeply nested queries
+can now return `400` before semantic checking or storage access.
+
+`acp.rgql_max_filter_terms` is enforced before allocating AND products and OR unions
+for root filters, search, their combination, and recursive/bulk expansion filters.
+It bounds both group count and repeated predicates, including intermediate
+normalization results. A small input expression may therefore exceed this limit,
+even if storage mapping would later merge duplicate equalities. Final checks also
+account for server-added tenant, deletion, and relationship predicates.
+
 ## Revocation and Long-Lived Responses
 
 Tenant state, membership state, and authorization decisions are read afresh for

@@ -8,6 +8,7 @@ from types import ModuleType, SimpleNamespace
 import sys
 import unittest
 import uuid
+from urllib.parse import urlencode
 from unittest.mock import AsyncMock, Mock, patch
 
 from quart import Quart
@@ -2666,3 +2667,63 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
                     allow_global_admin=True,
                 )
         self.assertEqual(result["rgql"].values[0]["Name"], "Alice")
+
+    async def test_budget_rejections_precede_storage_queries(self) -> None:
+        async def endpoint(**kwargs):
+            return kwargs
+
+        service = SimpleNamespace(
+            list=AsyncMock(return_value=[]),
+            count=AsyncMock(return_value=0),
+        )
+        registry = _FakeRegistry(
+            service=service,
+            rgql_enabled=True,
+            search_fields=("Name",),
+        )
+        auth = SimpleNamespace(has_permission=AsyncMock(return_value=True))
+        logger = SimpleNamespace(debug=Mock(), error=Mock())
+        wrapped = rgql_mod.rgql_enabled(
+            config_provider=_config,
+            logger_provider=lambda: logger,
+            auth_provider=lambda: auth,
+            registry_provider=lambda: registry,
+        )(endpoint)
+        cases = [
+            {
+                "$filter": " and ".join(
+                    "(Name eq 'a' or Name eq 'b')" for _ in range(12)
+                )
+            },
+            {"$search": " and ".join("(a or b)" for _ in range(12))},
+            {
+                "$filter": "Name eq 'a' or Name eq 'b' or Name eq 'c'",
+                "$search": "d or e or f",
+            },
+            {"$filter": "(" * 100 + "true" + ")" * 100},
+            {"$search": "(" * 100 + "word" + ")" * 100},
+            {"$search": '"unterminated'},
+        ]
+        with (
+            patch.object(rgql_mod, "SemanticChecker", new=_FakeSemanticChecker),
+            patch.object(rgql_mod, "abort", side_effect=_abort_raiser),
+            patch.object(
+                rgql_mod,
+                "make_default_where_provider",
+                return_value=lambda _: {},
+            ),
+        ):
+            for options in cases:
+                with self.subTest(options=options):
+                    async with self.app.test_request_context(
+                        "/api/core/acp/v1/Users?" + urlencode(options), method="GET"
+                    ):
+                        with self.assertRaises(_AbortCalled) as caught:
+                            await wrapped(
+                                entity_set="Users",
+                                entity_id=None,
+                                auth_user=str(uuid.uuid4()),
+                            )
+                        self.assertEqual(caught.exception.code, 400)
+        service.list.assert_not_awaited()
+        service.count.assert_not_awaited()
