@@ -20,7 +20,10 @@ matrix-nio = "^0.25.2"
 qdrant-client = "^1.16.0"
 quart = "^0.20.0"
 sentence-transformers = "^5.6.0"
-torch = "2.13.0"
+torch = [
+    {version = "2.13.0+cpu", source = "pytorch-cpu", markers = "sys_platform != 'darwin'"},
+    {version = "2.13.0", markers = "sys_platform == 'darwin'"},
+]
 tomlkit = "^0.13.3"
 peewee = "^3.18.3"
 python-olm = "^3.2.16"
@@ -31,7 +34,7 @@ sqlalchemy = "^2.0.44"
 alembic = "^1.17.2"
 pyjwt = "^2.10.1"
 quart-cors = "^0.8.0"
-psycopg = "^3.3.2"
+psycopg = {extras = ["binary"], version = "^3.3.2"}
 argon2-cffi = "^25.1.0"
 pydantic = {extras = ["email"], version = "^2.12.5"}
 pinecone = {extras = ["asyncio"], version = "^8.1.0"}
@@ -40,6 +43,11 @@ cryptography = "^50.0.0"
 openai = "^1.98.0"
 google-auth = "^2.43.0"
 cerebras-cloud-sdk = "^1.67.0"
+
+[[tool.poetry.source]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+priority = "explicit"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0.3"
