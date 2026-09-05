@@ -69,6 +69,57 @@ Build the image:
 docker build -t mugen-api .
 ```
 
+The runtime dependency set comes directly from `poetry.lock`, including
+`torch==2.13.0+cpu` from the explicit PyTorch CPU source and the Psycopg binary
+extra. Linux and Windows development installs use the same CPU build; macOS
+keeps the native PyTorch distribution. The build retains exported hashes,
+installs without dependency re-resolution, runs `pip check`, and verifies
+every installed application package against the export and lock. It also
+checks that imported Torch is a working CPU build. An unavailable CPU wheel
+fails the build; there is no fallback to an older version.
+
+Verify and scan the final image before deployment, preserving the image ID,
+inventory, and complete vulnerability report together:
+
+```bash
+mkdir -p .tmp/container-security
+docker image inspect mugen-api > .tmp/container-security/image.json
+docker run --rm --entrypoint python mugen-api scripts/verify_container_inventory.py
+docker run --rm --entrypoint python mugen-api -m pip inspect \
+  > .tmp/container-security/python-inventory.json
+trivy image --image-src docker --scanners vuln --format json \
+  --output .tmp/container-security/trivy.json mugen-api
+```
+
+The image also retains `/app/container-requirements.txt` and
+`/app/container-python-inventory.json`. A lockfile scan alone cannot replace
+the final-image scan, which includes operating system packages. Review the
+scanner's findings and database age; a successful scan process does not by
+itself mean the image has no vulnerabilities. See the
+[Trivy container image documentation](https://trivy.dev/docs/latest/target/container_image/).
+The [SEC-06 image review](security/sec06-container-review.md) records the
+verified image digest and residual findings from the remediation scan.
+
+The cited [PyTorch checkpoint advisory](https://github.com/pytorch/pytorch/security/advisories/GHSA-63cw-57p8-fm3p)
+affects versions through 2.9.1 and is fixed in 2.10.0. The container uses the
+reviewed 2.13.0 CPU release; this version choice is not an assertion about the
+fixed versions of unrelated advisories.
+
+All six embedding gateways require safetensors for Transformer weights and
+disable remote model code execution. The default
+`sentence-transformers/all-mpnet-base-v2` model
+uses immutable commit `e8c3b32edf5434bc2275fc9bab85f82640a19130`, which contains
+`model.safetensors`. Custom models require an operator-reviewed full commit
+SHA in the provider's `encoder.revision` setting alongside `encoder.model`.
+Branch names, tags, and missing revisions on custom models fail before loading.
+Local paths and existing directories shadowing repository names are rejected
+because the loader ignores revision pins for local files. Changing the model
+requires reviewing its repository, modules, and serialization files. Custom
+modules can have their own weight loaders; the Transformer safetensors setting
+does not override those loaders. Prefer safetensors throughout a custom model;
+a commit SHA identifies content but does not establish that content is trusted.
+Existing configurations using the default model inherit its built-in pin.
+
 Run the local Compose smoke path:
 
 ```bash

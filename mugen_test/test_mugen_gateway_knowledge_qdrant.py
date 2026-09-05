@@ -238,10 +238,22 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
             self.assertIs(built, transformer.return_value)
             transformer.assert_called_with(
                 model_name_or_path="all-mpnet-base-v2",
+                revision="e8c3b32edf5434bc2275fc9bab85f82640a19130",
+                trust_remote_code=False,
+                model_kwargs={"use_safetensors": True},
                 processor_kwargs={"clean_up_tokenization_spaces": False},
                 cache_folder="/tmp/hf",
                 token="test-hf-token",
             )
+
+    def test_unpinned_custom_encoder_fails_before_loading_model(self) -> None:
+        config = _make_config()
+        config.qdrant.encoder.model = "trusted/custom-model"
+        gateway, _, _, _ = _build_gateway(config=config)
+        with patch("mugen.core.gateway.knowledge.qdrant.SentenceTransformer") as transformer:
+            with self.assertRaisesRegex(RuntimeError, "encoder.revision"):
+                gateway._build_encoder()  # pylint: disable=protected-access
+            transformer.assert_not_called()
 
     def test_resolve_encoder_model_name_falls_back_for_invalid_values(self) -> None:
         gateway, _, _, _ = _build_gateway(config=_make_config())

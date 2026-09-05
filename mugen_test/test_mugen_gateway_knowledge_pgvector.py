@@ -398,6 +398,9 @@ class TestMugenGatewayKnowledgePgVector(unittest.IsolatedAsyncioTestCase):
             self.assertIs(built, transformer.return_value)
             transformer.assert_called_once_with(
                 model_name_or_path="all-mpnet-base-v2",
+                revision="e8c3b32edf5434bc2275fc9bab85f82640a19130",
+                trust_remote_code=False,
+                model_kwargs={"use_safetensors": True},
                 processor_kwargs={"clean_up_tokenization_spaces": False},
                 cache_folder="/tmp/hf",
                 token="test-hf-token",
