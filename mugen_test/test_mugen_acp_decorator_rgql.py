@@ -280,6 +280,93 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.app = Quart("test-acp-rgql-decorator")
 
+    async def test_collection_pagination_applies_to_every_query_shape(self) -> None:
+        async def _endpoint(**kwargs):
+            return kwargs
+
+        service = SimpleNamespace(
+            list=AsyncMock(return_value=[]),
+            count=AsyncMock(return_value=0),
+        )
+        registry = _FakeRegistry(service=service)
+        config = _config()
+        wrapped = rgql_mod.rgql_enabled(
+            config_provider=lambda: config,
+            logger_provider=lambda: SimpleNamespace(debug=Mock(), error=Mock()),
+            auth_provider=lambda: SimpleNamespace(
+                has_permission=AsyncMock(return_value=True)
+            ),
+            registry_provider=lambda: registry,
+        )(_endpoint)
+
+        with (
+            patch.object(rgql_mod, "SemanticChecker", new=_FakeSemanticChecker),
+            patch.object(rgql_mod, "abort", side_effect=_abort_raiser),
+            patch.object(
+                rgql_mod,
+                "make_default_where_provider",
+                return_value=lambda _edm_type_name: {},
+            ),
+        ):
+            for query, expected_limit, expected_offset in (
+                ("", 3, 0),
+                ("?", 3, 0),
+                ("?tracking=example", 3, 0),
+                ("?$select=Name", 3, 0),
+                ("?$count=true", 3, 0),
+                ("?$top=0", 0, 0),
+                ("?$top=20&$skip=50", 20, 50),
+            ):
+                with self.subTest(query=query):
+                    service.list.reset_mock()
+                    async with self.app.test_request_context(
+                        f"/api/core/acp/v1/Users{query}", method="GET"
+                    ):
+                        result = await wrapped(
+                            entity_set="Users",
+                            entity_id=None,
+                            auth_user=str(uuid.uuid4()),
+                        )
+                    self.assertEqual(result["rgql"].limit, expected_limit)
+                    service.list.assert_awaited_once()
+                    self.assertEqual(
+                        service.list.await_args.kwargs["limit"], expected_limit
+                    )
+                    self.assertEqual(
+                        service.list.await_args.kwargs["offset"], expected_offset
+                    )
+
+            for query in ("?$top=21", "?$skip=51"):
+                with self.subTest(query=query):
+                    service.list.reset_mock()
+                    async with self.app.test_request_context(
+                        f"/api/core/acp/v1/Users{query}", method="GET"
+                    ):
+                        with self.assertRaises(_AbortCalled) as raised:
+                            await wrapped(
+                                entity_set="Users",
+                                entity_id=None,
+                                auth_user=str(uuid.uuid4()),
+                            )
+                    self.assertEqual(raised.exception.code, 400)
+                    service.list.assert_not_awaited()
+
+            config.acp.rgql_default_top = 21
+            for query in ("", "?", "?tracking=example", "?$select=Name"):
+                with self.subTest(overlarge_default=query):
+                    service.list.reset_mock()
+                    async with self.app.test_request_context(
+                        f"/api/core/acp/v1/Users{query}", method="GET"
+                    ):
+                        with self.assertRaises(_AbortCalled) as raised:
+                            await wrapped(
+                                entity_set="Users",
+                                entity_id=None,
+                                auth_user=str(uuid.uuid4()),
+                            )
+                    self.assertEqual(raised.exception.code, 400)
+                    service.list.assert_not_awaited()
+
     async def test_entity_soft_deleted_reference_filter_selection(self) -> None:
         async def _endpoint(**kwargs):
             return kwargs

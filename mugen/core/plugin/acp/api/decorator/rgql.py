@@ -513,6 +513,12 @@ def rgql_enabled(
             semantic_checker = SemanticChecker(model=admin_edm_schema)
             edm_type = admin_edm_schema.get_type(registry.schema_index[entity_set])
 
+            default_top = getattr(config.acp, "rgql_default_top", 100)
+            max_top = getattr(config.acp, "rgql_max_top", 500)
+            max_skip = getattr(config.acp, "rgql_max_skip", 10_000)
+            limit: int | None = default_top if entity_id is None else None
+            offset: int | None = 0 if entity_id is None else None
+
             rgql_url = None
             raw_qs = (
                 request.query_string.decode("utf-8") if request.query_string else ""
@@ -538,15 +544,9 @@ def rgql_enabled(
             response_columns: list[str] | None = None
             filter_groups: Sequence[FilterGroup] | None = None
             order_by: Sequence[OrderClause] | None = None
-            limit: int | None = None
-            offset: int | None = None
             expand_paths: set[str] = set()
 
             # RGQL safety limits.
-            default_top = getattr(config.acp, "rgql_default_top", 100)
-            max_top = getattr(config.acp, "rgql_max_top", 500)
-            max_skip = getattr(config.acp, "rgql_max_skip", 10_000)
-
             max_select = getattr(config.acp, "rgql_max_select", 50)
             max_orderby = getattr(config.acp, "rgql_max_orderby", 5)
             max_expand_paths = getattr(config.acp, "rgql_max_expand_paths", 10)
@@ -770,17 +770,18 @@ def rgql_enabled(
                     if order_by and len(order_by) > max_orderby:
                         abort(400, f"Max $orderby ({max_orderby}) exceeded.")
 
-                    if limit is None:
-                        limit = default_top
+            if entity_id is None:
+                if limit is None:
+                    limit = default_top
 
-                    if limit > max_top:
-                        abort(400, f"$top exceeds max ({max_top}).")
+                if limit > max_top:
+                    abort(400, f"$top exceeds max ({max_top}).")
 
-                    if offset is None:
-                        offset = 0
+                if offset is None:
+                    offset = 0
 
-                    if offset > max_skip:
-                        abort(400, f"$skip exceeds max ({max_skip}).")
+                if offset > max_skip:
+                    abort(400, f"$skip exceeds max ({max_skip}).")
 
             svc_key = resource.service_key
             svc = registry.get_edm_service(svc_key)
