@@ -5,6 +5,7 @@ __all__ = ["SignalRestAPIIPCExtension"]
 import base64
 import hashlib
 import json
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +32,7 @@ from mugen.core.service.context_scope_resolution import (
 from mugen.core.utility.client_profile_runtime import (
     client_profile_id_from_ingress_route,
     client_profile_scope,
+    normalize_client_profile_id,
 )
 from mugen.core.service.ingress_routing import (
     DefaultIngressRoutingService,
@@ -273,12 +275,6 @@ class SignalRestAPIIPCExtension(IIPCExtension):
         return None
 
     @staticmethod
-    def _coerce_nonempty_string(value: object) -> str | None:
-        if isinstance(value, str) and value.strip() != "":
-            return value.strip()
-        return None
-
-    @staticmethod
     def _compose_message_context(
         *,
         ingress_route: dict,
@@ -328,6 +324,7 @@ class SignalRestAPIIPCExtension(IIPCExtension):
         *,
         account_number: str | None,
         webhook_payload: dict[str, Any],
+        authenticated_client_profile_id: uuid.UUID | None = None,
     ) -> dict[str, Any] | None:
         claims = {"account_number": account_number} if account_number is not None else {}
         resolution = await self._ingress_router().resolve(
@@ -337,6 +334,7 @@ class SignalRestAPIIPCExtension(IIPCExtension):
                 identifier_type="account_number",
                 identifier_value=account_number,
                 claims=claims,
+                authenticated_client_profile_id=authenticated_client_profile_id,
             )
         )
         try:
@@ -729,6 +727,21 @@ class SignalRestAPIIPCExtension(IIPCExtension):
                 state=PROCESSING_STATE_STOP,
             )
 
+    @staticmethod
+    def _authenticated_client_profile_id(payload: dict[str, Any]) -> uuid.UUID:
+        provider_context = payload.get("provider_context")
+        provider_context = provider_context if isinstance(provider_context, dict) else {}
+        profile_id = normalize_client_profile_id(
+            payload.get("client_profile_id")
+            or provider_context.get("client_profile_id")
+        )
+        if profile_id is None:
+            raise ContextScopeResolutionError(
+                reason_code="client_profile_mismatch",
+                detail="Signal delivery requires its receiving client profile.",
+            )
+        return profile_id
+
     async def _signal_restapi_event(self, request: IPCCommandRequest) -> None:
         payload = request.data
         if not isinstance(payload, dict):
@@ -750,6 +763,7 @@ class SignalRestAPIIPCExtension(IIPCExtension):
             )
             return
 
+        client_profile_id = self._authenticated_client_profile_id(payload)
         account_number = resolve_signal_account_number(
             payload=payload,
             config=self._config,
@@ -757,9 +771,13 @@ class SignalRestAPIIPCExtension(IIPCExtension):
         ingress_route = await self._resolve_ingress_route(
             account_number=account_number,
             webhook_payload=payload,
+            authenticated_client_profile_id=client_profile_id,
         )
         if ingress_route is None:
-            return
+            raise ContextScopeResolutionError(
+                reason_code="route_unresolved",
+                detail="Signal delivery could not resolve its route.",
+            )
 
         event_type = self._classify_event_type(envelope)
         if await self._is_duplicate_event(event_type, envelope):
@@ -767,14 +785,11 @@ class SignalRestAPIIPCExtension(IIPCExtension):
             return
 
         try:
-            route_client_profile_id = client_profile_id_from_ingress_route(ingress_route)
-            client_profile_id = self._coerce_nonempty_string(
-                payload.get("client_profile_id")
-            )
-            if client_profile_id is None and route_client_profile_id is not None:
-                client_profile_id = str(route_client_profile_id)
-            if client_profile_id is None:
-                return
+            if client_profile_id_from_ingress_route(ingress_route) != client_profile_id:
+                raise ContextScopeResolutionError(
+                    reason_code="client_profile_mismatch",
+                    detail="Signal route does not belong to its receiving client.",
+                )
             with client_profile_scope(client_profile_id):
                 if event_type in {"message", "reaction"}:
                     await self._handle_message_event(
@@ -803,30 +818,27 @@ class SignalRestAPIIPCExtension(IIPCExtension):
         if envelope is None:
             raise TypeError("Signal ingress payload.event must include params.envelope.")
 
-        provider_context = payload.get("provider_context")
-        provider_context = provider_context if isinstance(provider_context, dict) else {}
+        client_profile_id = self._authenticated_client_profile_id(payload)
         account_number = resolve_signal_account_number(
             payload=payload,
             config=self._config,
         )
-        ingress_route = None
-        if account_number is not None:
-            ingress_route = await self._resolve_ingress_route(
-                account_number=account_number,
-                webhook_payload=payload,
+        ingress_route = await self._resolve_ingress_route(
+            account_number=account_number,
+            webhook_payload=payload,
+            authenticated_client_profile_id=client_profile_id,
+        )
+        if ingress_route is None:
+            raise ContextScopeResolutionError(
+                reason_code="route_unresolved",
+                detail="Signal delivery could not resolve its route.",
             )
-        if ingress_route is None and isinstance(provider_context.get("ingress_route"), dict):
-            ingress_route = provider_context.get("ingress_route")
-
+        if client_profile_id_from_ingress_route(ingress_route) != client_profile_id:
+            raise ContextScopeResolutionError(
+                reason_code="client_profile_mismatch",
+                detail="Signal route does not belong to its receiving client.",
+            )
         event_type = str(payload.get("event_type") or self._classify_event_type(envelope))
-        route_client_profile_id = client_profile_id_from_ingress_route(ingress_route)
-        client_profile_id = self._coerce_nonempty_string(
-            payload.get("client_profile_id")
-        ) or self._coerce_nonempty_string(provider_context.get("client_profile_id"))
-        if client_profile_id is None and route_client_profile_id is not None:
-            client_profile_id = str(route_client_profile_id)
-        if client_profile_id is None:
-            return
         with client_profile_scope(client_profile_id):
             if event_type in {"message", "reaction"}:
                 await self._handle_message_event(

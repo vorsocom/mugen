@@ -12,6 +12,8 @@ import uuid
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from mugen.core.service.context_scope_resolution import ContextScopeResolutionError
+
 from mugen.core.contract.service.ingress_routing import (
     IngressRouteReason,
     IngressRouteResolution,
@@ -42,7 +44,8 @@ def _make_request(
     return IPCCommandRequest(
         platform="signal",
         command=command,
-        data=data,
+        data={"client_profile_id": str(_CLIENT_PROFILE_ID), **data}
+        if isinstance(data, dict) else data,
     )
 
 
@@ -277,7 +280,6 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
         ext._logging_gateway.debug.assert_any_call(
             "Signal event ignored (unsupported type)."
         )
-        self.assertIsNone(SignalRestAPIIPCExtension._coerce_nonempty_string(123))  # pylint: disable=protected-access
 
         ext._resolve_ingress_route.reset_mock()  # type: ignore[union-attr]
         await ext._signal_ingress_event(  # pylint: disable=protected-access
@@ -296,61 +298,64 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
         )
         ext._resolve_ingress_route.assert_awaited_once()  # type: ignore[union-attr]
 
-    async def test_signal_ingress_event_uses_provider_context_route_and_missing_client_id(
+    async def test_signal_ingress_event_rejects_cached_route_after_resolution_failure(
         self,
     ) -> None:
         ext = _new_extension(config=_make_config(), logging_gateway=Mock())
         ext._resolve_ingress_route = AsyncMock(return_value=None)  # type: ignore[method-assign]  # pylint: disable=protected-access
         ext._handle_message_event = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
 
-        await ext._signal_ingress_event(  # pylint: disable=protected-access
-            _make_request(
-                {
-                    "payload": _receive_payload(_text_envelope()),
-                    "provider_context": {
-                        "ingress_route": {
+        with self.assertRaises(ContextScopeResolutionError):
+            await ext._signal_ingress_event(  # pylint: disable=protected-access
+                _make_request(
+                    {
+                        "payload": _receive_payload(_text_envelope()),
+                        "provider_context": {
+                            "ingress_route": {
+                                "client_profile_id": str(_CLIENT_PROFILE_ID),
+                                "tenant_id": "tenant-a",
+                            },
                             "client_profile_id": str(_CLIENT_PROFILE_ID),
-                            "tenant_id": "tenant-a",
                         },
-                        "client_profile_id": str(_CLIENT_PROFILE_ID),
                     },
-                },
-                command="signal_ingress_event",
+                    command="signal_ingress_event",
+                )
             )
-        )
-        ext._handle_message_event.assert_awaited_once()
-
-        ext._handle_message_event.reset_mock()
-        await ext._signal_ingress_event(  # pylint: disable=protected-access
-            _make_request(
-                {
-                    "payload": _receive_payload(_text_envelope()),
-                    "provider_context": {},
-                },
-                command="signal_ingress_event",
-            )
-        )
         ext._handle_message_event.assert_not_awaited()
 
-    async def test_signal_ingress_event_returns_without_client_profile(self) -> None:
+        ext._handle_message_event.reset_mock()
+        with self.assertRaises(ContextScopeResolutionError):
+            await ext._signal_ingress_event(  # pylint: disable=protected-access
+                _make_request(
+                    {
+                        "payload": _receive_payload(_text_envelope()),
+                        "provider_context": {},
+                    },
+                    command="signal_ingress_event",
+                )
+            )
+        ext._handle_message_event.assert_not_awaited()
+
+    async def test_signal_ingress_event_rejects_missing_route_client(self) -> None:
         ext = _new_extension(config=_make_config(), logging_gateway=Mock())
         ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
             return_value={"tenant_id": "tenant-a"}
         )
         ext._handle_message_event = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
 
-        await ext._signal_ingress_event(  # pylint: disable=protected-access
-            _make_request(
-                {
-                    "payload": _receive_payload(_text_envelope()),
-                    "provider_context": {"account_number": "+15550000001"},
-                },
-                command="signal_ingress_event",
+        with self.assertRaises(ContextScopeResolutionError):
+            await ext._signal_ingress_event(  # pylint: disable=protected-access
+                _make_request(
+                    {
+                        "payload": _receive_payload(_text_envelope()),
+                        "provider_context": {"account_number": "+15550000001"},
+                    },
+                    command="signal_ingress_event",
+                )
             )
-        )
         ext._handle_message_event.assert_not_awaited()
 
-    async def test_signal_ingress_event_uses_provider_context_route_without_account_number(
+    async def test_signal_ingress_event_requires_fresh_route_without_account_number(
         self,
     ) -> None:
         ext = _new_extension(
@@ -360,23 +365,24 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
         ext._resolve_ingress_route = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
         ext._handle_message_event = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
 
-        await ext._signal_ingress_event(  # pylint: disable=protected-access
-            _make_request(
-                {
-                    "payload": _receive_payload(_text_envelope()),
-                    "provider_context": {
-                        "ingress_route": {
-                            "client_profile_id": str(_CLIENT_PROFILE_ID),
-                            "tenant_id": "tenant-a",
-                        }
+        with self.assertRaises(ContextScopeResolutionError):
+            await ext._signal_ingress_event(  # pylint: disable=protected-access
+                _make_request(
+                    {
+                        "payload": _receive_payload(_text_envelope()),
+                        "provider_context": {
+                            "ingress_route": {
+                                "client_profile_id": str(_CLIENT_PROFILE_ID),
+                                "tenant_id": "tenant-a",
+                            }
+                        },
                     },
-                },
-                command="signal_ingress_event",
+                    command="signal_ingress_event",
+                )
             )
-        )
 
-        ext._resolve_ingress_route.assert_not_awaited()  # type: ignore[union-attr]
-        ext._handle_message_event.assert_awaited_once()
+        ext._resolve_ingress_route.assert_awaited_once()  # type: ignore[union-attr]
+        ext._handle_message_event.assert_not_awaited()
 
     async def test_signal_account_number_uses_payload_context_then_config(
         self,
@@ -541,7 +547,7 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(merged["metadata"]["k"], "v")
         self.assertEqual(merged["metadata"]["ingress_route"]["tenant_slug"], "tenant-a")
 
-    async def test_missing_binding_ingress_route_is_dead_lettered_and_dropped(self) -> None:
+    async def test_missing_binding_route_is_dead_lettered_and_failed(self) -> None:
         class _FallbackRouter:
             async def resolve(self, request):  # noqa: ARG002
                 return IngressRouteResolution(
@@ -571,9 +577,10 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
         self.assertIn("missing_binding", relational.dead_letters[0]["error_message"])
         self.assertIn("no binding", relational.dead_letters[0]["error_message"])
 
-        await ext._signal_restapi_event(  # pylint: disable=protected-access
-            _make_request(_receive_payload(_text_envelope(text="hello")))
-        )
+        with self.assertRaises(ContextScopeResolutionError):
+            await ext._signal_restapi_event(  # pylint: disable=protected-access
+                _make_request(_receive_payload(_text_envelope(text="hello")))
+            )
         messaging.handle_text_message.assert_not_awaited()
         self.assertEqual(
             ext._metrics.get("signal.ipc.route.unresolved"),  # pylint: disable=protected-access
@@ -609,7 +616,7 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
             IngressRouteReason.RESOLUTION_ERROR.value,
         )
 
-    async def test_event_returns_early_when_ingress_route_resolution_returns_none(
+    async def test_event_fails_when_ingress_route_resolution_returns_none(
         self,
     ) -> None:
         messaging = _make_messaging_service()
@@ -619,13 +626,14 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
         )
         ext._resolve_ingress_route = AsyncMock(return_value=None)  # type: ignore[method-assign]  # pylint: disable=protected-access
 
-        await ext._signal_restapi_event(  # pylint: disable=protected-access
-            _make_request(_receive_payload(_text_envelope(text="hello")))
-        )
+        with self.assertRaises(ContextScopeResolutionError):
+            await ext._signal_restapi_event(  # pylint: disable=protected-access
+                _make_request(_receive_payload(_text_envelope(text="hello")))
+            )
 
         messaging.handle_text_message.assert_not_awaited()
 
-    async def test_signal_restapi_event_returns_without_client_profile_id(
+    async def test_signal_restapi_event_rejects_missing_route_client_profile_id(
         self,
     ) -> None:
         ext = _new_extension(config=_make_config(), logging_gateway=Mock())
@@ -634,9 +642,10 @@ class TestMugenSignalRestapiIpcExt(unittest.IsolatedAsyncioTestCase):
         )
         ext._handle_message_event = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
 
-        await ext._signal_restapi_event(  # pylint: disable=protected-access
-            _make_request(_receive_payload(_text_envelope(text="hello")))
-        )
+        with self.assertRaises(ContextScopeResolutionError):
+            await ext._signal_restapi_event(  # pylint: disable=protected-access
+                _make_request(_receive_payload(_text_envelope(text="hello")))
+            )
 
         ext._handle_message_event.assert_not_awaited()
 

@@ -42,6 +42,7 @@ def _event_context(
         request_id="request-id",
         payload_fingerprint="0123456789abcdef",
         filtered_payload=payload,
+        client_profile_id="00000000-0000-0000-0000-000000000208",
         message_change_count=message_change_count,
         change_envelopes=change_envelopes,
     )
@@ -382,10 +383,13 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
             {
                 "path_token": "path-token",
                 "payload": {"entry": []},
+                "authenticated_client_profile_id": (
+                    "00000000-0000-0000-0000-000000000208"
+                ),
             },
         )
 
-    async def test_event_returns_ok_and_logs_when_ipc_has_errors(self) -> None:
+    async def test_event_returns_delivery_failure_when_ipc_has_errors(self) -> None:
         endpoint = unwrap(webhook.whatsapp_wacapi_event)
         logger = Mock()
         ipc_service = SimpleNamespace(
@@ -407,13 +411,16 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
                 )
             )
         )
-        response = await endpoint(
-            path_token="path-token",
-            ipc_provider=lambda: ipc_service,
-            logger_provider=lambda: logger,
-            whatsapp_webhook_context=_event_context({"entry": []}),
-        )
-        self.assertEqual(response, {"response": "OK"})
+        with patch.object(webhook, "abort", side_effect=_abort_raiser):
+            with self.assertRaises(_AbortCalled) as exc:
+                await endpoint(
+                    path_token="path-token",
+                    ipc_provider=lambda: ipc_service,
+                    logger_provider=lambda: logger,
+                    change_registry_provider=lambda: None,
+                    whatsapp_webhook_context=_event_context({"entry": []}),
+                )
+        self.assertEqual(exc.exception.code, 500)
         logger.warning.assert_called_once()
 
     async def test_event_stages_ingress_entries_when_ipc_provider_is_absent(
@@ -434,6 +441,7 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
                 ingress_provider=lambda: ingress_service,
                 relational_storage_gateway_provider=lambda: "rsg",
                 logger_provider=lambda: logger,
+                change_registry_provider=lambda: None,
                 whatsapp_webhook_context=_event_context({"entry": []}),
             )
 
@@ -459,6 +467,7 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
                     ingress_provider=lambda: SimpleNamespace(stage=AsyncMock()),
                     relational_storage_gateway_provider=lambda: "rsg",
                     logger_provider=lambda: logger,
+                    change_registry_provider=lambda: None,
                     whatsapp_webhook_context=_event_context({"entry": []}),
                 )
 
@@ -474,6 +483,7 @@ class TestMugenWhatsAppWacapiWebhook(unittest.IsolatedAsyncioTestCase):
             ipc_provider=lambda: ipc_service,
             ingress_provider=lambda: ingress_service,
             logger_provider=lambda: Mock(),
+            change_registry_provider=lambda: None,
             whatsapp_webhook_context=_event_context(
                 {"object": "whatsapp_business_account", "entry": []},
                 message_change_count=0,

@@ -3,6 +3,7 @@ Implements webhook endpoints for the WhatsApp Cloud API (WACAPI).
 """
 
 from types import SimpleNamespace
+import uuid
 
 from quart import abort, request
 
@@ -226,6 +227,9 @@ async def whatsapp_wacapi_event(
                 data={
                     "path_token": path_token,
                     "payload": data,
+                    "authenticated_client_profile_id": (
+                        whatsapp_webhook_context.client_profile_id
+                    ),
                 },
             )
         )
@@ -237,7 +241,7 @@ async def whatsapp_wacapi_event(
                 " reason_code=routing_failure"
                 f" error_count={len(response.errors)}"
             )
-        if retry_required:
+        if response.errors or retry_required:
             abort(500)
         return {"response": "OK"}
 
@@ -251,6 +255,9 @@ async def whatsapp_wacapi_event(
             payload=data,
             relational_storage_gateway=relational_storage_gateway,
             logging_gateway=logger,
+            authenticated_client_profile_id=uuid.UUID(
+                whatsapp_webhook_context.client_profile_id
+            ),
         )
         await ingress_svc.stage(entries)
     except Exception as exc:  # pylint: disable=broad-exception-caught

@@ -9,6 +9,8 @@ import uuid
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from mugen.core.service.context_scope_resolution import ContextScopeResolutionError
+
 from mugen.core.contract.service.ingress_routing import (
     IngressRouteReason,
     IngressRouteResolution,
@@ -44,7 +46,9 @@ def _make_request(
     return IPCCommandRequest(
         platform="telegram",
         command=command,
-        data=payload,
+        data={"client_profile_id": str(_CLIENT_PROFILE_ID), **payload}
+        if isinstance(payload, dict) and command == "telegram_ingress_event"
+        else payload,
     )
 
 
@@ -301,20 +305,21 @@ class TestMugenTelegramBotapiIpcExt(unittest.IsolatedAsyncioTestCase):
             return_value=None
         )
 
-        await ext._telegram_ingress_event(  # pylint: disable=protected-access
-            _make_request(
-                {
-                    "payload": {
-                        "update_id": 2,
-                        "callback_query": {
-                            "message": {},
+        with self.assertRaises(ContextScopeResolutionError):
+            await ext._telegram_ingress_event(  # pylint: disable=protected-access
+                _make_request(
+                    {
+                        "payload": {
+                            "update_id": 2,
+                            "callback_query": {
+                                "message": {},
+                            },
                         },
+                        "provider_context": {"path_token": "telegram-path", "ingress_route": {}},
                     },
-                    "provider_context": {"path_token": "telegram-path", "ingress_route": {}},
-                },
-                command="telegram_ingress_event",
+                    command="telegram_ingress_event",
+                )
             )
-        )
         ext._handle_message_update.assert_not_awaited()
         ext._handle_callback_query_update.assert_not_awaited()
 
@@ -397,16 +402,17 @@ class TestMugenTelegramBotapiIpcExt(unittest.IsolatedAsyncioTestCase):
             state="stop",
         )
 
-    async def test_telegram_botapi_update_returns_without_route_client_profile(self) -> None:
+    async def test_telegram_update_rejects_missing_route_client(self) -> None:
         ext = _new_extension(config=_make_config())
         ext._resolve_ingress_route = AsyncMock(  # type: ignore[method-assign]  # pylint: disable=protected-access
             return_value={"tenant_id": "tenant-a"}
         )
         ext._handle_message_update = AsyncMock()  # type: ignore[method-assign]  # pylint: disable=protected-access
 
-        await ext._telegram_botapi_update(  # pylint: disable=protected-access
-            _make_request(_make_private_text_message_update())
-        )
+        with self.assertRaises(ContextScopeResolutionError):
+            await ext._telegram_botapi_update(  # pylint: disable=protected-access
+                _make_request(_make_private_text_message_update())
+            )
 
         ext._handle_message_update.assert_not_awaited()
 
@@ -994,7 +1000,7 @@ class TestMugenTelegramBotapiIpcExt(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(merged["metadata"]["ingress_route"]["tenant_slug"], "tenant-a")
 
-    async def test_missing_binding_route_is_dead_lettered_and_dropped(self) -> None:
+    async def test_missing_binding_route_is_dead_lettered_and_failed(self) -> None:
         class _FallbackRouter:
             async def resolve(self, request):  # noqa: ARG002
                 return IngressRouteResolution(
@@ -1014,20 +1020,22 @@ class TestMugenTelegramBotapiIpcExt(unittest.IsolatedAsyncioTestCase):
             ingress_routing_service=_FallbackRouter(),
         )
 
-        await ext._telegram_botapi_update(  # pylint: disable=protected-access
-            _make_request(_make_private_text_message_update())
-        )
-        await ext._telegram_botapi_update(  # pylint: disable=protected-access
-            IPCCommandRequest(
-                platform="telegram",
-                command="telegram_botapi_update",
-                data={
-                    **_make_private_text_message_update(),
-                    "path_token": "telegram-path-token",
-                    "payload": "not-a-dict",
-                },
+        with self.assertRaises(ContextScopeResolutionError):
+            await ext._telegram_botapi_update(  # pylint: disable=protected-access
+                _make_request(_make_private_text_message_update())
             )
-        )
+        with self.assertRaises(ContextScopeResolutionError):
+            await ext._telegram_botapi_update(  # pylint: disable=protected-access
+                IPCCommandRequest(
+                    platform="telegram",
+                    command="telegram_botapi_update",
+                    data={
+                        **_make_private_text_message_update(),
+                        "path_token": "telegram-path-token",
+                        "payload": "not-a-dict",
+                    },
+                )
+            )
 
         messaging.handle_text_message.assert_not_awaited()
         self.assertEqual(
@@ -1067,7 +1075,7 @@ class TestMugenTelegramBotapiIpcExt(unittest.IsolatedAsyncioTestCase):
             str(ext_with_detail._relational_storage_gateway.dead_letters[0]["error_message"]),  # pylint: disable=protected-access
         )
 
-    async def test_update_returns_early_when_ingress_route_resolution_returns_none(
+    async def test_update_fails_when_ingress_route_resolution_returns_none(
         self,
     ) -> None:
         messaging = _make_messaging_service()
@@ -1077,8 +1085,9 @@ class TestMugenTelegramBotapiIpcExt(unittest.IsolatedAsyncioTestCase):
         )
         ext._resolve_ingress_route = AsyncMock(return_value=None)  # type: ignore[method-assign]  # pylint: disable=protected-access
 
-        await ext._telegram_botapi_update(  # pylint: disable=protected-access
-            _make_request(_make_private_text_message_update())
-        )
+        with self.assertRaises(ContextScopeResolutionError):
+            await ext._telegram_botapi_update(  # pylint: disable=protected-access
+                _make_request(_make_private_text_message_update())
+            )
 
         messaging.handle_text_message.assert_not_awaited()

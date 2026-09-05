@@ -29,6 +29,8 @@ from mugen.core.service.messaging_ingress_extractors import (
     extract_wechat_stage_entries,
 )
 
+from mugen.core.utility.client_profile_runtime import get_active_client_profile_id
+
 
 def _config_provider():
     return di.container.config
@@ -447,12 +449,18 @@ async def _handle_post_event(
 
     ipc_svc: IIPCService | None = ipc_provider() if callable(ipc_provider) else None
     if ipc_svc is not None:
+        client_profile_id = get_active_client_profile_id()
         response = await ipc_svc.handle_ipc_request(
             IPCCommandRequest(
                 platform="wechat",
                 command=command,
                 data={
                     "path_token": path_token,
+                    "authenticated_client_profile_id": (
+                        str(client_profile_id)
+                        if client_profile_id is not None
+                        else None
+                    ),
                     "provider": provider,
                     "payload": payload,
                 },
@@ -463,6 +471,7 @@ async def _handle_post_event(
                 "WeChat webhook processed with IPC errors "
                 f"command={command} error_count={len(response.errors)}"
             )
+            abort(500)
         return "success"
 
     ingress_svc: IMessagingIngressService = ingress_provider()

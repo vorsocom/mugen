@@ -114,8 +114,7 @@ class IngressBinding(ModelBase, TenantScopedMixin):
             "is_active",
         ),
         Index(
-            "ux_chorch_ingress_binding__tci_active_unique",
-            "tenant_id",
+            "ux_chorch_ingress_binding__ci_active_unique",
             "channel_key",
             "identifier_type",
             "identifier_value",

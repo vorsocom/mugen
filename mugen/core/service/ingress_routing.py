@@ -23,6 +23,7 @@ from mugen.core.contract.service.ingress_routing import (
     IngressRouteResult,
 )
 from mugen.core.constants import GLOBAL_TENANT_ID
+from mugen.core.utility.client_profile_runtime import get_active_client_profile_id
 
 _TABLE_TENANT = "admin_tenant"
 _TABLE_TENANT_MEMBERSHIP = "admin_tenant_membership"
@@ -93,7 +94,9 @@ def build_ingress_route_context(result: IngressRouteResult) -> dict[str, Any]:
     }
 
 
-def build_ingress_route_message_context_item(result: IngressRouteResult) -> dict[str, Any]:
+def build_ingress_route_message_context_item(
+    result: IngressRouteResult,
+) -> dict[str, Any]:
     """Create a `message_context` item for ingress route context."""
     return {
         "type": "ingress_route",
@@ -202,8 +205,12 @@ class DefaultIngressRoutingService(IIngressRoutingService):
         else:
             route_key = None
 
-        service_route_key = _normalize_optional_text(binding_row.get("service_route_key"))
-        channel_profile_id = _normalize_optional_uuid(binding_row.get("channel_profile_id"))
+        service_route_key = _normalize_optional_text(
+            binding_row.get("service_route_key")
+        )
+        channel_profile_id = _normalize_optional_uuid(
+            binding_row.get("channel_profile_id")
+        )
         if channel_profile_id is None:
             return route_key, service_route_key, None, None
 
@@ -331,6 +338,38 @@ class DefaultIngressRoutingService(IIngressRoutingService):
                 if not authorized:
                     return self._fail(IngressRouteReason.UNAUTHORIZED_TENANT)
 
+            authenticated_profile_id = (
+                request.authenticated_client_profile_id
+                or get_active_client_profile_id()
+            )
+            if authenticated_profile_id is not None:
+                if identifier_type not in {
+                    "path_token",
+                    "recipient_user_id",
+                    "account_number",
+                    "phone_number_id",
+                }:
+                    return self._fail(IngressRouteReason.CLIENT_PROFILE_MISMATCH)
+                authenticated_profile = await self._rsg.get_one(
+                    "admin_messaging_client_profile",
+                    {
+                        "id": authenticated_profile_id,
+                        "platform_key": channel_key,
+                        "is_active": True,
+                        identifier_type: identifier_value,
+                    },
+                )
+                if authenticated_profile is None:
+                    return self._fail(IngressRouteReason.CLIENT_PROFILE_MISMATCH)
+                profile_tenant_id = _normalize_optional_uuid(
+                    authenticated_profile.get("tenant_id")
+                )
+                if profile_tenant_id is None or (
+                    tenant_id is not None and tenant_id != profile_tenant_id
+                ):
+                    return self._fail(IngressRouteReason.UNAUTHORIZED_TENANT)
+                tenant_id = profile_tenant_id
+
             binding_row: Mapping[str, Any] | None = None
             if request.require_active_binding:
                 binding_row, binding_error = await self._resolve_binding(
@@ -344,7 +383,9 @@ class DefaultIngressRoutingService(IIngressRoutingService):
                 if binding_row is None:
                     return self._fail(IngressRouteReason.MISSING_BINDING)
 
-                binding_tenant_id = _normalize_optional_uuid(binding_row.get("tenant_id"))
+                binding_tenant_id = _normalize_optional_uuid(
+                    binding_row.get("tenant_id")
+                )
                 if binding_tenant_id is None:
                     return self._fail(IngressRouteReason.INACTIVE_TENANT)
                 tenant_id = binding_tenant_id
@@ -362,8 +403,12 @@ class DefaultIngressRoutingService(IIngressRoutingService):
                     tenant_id = GLOBAL_TENANT_ID
                     tenant_row = await self._get_tenant_by_id(tenant_id)
                     if tenant_row is None:
-                        # Keep generic web traffic alive even before global-tenant seeding.
-                        tenant_row = {"id": tenant_id, "slug": "global", "status": "active"}
+                        # Support web traffic before global-tenant seeding.
+                        tenant_row = {
+                            "id": tenant_id,
+                            "slug": "global",
+                            "status": "active",
+                        }
                     elif not self._tenant_active(tenant_row):
                         return self._fail(IngressRouteReason.INACTIVE_TENANT)
 
@@ -394,6 +439,12 @@ class DefaultIngressRoutingService(IIngressRoutingService):
                     tenant_id=tenant_id,
                     binding_row=binding_row,
                 )
+
+            if authenticated_profile_id is not None and (
+                client_profile_id != authenticated_profile_id
+                or client_profile_key is None
+            ):
+                return self._fail(IngressRouteReason.CLIENT_PROFILE_MISMATCH)
 
             return IngressRouteResolution(
                 ok=True,
