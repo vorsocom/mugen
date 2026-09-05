@@ -91,6 +91,30 @@ authorization checks.
 decorators and do not replace RBAC checks on endpoints using
 `permission_required`.
 
+## RGQL Navigation Queries
+
+Read access to a base resource does not grant read access to its navigation
+targets. Before constructing a storage query, ACP checks the configured read
+permission of every resource traversed by filters, ordering, selected paths,
+aggregate/grouping/compute expressions, and configured navigation search fields.
+This includes intermediate navigation hops and expressions inside nested
+expansions. Checks retain the request's user, tenant, and global-admin policy.
+A denied expression target returns `403` before any resource rows or counts are
+queried. Repeated references share a permission decision within that request.
+Configured search paths use the same segment normalization for authorization and
+storage planning. Property paths rooted in functions or casts are rejected with
+`400` because the relational adapter cannot preserve their expression context.
+
+Denied expansions continue to be omitted from the response. The complete
+expansion tree is authorized before querying the base resource. The current-user
+tenant discovery exception still permits its restricted membership and tenant
+projection, but filtering, ordering, or searching those expansions requires the
+target's ordinary read permission.
+
+Authorization of `$apply` and `$compute` expressions does not add execution
+support for those options; the relational adapter currently executes filters,
+ordering, and paging only. Root `$search` is translated separately by ACP.
+
 ## Revocation and Long-Lived Responses
 
 Tenant state, membership state, and authorization decisions are read afresh for

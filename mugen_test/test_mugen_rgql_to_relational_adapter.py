@@ -1,6 +1,7 @@
 """Unit tests for RGQL-to-relational adapter helpers."""
 
 import unittest
+from unittest.mock import Mock
 
 from mugen.core.contract.gateway.storage.rdbms.types import (
     RelatedOrderBy,
@@ -11,7 +12,7 @@ from mugen.core.contract.gateway.storage.rdbms.types import (
 from mugen.core.utility.rgql.ast import Identifier, Literal, MemberAccess
 from mugen.core.utility.rgql.expr_parser import parse_rgql_expr
 from mugen.core.utility.rgql.orderby_parser import OrderByItem
-from mugen.core.utility.rgql.url_parser import RGQLQueryOptions
+from mugen.core.utility.rgql.url_parser import RGQLQueryOptions, parse_rgql_url
 from mugen.core.gateway.storage.rdbms.rgql_adapter.rgql_to_relational import (
     RGQLToRelationalAdapter,
     _is_literal,
@@ -43,12 +44,36 @@ class TestMugenRgqlToRelationalAdapter(unittest.TestCase):
             ),
             "Address/City/PostalCode",
         )
-        self.assertEqual(_prop_path(MemberAccess(Literal(1), "OnlyMember")), "OnlyMember")
+        with self.assertRaisesRegex(ValueError, "rooted in an identifier"):
+            _prop_path(MemberAccess(Literal(1), "OnlyMember"))
         with self.assertRaises(ValueError):
             _prop_path(Literal(1))
 
         self.assertEqual(_prop_path_to_column("UserId"), "user_id")
-        self.assertEqual(_prop_path_to_column("Address/PostalCode"), "address_postal_code")
+        self.assertEqual(
+            _prop_path_to_column("Address/PostalCode"), "address_postal_code"
+        )
+
+    def test_expression_roots_cannot_be_discarded_from_navigation_paths(self) -> None:
+        adapter = RGQLToRelationalAdapter()
+        for root in ("identity(cast(NS.Disguise))", "identity(PublicProfile)"):
+            path = f"{root}/Person/FirstName"
+            for query in (
+                f"$filter={path} eq 'Alice'",
+                f"$filter=contains({path},'Alice')",
+                f"$filter=startswith({path},'Alice')",
+                f"$filter=endswith({path},'Alice')",
+                f"$orderby={path}",
+            ):
+                with self.subTest(query=query):
+                    path_planner = Mock()
+                    options = parse_rgql_url(f"/Users?{query}").query
+                    with self.assertRaisesRegex(ValueError, "rooted in an identifier"):
+                        adapter.build_relational_query(
+                            options,
+                            path_planner=path_planner,
+                        )
+                    path_planner.assert_not_called()
 
     def test_build_relational_query_maps_ordering_limit_and_offset(self) -> None:
         adapter = RGQLToRelationalAdapter()
@@ -75,7 +100,9 @@ class TestMugenRgqlToRelationalAdapter(unittest.TestCase):
         self.assertEqual(limit, 10)
         self.assertEqual(offset, 5)
 
-        empty_groups, empty_order_by, empty_limit, empty_offset = adapter.build_relational_query(RGQLQueryOptions())
+        empty_groups, empty_order_by, empty_limit, empty_offset = (
+            adapter.build_relational_query(RGQLQueryOptions())
+        )
         self.assertEqual(empty_groups, [])
         self.assertEqual(list(empty_order_by), [])
         self.assertIsNone(empty_limit)
@@ -109,23 +136,40 @@ class TestMugenRgqlToRelationalAdapter(unittest.TestCase):
         text_filters = []
         scalar_filters = []
 
-        adapter._add_atom(parse_rgql_expr("Name eq 'Bob'"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
-        adapter._add_atom(parse_rgql_expr("Age ne 50"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
-        adapter._add_atom(parse_rgql_expr("Age gt 18"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
-        adapter._add_atom(parse_rgql_expr("Age ge 18"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
-        adapter._add_atom(parse_rgql_expr("Age lt 99"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
-        adapter._add_atom(parse_rgql_expr("Age le 99"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
-        adapter._add_atom(parse_rgql_expr("Age in (1,2,3)"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
+        adapter._add_atom(
+            parse_rgql_expr("Name eq 'Bob'"), where, text_filters, scalar_filters
+        )  # pylint: disable=protected-access
+        adapter._add_atom(
+            parse_rgql_expr("Age ne 50"), where, text_filters, scalar_filters
+        )  # pylint: disable=protected-access
+        adapter._add_atom(
+            parse_rgql_expr("Age gt 18"), where, text_filters, scalar_filters
+        )  # pylint: disable=protected-access
+        adapter._add_atom(
+            parse_rgql_expr("Age ge 18"), where, text_filters, scalar_filters
+        )  # pylint: disable=protected-access
+        adapter._add_atom(
+            parse_rgql_expr("Age lt 99"), where, text_filters, scalar_filters
+        )  # pylint: disable=protected-access
+        adapter._add_atom(
+            parse_rgql_expr("Age le 99"), where, text_filters, scalar_filters
+        )  # pylint: disable=protected-access
+        adapter._add_atom(
+            parse_rgql_expr("Age in (1,2,3)"), where, text_filters, scalar_filters
+        )  # pylint: disable=protected-access
 
         self.assertEqual(where, {"name": "Bob"})
-        self.assertEqual([sf.op for sf in scalar_filters], [
-            ScalarFilterOp.NE,
-            ScalarFilterOp.GT,
-            ScalarFilterOp.GTE,
-            ScalarFilterOp.LT,
-            ScalarFilterOp.LTE,
-            ScalarFilterOp.IN,
-        ])
+        self.assertEqual(
+            [sf.op for sf in scalar_filters],
+            [
+                ScalarFilterOp.NE,
+                ScalarFilterOp.GT,
+                ScalarFilterOp.GTE,
+                ScalarFilterOp.LT,
+                ScalarFilterOp.LTE,
+                ScalarFilterOp.IN,
+            ],
+        )
 
     def test_add_atom_supports_text_functions(self) -> None:
         adapter = RGQLToRelationalAdapter()
@@ -133,16 +177,31 @@ class TestMugenRgqlToRelationalAdapter(unittest.TestCase):
         text_filters = []
         scalar_filters = []
 
-        adapter._add_atom(parse_rgql_expr("contains(Name,'smith')"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
-        adapter._add_atom(parse_rgql_expr("startswith(Code,'ABC')"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
-        adapter._add_atom(parse_rgql_expr("endswith(Sku,'xyz')"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
+        adapter._add_atom(
+            parse_rgql_expr("contains(Name,'smith')"),
+            where,
+            text_filters,
+            scalar_filters,
+        )  # pylint: disable=protected-access
+        adapter._add_atom(
+            parse_rgql_expr("startswith(Code,'ABC')"),
+            where,
+            text_filters,
+            scalar_filters,
+        )  # pylint: disable=protected-access
+        adapter._add_atom(
+            parse_rgql_expr("endswith(Sku,'xyz')"), where, text_filters, scalar_filters
+        )  # pylint: disable=protected-access
 
         self.assertEqual(len(text_filters), 3)
-        self.assertEqual([tf.op for tf in text_filters], [
-            TextFilterOp.CONTAINS,
-            TextFilterOp.STARTSWITH,
-            TextFilterOp.ENDSWITH,
-        ])
+        self.assertEqual(
+            [tf.op for tf in text_filters],
+            [
+                TextFilterOp.CONTAINS,
+                TextFilterOp.STARTSWITH,
+                TextFilterOp.ENDSWITH,
+            ],
+        )
         self.assertTrue(all(tf.case_sensitive is False for tf in text_filters))
 
     def test_add_atom_error_paths(self) -> None:
@@ -151,22 +210,44 @@ class TestMugenRgqlToRelationalAdapter(unittest.TestCase):
         text_filters = []
         scalar_filters = []
 
-        adapter._add_atom(parse_rgql_expr("Name eq 'Bob'"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
+        adapter._add_atom(
+            parse_rgql_expr("Name eq 'Bob'"), where, text_filters, scalar_filters
+        )  # pylint: disable=protected-access
         with self.assertRaises(ValueError):
-            adapter._add_atom(parse_rgql_expr("Name eq 'Alice'"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
+            adapter._add_atom(
+                parse_rgql_expr("Name eq 'Alice'"), where, text_filters, scalar_filters
+            )  # pylint: disable=protected-access
 
         with self.assertRaises(ValueError):
-            adapter._add_atom(parse_rgql_expr("Age gt OtherAge"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
+            adapter._add_atom(
+                parse_rgql_expr("Age gt OtherAge"), where, text_filters, scalar_filters
+            )  # pylint: disable=protected-access
         with self.assertRaises(ValueError):
-            adapter._add_atom(parse_rgql_expr("Age in 5"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
+            adapter._add_atom(
+                parse_rgql_expr("Age in 5"), where, text_filters, scalar_filters
+            )  # pylint: disable=protected-access
         with self.assertRaises(ValueError):
-            adapter._add_atom(parse_rgql_expr("contains(Name, Other)"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
+            adapter._add_atom(
+                parse_rgql_expr("contains(Name, Other)"),
+                where,
+                text_filters,
+                scalar_filters,
+            )  # pylint: disable=protected-access
         with self.assertRaises(ValueError):
-            adapter._add_atom(parse_rgql_expr("not (Name eq 'Bob')"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
+            adapter._add_atom(
+                parse_rgql_expr("not (Name eq 'Bob')"),
+                where,
+                text_filters,
+                scalar_filters,
+            )  # pylint: disable=protected-access
         with self.assertRaises(ValueError):
-            adapter._add_atom(parse_rgql_expr("length(Name)"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
+            adapter._add_atom(
+                parse_rgql_expr("length(Name)"), where, text_filters, scalar_filters
+            )  # pylint: disable=protected-access
         with self.assertRaises(ValueError):
-            adapter._add_atom(parse_rgql_expr("Age add 1"), where, text_filters, scalar_filters)  # pylint: disable=protected-access
+            adapter._add_atom(
+                parse_rgql_expr("Age add 1"), where, text_filters, scalar_filters
+            )  # pylint: disable=protected-access
 
     def test_add_atom_supports_related_paths_with_planner(self) -> None:
         adapter = RGQLToRelationalAdapter()
@@ -288,7 +369,9 @@ class TestMugenRgqlToRelationalAdapter(unittest.TestCase):
                 path_planner=_planner,
             )
 
-    def test_unsupported_atoms_with_non_nav_path_planner_fall_back_to_generic_error(self) -> None:
+    def test_unsupported_atoms_with_non_nav_path_planner_fall_back_to_generic_error(
+        self,
+    ) -> None:
         adapter = RGQLToRelationalAdapter()
         where = {}
         text_filters = []

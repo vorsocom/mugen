@@ -25,6 +25,7 @@ from mugen.core.plugin.acp.contract.service.authorization import IAuthorizationS
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
 from mugen.core.plugin.acp.contract.sdk.resource import SoftDeleteMode
 from mugen.core.plugin.acp.utility.rgql.nav_filter_planner import plan_related_path
+from mugen.core.plugin.acp.utility.rgql.query_authorization import authorize_query_paths
 from mugen.core.plugin.acp.utility.rgql.default_where import (
     make_default_where_provider,
 )
@@ -333,6 +334,7 @@ def rgql_enabled(
                 allow_global_admin = False
 
             self_tenant_discovery = _SelfTenantDiscoveryState()
+            read_permission_cache: dict[str, bool] = {}
 
             # --- helpers ---
             base_default_where_provider = make_default_where_provider(
@@ -456,6 +458,8 @@ def rgql_enabled(
             async def _resource_path_permitted(
                 edm_type: EdmType,
                 path: str,
+                *,
+                allow_self_discovery: bool = True,
             ) -> bool:
                 """Determine if a user is permitted to access the given
                 resource path."""
@@ -477,21 +481,26 @@ def rgql_enabled(
                     )
                     return False
 
-                permitted = await auth_svc.has_permission(
-                    user_id=auth_user_id,
-                    permission_object=(
-                        target_resource.permissions.permission_object
-                    ),
-                    permission_type=target_resource.permissions.read,
-                    tenant_id=tenant_id,
-                    allow_global_admin=allow_global_admin,
-                )
+                if tname not in read_permission_cache:
+                    read_permission_cache[tname] = await auth_svc.has_permission(
+                        user_id=auth_user_id,
+                        permission_object=(
+                            target_resource.permissions.permission_object
+                        ),
+                        permission_type=target_resource.permissions.read,
+                        tenant_id=tenant_id,
+                        allow_global_admin=allow_global_admin,
+                    )
+                permitted = read_permission_cache[tname]
                 if permitted:
                     return True
 
-                self_discovery_permitted = _self_tenant_discovery_path_permitted(
-                    edm_type,
-                    path,
+                self_discovery_permitted = (
+                    allow_self_discovery
+                    and _self_tenant_discovery_path_permitted(
+                        edm_type,
+                        path,
+                    )
                 )
                 if not self_discovery_permitted:
                     _logger.debug(
@@ -585,10 +594,113 @@ def rgql_enabled(
                     max_nav_depth=max_filter_nav_depth,
                 )
 
+            async def _query_path_permitted(
+                query_type: EdmType,
+                path: str,
+            ) -> bool:
+                return await _resource_path_permitted(
+                    query_type,
+                    path,
+                    allow_self_discovery=False,
+                )
+
+            async def _authorize_options(query_type: EdmType, options: Any) -> None:
+                query_resource = (
+                    resource
+                    if query_type.name == edm_type.name
+                    else registry.get_resource_by_type(query_type.name)
+                )
+                search_fields = getattr(
+                    getattr(query_resource, "behavior", None), "search_fields", ()
+                ) or ()
+                try:
+                    await authorize_query_paths(
+                        options=options,
+                        edm_type=query_type,
+                        model=admin_edm_schema,
+                        path_permission_provider=_query_path_permitted,
+                        search_fields=search_fields,
+                    )
+                except PermissionError:
+                    abort(403, "Read permission denied for a query resource.")
+
+            async def _authorize_expands(
+                query_type: EdmType,
+                items: list,
+            ) -> list:
+                permitted_items = []
+                for item in items:
+                    if "/" in (item.path or ""):
+                        abort(
+                            400,
+                            "Multi-hop $expand paths are not supported; use nested"
+                            " $expand=Nav($expand=...)",
+                        )
+                    if not await ctx.permitted(query_type, item.path):
+                        continue
+                    nav = query_type.nav_properties.get(item.path)
+                    if nav is not None:
+                        # Discovery grants a restricted projection, not permission
+                        # to infer other fields through predicates or sorting.
+                        if any(
+                            getattr(item, option, None) is not None
+                            for option in ("filter", "orderby", "search")
+                        ) and not await _query_path_permitted(query_type, item.path):
+                            abort(403, "Read permission denied for a query resource.")
+                        target_type = admin_edm_schema.get_type(nav.target_type.name)
+                        await _authorize_options(target_type, item)
+                        if getattr(item, "expand", None):
+                            item.expand = await _authorize_expands(
+                                target_type,
+                                item.expand,
+                            )
+                    permitted_items.append(item)
+                return permitted_items
+
             adapter: RGQLToRelationalAdapter = RGQLToRelationalAdapter()
             ctx: ExpansionContext = None
             if rgql_url is not None:
                 opts = rgql_url.query
+
+                await _authorize_options(edm_type, opts)
+
+                ctx = ExpansionContext(
+                    model=admin_edm_schema,
+                    adapter=adapter,
+                    serialization_provider=_serialize_entity,
+                    service_resolver=lambda edm_type_name: registry.get_edm_service(
+                        registry.get_resource_by_type(edm_type_name).service_key,
+                    ),
+                    path_permission_provider=_resource_path_permitted,
+                    max_depth=max_depth,
+                    allow_expand_wildcard=allow_expand_wildcard,
+                    default_top=default_top,
+                    max_top=max_top,
+                    max_skip=max_skip,
+                    max_select=max_select,
+                    max_orderby=max_orderby,
+                    max_expand_paths=max_expand_paths,
+                    max_filter_terms=max_filter_terms,
+                    nav_path_planner=_plan_nav_path,
+                    default_where_provider=default_where_provider,
+                    forward_reference_where_provider=(forward_reference_where_provider),
+                )
+
+                # Support $expand=* by materializing wildcards into concrete navs
+                if (
+                    isinstance(opts.expand, list)
+                    and any(ei.path == "*" for ei in opts.expand)
+                    and not allow_expand_wildcard
+                ):
+                    abort(400, "Wildcard expansion not allowed.")
+
+                if isinstance(opts.expand, list) and opts.expand:
+                    opts.expand = semantic_checker.materialize_expand_for_url(rgql_url)
+                    opts.expand = await _authorize_expands(edm_type, opts.expand)
+
+                    expand_paths = {item.path for item in opts.expand}
+                    if len(expand_paths) > max_expand_paths:
+                        abort(400, f"Max $expand paths ({max_expand_paths}) exceeded.")
 
                 if opts.select:
                     if len(opts.select) > max_select:
@@ -614,15 +726,8 @@ def rgql_enabled(
                 ):
                     required_cols: set[str] = {"id"}
                     for exp in opts.expand:
-                        nav_name = exp.path.split("/", 1)[0]
-                        try:
-                            nav_prop = edm_type.nav_properties[nav_name]
-                        except KeyError:
-                            nav_prop = None
-                        if (
-                            nav_prop is not None
-                            and not nav_prop.target_type.is_collection
-                        ):
+                        nav_prop = edm_type.nav_properties[exp.path]
+                        if not nav_prop.target_type.is_collection:
                             required_cols.add(title_to_snake(nav_prop.source_fk))
                     for col in required_cols:
                         if col not in query_columns:
@@ -676,58 +781,6 @@ def rgql_enabled(
 
                     if offset > max_skip:
                         abort(400, f"$skip exceeds max ({max_skip}).")
-
-                ctx = ExpansionContext(
-                    model=admin_edm_schema,
-                    adapter=adapter,
-                    serialization_provider=_serialize_entity,
-                    service_resolver=lambda edm_type_name: registry.get_edm_service(
-                        registry.get_resource_by_type(edm_type_name).service_key,
-                    ),
-                    path_permission_provider=_resource_path_permitted,
-                    max_depth=max_depth,
-                    allow_expand_wildcard=allow_expand_wildcard,
-                    default_top=default_top,
-                    max_top=max_top,
-                    max_skip=max_skip,
-                    max_select=max_select,
-                    max_orderby=max_orderby,
-                    max_expand_paths=max_expand_paths,
-                    max_filter_terms=max_filter_terms,
-                    nav_path_planner=_plan_nav_path,
-                    default_where_provider=default_where_provider,
-                    forward_reference_where_provider=(forward_reference_where_provider),
-                )
-
-                # Support $expand=* by materializing wildcards into concrete navs
-                if (
-                    isinstance(opts.expand, list)
-                    and any(ei.path == "*" for ei in opts.expand)
-                    and not allow_expand_wildcard
-                ):
-                    abort(400, "Wildcard expansion not allowed.")
-
-                if isinstance(opts.expand, list) and opts.expand:
-                    opts.expand = semantic_checker.materialize_expand_for_url(rgql_url)
-                    for item in opts.expand:
-                        if "/" in (item.path or ""):
-                            abort(
-                                400,
-                                "Multi-hop $expand paths are not supported; use nested"
-                                " $expand=Nav($expand=...)",
-                            )
-                    opts.expand = [
-                        item
-                        for item in opts.expand
-                        if await ctx.permitted(
-                            edm_type=edm_type,
-                            path=item.path,
-                        )
-                    ]
-
-                    expand_paths = {item.path for item in opts.expand}
-                    if len(expand_paths) > max_expand_paths:
-                        abort(400, f"Max $expand paths ({max_expand_paths}) exceeded.")
 
             svc_key = resource.service_key
             svc = registry.get_edm_service(svc_key)

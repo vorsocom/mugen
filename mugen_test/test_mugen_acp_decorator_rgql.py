@@ -1321,7 +1321,7 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
             async with self.app.test_request_context(
                 (
                     f"/api/core/acp/v1/Users/{user_id}"
-                    "?$expand=TenantMemberships($expand=Tenant)"
+                    "?$select=Id&$expand=TenantMemberships($expand=Tenant)"
                 ),
                 method="GET",
             ):
@@ -1332,6 +1332,7 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
                 )
 
         membership_kwargs = membership_service.list_partitioned_by_fk.await_args.kwargs
+        self.assertEqual(user_service.get.await_args.kwargs["columns"], ["id"])
         self.assertEqual(membership_kwargs["fk_field"], "user_id")
         self.assertEqual(membership_kwargs["fk_values"], [user_id])
         self.assertEqual(
@@ -1356,6 +1357,62 @@ class TestMugenAcpDecoratorRgql(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("RoleInTenant", memberships[0])
         self.assertEqual(auth_svc.has_permission.await_count, 2)
+
+    async def test_self_discovery_cannot_infer_fields_with_query_options(self) -> None:
+        user_id = uuid.uuid4()
+        expansions = (
+            "TenantMemberships($filter=RoleInTenant eq 'owner')",
+            "TenantMemberships($orderby=RoleInTenant)",
+            "TenantMemberships($search=owner)",
+            "TenantMemberships($expand=Tenant($filter=Status eq 'active'))",
+            "TenantMemberships($expand=Tenant($orderby=Status))",
+            "TenantMemberships($expand=Tenant($search=active))",
+            "TenantMemberships($filter=Tenant/Name eq 'hidden')",
+        )
+        for expansion in expansions:
+            with self.subTest(expansion=expansion):
+                services = {
+                    key: SimpleNamespace(
+                        get=AsyncMock(),
+                        list=AsyncMock(),
+                        count=AsyncMock(),
+                        list_partitioned_by_fk=AsyncMock(),
+                    )
+                    for key in ("user_svc", "membership_svc", "tenant_svc")
+                }
+                registry = _TenantDiscoveryRegistry(services=services)
+                auth = SimpleNamespace(has_permission=AsyncMock(return_value=False))
+                endpoint = AsyncMock()
+                wrapped = rgql_mod.rgql_enabled(
+                    config_provider=_config,
+                    logger_provider=lambda: SimpleNamespace(debug=Mock()),
+                    auth_provider=lambda: auth,
+                    registry_provider=lambda: registry,
+                )(endpoint)
+                with (
+                    patch.object(rgql_mod, "abort", side_effect=_abort_raiser),
+                    patch.object(
+                        rgql_mod.RGQLToRelationalAdapter, "build_relational_query"
+                    ) as build,
+                ):
+                    async with self.app.test_request_context(
+                        f"/api/core/acp/v1/Users/{user_id}?$expand={expansion}",
+                        method="GET",
+                    ):
+                        with self.assertRaises(_AbortCalled) as caught:
+                            await wrapped(
+                                entity_set="Users",
+                                entity_id=str(user_id),
+                                auth_user=str(user_id),
+                            )
+                self.assertEqual(caught.exception.code, 403)
+                build.assert_not_called()
+                endpoint.assert_not_awaited()
+                for service in services.values():
+                    service.get.assert_not_awaited()
+                    service.list.assert_not_awaited()
+                    service.count.assert_not_awaited()
+                    service.list_partitioned_by_fk.assert_not_awaited()
 
     async def test_other_user_cannot_use_self_tenant_discovery_expand(self) -> None:
         async def _endpoint(**kwargs):
