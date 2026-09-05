@@ -345,6 +345,9 @@ class TestMugenGatewayKnowledgePinecone(unittest.IsolatedAsyncioTestCase):
             "injected-index",
         )
 
+        gateway._config.transformers.hf.token = (  # pylint: disable=protected-access
+            "test-hf-token"
+        )
         with patch(
             "mugen.core.gateway.knowledge.pinecone.SentenceTransformer"
         ) as transformer:
@@ -354,6 +357,7 @@ class TestMugenGatewayKnowledgePinecone(unittest.IsolatedAsyncioTestCase):
             model_name_or_path="all-mpnet-base-v2",
             processor_kwargs={"clean_up_tokenization_spaces": False},
             cache_folder="/tmp/hf",
+            token="test-hf-token",
         )
 
         gateway._encoder = None  # pylint: disable=protected-access

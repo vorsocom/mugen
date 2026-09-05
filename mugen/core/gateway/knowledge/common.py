@@ -5,6 +5,7 @@ from __future__ import annotations
 __all__ = [
     "apply_query_scope",
     "document_metadata",
+    "resolve_hugging_face_token",
     "selector_metadata",
 ]
 
@@ -41,6 +42,19 @@ def selector_metadata(selector: KnowledgeDeleteSelector) -> dict[str, str]:
     if selector.knowledge_pack_version_id is not None:
         result["knowledge_pack_version_id"] = str(selector.knowledge_pack_version_id)
     return result
+
+
+def resolve_hugging_face_token(hf_config: object) -> str | None:
+    """Return the normalized optional Hugging Face authentication token."""
+    raw_token = getattr(hf_config, "token", None)
+    if raw_token is None:
+        return None
+    if not isinstance(raw_token, str):
+        raise RuntimeError(
+            "Invalid configuration: transformers.hf.token must be a string."
+        )
+    normalized = raw_token.strip()
+    return normalized or None
 
 
 def _scope_matches(hit: KnowledgeSearchHit, query: KnowledgeSearchQuery) -> bool:

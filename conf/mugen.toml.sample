@@ -1013,6 +1013,7 @@ max_prompt_bytes = 4096
 # === Transformers ===
 [transformers]
 hf.home = "/absolute/path/to/hf/cache"
+hf.token = ""
 
 # === Twilio SMS (optional outbound SMS gateway) ===
 [twilio]
