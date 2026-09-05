@@ -22,7 +22,10 @@ from mugen.core.contract.gateway.knowledge import (
     KnowledgeSearchResult,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
-from mugen.core.gateway.knowledge.common import apply_query_scope
+from mugen.core.gateway.knowledge.common import (
+    apply_query_scope,
+    resolve_hugging_face_token,
+)
 from mugen.core.gateway.storage.rdbms.sqla.shared_runtime import SharedSQLAlchemyRuntime
 from mugen.core.utility.config_value import (
     parse_nonnegative_finite_float,
@@ -293,6 +296,7 @@ class PgVectorKnowledgeGateway(IKnowledgeGateway):
                 "home",
                 None,
             ),
+            token=resolve_hugging_face_token(self._section("transformers", "hf")),
         )
 
     async def _get_encoder(self) -> SentenceTransformer:

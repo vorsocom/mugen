@@ -230,6 +230,7 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
 
     def test_build_encoder_constructs_sentence_transformer(self) -> None:
         config = _make_config()
+        config.transformers.hf.token = "test-hf-token"
         gateway, _, _, _ = _build_gateway(config=config)
         with patch("mugen.core.gateway.knowledge.qdrant.SentenceTransformer") as transformer:
             built = gateway._build_encoder()  # pylint: disable=protected-access
@@ -239,6 +240,7 @@ class TestMugenGatewayKnowledgeQdrant(unittest.IsolatedAsyncioTestCase):
                 model_name_or_path="all-mpnet-base-v2",
                 processor_kwargs={"clean_up_tokenization_spaces": False},
                 cache_folder="/tmp/hf",
+                token="test-hf-token",
             )
 
     def test_resolve_encoder_model_name_falls_back_for_invalid_values(self) -> None:
