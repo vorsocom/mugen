@@ -162,9 +162,21 @@ Rules:
 - token must exist
 - token must belong to authenticated user
 - token must not be expired
+- token conversation must still exist and belong to the authenticated user
+- current web access must be allowed for that conversation's tenant; access in
+  another tenant does not preserve access after membership revocation
 - referenced file must still exist
 
 Returns file bytes when valid, else `404`.
+Global conversations use the current any-tenant web access policy. Tenant
+conversations use the same current authorization decision as SSE, including tenant
+lifecycle, membership, and the explicit global administrator override.
+
+Custom web clients must accept the required async `permitted(conversation_id)`
+callback in `resolve_media_download` and call it with the token's persisted
+conversation ID before materializing media. The runtime token store must return
+that conversation ID with the owner and expiry fields. Missing or denied
+conversation scope returns no downloadable asset.
 
 ## Frontend SSE (Fetch Stream) Example
 ```javascript
@@ -225,3 +237,9 @@ async function connect() {
 - Expired tokens return `404`.
 - Worker maintenance prunes expired token records.
 - media files are pruned after `web.media.retention_seconds` when not pinned by active tokens.
+
+Object media references use `object:<uuid_hex>`, where the identifier is exactly
+32 lowercase hexadecimal characters. Reference resolution and maintenance reject
+noncanonical identifiers from references, metadata keys, and orphan keys before
+accessing object storage or cache paths. This is defensive validation of a trusted
+storage boundary; it does not imply a remotely writable reference or storage key.

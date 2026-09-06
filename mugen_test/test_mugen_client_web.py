@@ -438,7 +438,8 @@ class _InMemoryWebRelationalSession:
             )
 
         if sql.startswith(
-            "select token, owner_user_id, file_path, mime_type, filename, expires_at from mugen.web_media_token where token = :token"
+            "select token, owner_user_id, conversation_id, file_path, mime_type, "
+            "filename, expires_at from mugen.web_media_token where token = :token"
         ):
             token = str(args.get("token", ""))
             row = self._state.media_tokens.get(token)
@@ -2575,12 +2576,14 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
 
         token = media_payload["token"]
         resolved = await self.client.resolve_media_download(
+            permitted=AsyncMock(return_value=True),
             auth_user="user-1",
             token=token,
         )
         self.assertIsNotNone(resolved)
 
         unauthorized = await self.client.resolve_media_download(
+            permitted=AsyncMock(return_value=True),
             auth_user="user-2",
             token=token,
         )
@@ -2591,7 +2594,9 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
                 self.client._to_utc_datetime(0)  # pylint: disable=protected-access
             )
 
-        expired = await self.client.resolve_media_download(auth_user="user-1", token=token)
+        expired = await self.client.resolve_media_download(
+            permitted=AsyncMock(return_value=True), auth_user="user-1", token=token
+        )
         self.assertIsNone(expired)
 
     async def test_media_cleanup_removes_expired_tokens_and_old_files(self) -> None:
@@ -3930,7 +3935,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
 
     async def test_resolve_media_download_invalid_branches(self) -> None:
         self.assertIsNone(
-            await self.client.resolve_media_download(auth_user="user-1", token="unknown")
+            await self.client.resolve_media_download(
+                permitted=AsyncMock(return_value=True),
+                auth_user="user-1",
+                token="unknown",
+            )
         )
 
         self.relational._state.media_tokens["bad-token"] = {  # pylint: disable=protected-access
@@ -3943,7 +3952,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             "expires_at": self.client._to_utc_datetime(0),  # pylint: disable=protected-access
         }
         self.assertIsNone(
-            await self.client.resolve_media_download(auth_user="user-1", token="bad-token")
+            await self.client.resolve_media_download(
+                permitted=AsyncMock(return_value=True),
+                auth_user="user-1",
+                token="bad-token",
+            )
         )
 
         self.relational._state.media_tokens["owner-mismatch"] = {  # pylint: disable=protected-access
@@ -3957,7 +3970,9 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         }
         self.assertIsNone(
             await self.client.resolve_media_download(
-                auth_user="user-1", token="owner-mismatch"
+                permitted=AsyncMock(return_value=True),
+                auth_user="user-1",
+                token="owner-mismatch",
             )
         )
 
@@ -3971,7 +3986,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             "expires_at": self.client._to_utc_datetime(9999999999),  # pylint: disable=protected-access
         }
         self.assertIsNone(
-            await self.client.resolve_media_download(auth_user="user-1", token="empty-path")
+            await self.client.resolve_media_download(
+                permitted=AsyncMock(return_value=True),
+                auth_user="user-1",
+                token="empty-path",
+            )
         )
 
         self.relational._state.media_tokens["missing-file"] = {  # pylint: disable=protected-access
@@ -3984,7 +4003,11 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
             "expires_at": self.client._to_utc_datetime(9999999999),  # pylint: disable=protected-access
         }
         self.assertIsNone(
-            await self.client.resolve_media_download(auth_user="user-1", token="missing-file")
+            await self.client.resolve_media_download(
+                permitted=AsyncMock(return_value=True),
+                auth_user="user-1",
+                token="missing-file",
+            )
         )
 
     async def test_dispatch_and_response_branches(self) -> None:
@@ -4156,6 +4179,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         )
         audio_token = audio_event["payload"]["message"]["content"]["token"]
         resolved_audio = await self.client.resolve_media_download(
+            permitted=AsyncMock(return_value=True),
             auth_user="user-1",
             token=audio_token,
         )
@@ -4197,6 +4221,7 @@ class TestDefaultWebClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(buffer_audio_event["event_type"], "message")
         buffer_token = buffer_audio_event["payload"]["message"]["content"]["token"]
         resolved_buffer_audio = await self.client.resolve_media_download(
+            permitted=AsyncMock(return_value=True),
             auth_user="user-1",
             token=buffer_token,
         )
@@ -5480,7 +5505,9 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         missing_session = _SequenceSession([_SequenceResult(rows=[])])
         _force_relational_session(self.client, missing_session)
         self.assertIsNone(
-            await self.client.resolve_media_download(auth_user="u1", token="missing")
+            await self.client.resolve_media_download(
+                permitted=AsyncMock(return_value=True), auth_user="u1", token="missing"
+            )
         )
 
         expired_session = _SequenceSession(
@@ -5490,6 +5517,7 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
                         {
                             "token": "t1",
                             "owner_user_id": "u1",
+                            "conversation_id": "conv-media",
                             "file_path": "/tmp/f.bin",
                             "mime_type": "text/plain",
                             "filename": "f.bin",
@@ -5501,7 +5529,11 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
             ]
         )
         _force_relational_session(self.client, expired_session)
-        self.assertIsNone(await self.client.resolve_media_download(auth_user="u1", token="t1"))
+        self.assertIsNone(
+            await self.client.resolve_media_download(
+                permitted=AsyncMock(return_value=True), auth_user="u1", token="t1"
+            )
+        )
 
         owner_mismatch = _SequenceSession(
             [
@@ -5520,7 +5552,11 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
             ]
         )
         _force_relational_session(self.client, owner_mismatch)
-        self.assertIsNone(await self.client.resolve_media_download(auth_user="u1", token="t2"))
+        self.assertIsNone(
+            await self.client.resolve_media_download(
+                permitted=AsyncMock(return_value=True), auth_user="u1", token="t2"
+            )
+        )
 
         invalid_path_session = _SequenceSession(
             [
@@ -5529,6 +5565,7 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
                         {
                             "token": "t2b",
                             "owner_user_id": "u1",
+                            "conversation_id": "conv-media",
                             "file_path": "",
                             "mime_type": "text/plain",
                             "filename": "f.bin",
@@ -5539,7 +5576,11 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
             ]
         )
         _force_relational_session(self.client, invalid_path_session)
-        self.assertIsNone(await self.client.resolve_media_download(auth_user="u1", token="t2b"))
+        self.assertIsNone(
+            await self.client.resolve_media_download(
+                permitted=AsyncMock(return_value=True), auth_user="u1", token="t2b"
+            )
+        )
 
         missing_path = _SequenceSession(
             [
@@ -5548,6 +5589,7 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
                         {
                             "token": "t3",
                             "owner_user_id": "u1",
+                            "conversation_id": "conv-media",
                             "file_path": "/tmp/does-not-exist.bin",
                             "mime_type": "text/plain",
                             "filename": "f.bin",
@@ -5561,7 +5603,9 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
         _force_relational_session(self.client, missing_path)
         with patch("os.path.exists", return_value=False):
             self.assertIsNone(
-                await self.client.resolve_media_download(auth_user="u1", token="t3")
+                await self.client.resolve_media_download(
+                    permitted=AsyncMock(return_value=True), auth_user="u1", token="t3"
+                )
             )
 
         valid_ref = await self.client._media_storage_gateway.store_bytes(  # pylint: disable=protected-access
@@ -5576,6 +5620,7 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
                         {
                             "token": "t4",
                             "owner_user_id": "u1",
+                            "conversation_id": "conv-media",
                             "file_path": valid_ref,
                             "mime_type": "application/octet-stream",
                             "filename": "ok.bin",
@@ -5586,7 +5631,9 @@ class TestDefaultWebClientRelationalBranches(unittest.IsolatedAsyncioTestCase):
             ]
         )
         _force_relational_session(self.client, success_session)
-        resolved = await self.client.resolve_media_download(auth_user="u1", token="t4")
+        resolved = await self.client.resolve_media_download(
+            permitted=AsyncMock(return_value=True), auth_user="u1", token="t4"
+        )
         self.assertTrue(isinstance(resolved, dict))
         self.assertTrue(os.path.exists(str(resolved["file_path"])))
 

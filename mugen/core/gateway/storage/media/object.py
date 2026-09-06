@@ -258,10 +258,12 @@ class ObjectMediaStorageGateway(IMediaStorageGateway):
             cursor = page.next_cursor
 
     async def _delete_object(self, object_id: str) -> None:
+        if self._validate_object_id(object_id) is None:
+            return
         await self._keyval_storage_gateway.delete(self._blob_key(object_id))
         await self._keyval_storage_gateway.delete(self._meta_key(object_id))
 
-        pattern = str((self._cache_path / f"{object_id}*").resolve())
+        pattern = os.path.join(glob.escape(str(self._cache_path)), f"{object_id}*")
         for candidate in glob.glob(pattern):
             try:
                 await asyncio.to_thread(os.remove, candidate)
@@ -291,29 +293,30 @@ class ObjectMediaStorageGateway(IMediaStorageGateway):
     def _parse_ref(self, value: Any) -> str | None:
         if not isinstance(value, str):
             return None
-        normalized = value.strip()
-        if not normalized.startswith(self._ref_prefix):
+        if not value.startswith(self._ref_prefix):
             return None
-        object_id = normalized[len(self._ref_prefix) :]
-        if object_id == "":
-            return None
-        return object_id
+        return self._validate_object_id(value[len(self._ref_prefix) :])
 
     def _meta_key_to_object_id(self, key: str) -> str | None:
         if not isinstance(key, str) or not key.startswith(self._meta_key_prefix):
             return None
-        object_id = key[len(self._meta_key_prefix) :]
-        if object_id == "":
-            return None
-        return object_id
+        return self._validate_object_id(key[len(self._meta_key_prefix) :])
 
     def _orphan_key_to_object_id(self, key: str) -> str | None:
         if not isinstance(key, str) or not key.startswith(self._orphan_key_prefix):
             return None
-        object_id = key[len(self._orphan_key_prefix) :]
-        if object_id == "":
+        return self._validate_object_id(key[len(self._orphan_key_prefix) :])
+
+    @staticmethod
+    def _validate_object_id(value: Any) -> str | None:
+        """Accept only the canonical UUID hex format emitted by store_bytes."""
+        if not isinstance(value, str) or len(value) != 32:
             return None
-        return object_id
+        try:
+            parsed = uuid.UUID(hex=value)
+        except ValueError:
+            return None
+        return value if parsed.hex == value else None
 
     async def _record_orphan_marker(
         self,

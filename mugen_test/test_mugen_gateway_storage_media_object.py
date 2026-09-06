@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
+import uuid
 
 from mugen.core.contract.gateway.storage.keyval import KeyValEntry, KeyValListPage
 from mugen.core.gateway.storage.media.object import ObjectMediaStorageGateway
@@ -109,6 +110,83 @@ class TestObjectMediaStorageGateway(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await self.gateway.close()
         self.tmpdir.cleanup()
+
+    async def test_invalid_references_do_not_access_storage_or_paths(self) -> None:
+        canonical = uuid.uuid4().hex
+        invalid_ids = (
+            "../outside",
+            "/tmp/outside",
+            "*",
+            "[abc]",
+            "..\\outside",
+            "\x00" * 32,
+            "g" * 32,
+            canonical.upper(),
+            str(uuid.UUID(hex=canonical)),
+            " " + canonical,
+            canonical + " ",
+        )
+        outside = Path(self.tmpdir.name) / "outside"
+        outside.write_bytes(b"unchanged")
+        self.keyval.get_entry = AsyncMock()
+        self.keyval.exists = AsyncMock()
+        self.keyval.delete = AsyncMock()
+        for object_id in invalid_ids:
+            with self.subTest(object_id=object_id):
+                self.assertFalse(await self.gateway.exists("object:" + object_id))
+                self.assertIsNone(
+                    await self.gateway.materialize("object:" + object_id),
+                )
+                await self.gateway._delete_object(object_id)
+        self.assertIsNone(await self.gateway.materialize(" object:" + canonical))
+        self.keyval.get_entry.assert_not_awaited()
+        self.keyval.exists.assert_not_awaited()
+        self.keyval.delete.assert_not_awaited()
+        self.assertEqual(outside.read_bytes(), b"unchanged")
+        self.assertEqual(list((Path(self.tmpdir.name) / "cache").iterdir()), [])
+
+    async def test_cleanup_ignores_crafted_metadata_and_orphan_keys(self) -> None:
+        media_ref = await self.gateway.store_bytes(b"active", filename_hint="keep.bin")
+        cached = Path(await self.gateway.materialize(media_ref))
+        outside = Path(self.tmpdir.name) / "outside"
+        outside.write_bytes(b"unchanged")
+        invalid_ids = ("../outside", "*", "[abc]", "A" * 32, "g" * 32)
+        for suffix in invalid_ids:
+            for kind in ("meta", "orphan"):
+                await self.keyval.put_json(
+                    f"web:media:object:{kind}:{suffix}",
+                    {"created_at": 0},
+                )
+        before = dict(self.keyval._store)
+        self.keyval.delete = AsyncMock(wraps=self.keyval.delete)
+        await self.gateway.cleanup(
+            active_refs={media_ref, "object:../outside", "object:*"},
+            retention_seconds=0,
+            now_epoch=100,
+        )
+        self.keyval.delete.assert_not_awaited()
+        self.assertEqual(self.keyval._store, before)
+        self.assertEqual(cached.read_bytes(), b"active")
+        self.assertEqual(outside.read_bytes(), b"unchanged")
+
+    async def test_cleanup_handles_literal_glob_characters_in_cache_path(self) -> None:
+        gateway = ObjectMediaStorageGateway(
+            keyval_storage_gateway=self.keyval,
+            cache_path=os.path.join(self.tmpdir.name, "[cache]"),
+        )
+        await gateway.init()
+        media_ref = await gateway.store_bytes(b"stale", filename_hint="old.bin")
+        cached = Path(await gateway.materialize(media_ref))
+        sibling = Path(self.tmpdir.name) / "c" / cached.name
+        sibling.parent.mkdir()
+        sibling.write_bytes(b"unchanged")
+        await gateway.cleanup(
+            active_refs=set(),
+            retention_seconds=0,
+            now_epoch=10**12,
+        )
+        self.assertFalse(cached.exists())
+        self.assertEqual(sibling.read_bytes(), b"unchanged")
 
     async def test_store_and_materialize(self) -> None:
         self.assertIsNone(await self.gateway.store_bytes("bad"))  # type: ignore[arg-type]
@@ -304,11 +382,11 @@ class TestObjectMediaStorageGateway(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_cleanup_retries_orphan_markers_until_delete_succeeds(self) -> None:
-        orphan_key = self.gateway._orphan_key("orphan-1")  # pylint: disable=protected-access
+        orphan_key = self.gateway._orphan_key("a" * 32)
         await self.keyval.put_json(
             orphan_key,
             {
-                "object_id": "orphan-1",
+                "object_id": "a" * 32,
                 "created_at": 1.0,
                 "reason": "metadata_write_failed:RuntimeError",
             },
@@ -356,11 +434,11 @@ class TestObjectMediaStorageGateway(unittest.IsolatedAsyncioTestCase):
     async def test_cleanup_orphan_marker_delete_failure_is_logged_and_marker_is_retained(
         self,
     ) -> None:
-        orphan_key = self.gateway._orphan_key("orphan-delete-fail")  # pylint: disable=protected-access
+        orphan_key = self.gateway._orphan_key("b" * 32)
         await self.keyval.put_json(
             orphan_key,
             {
-                "object_id": "orphan-delete-fail",
+                "object_id": "b" * 32,
                 "created_at": 1.0,
                 "reason": "metadata_write_failed:RuntimeError",
             },

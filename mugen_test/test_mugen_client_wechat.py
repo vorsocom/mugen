@@ -29,6 +29,8 @@ class _FakeResponse:
         self._text = text
         self._blob = blob
         self.headers = headers or {}
+        self._stream = BytesIO(blob)
+        self.content = SimpleNamespace(read=AsyncMock(side_effect=self._stream.read))
 
     async def text(self) -> str:
         return self._text
@@ -462,6 +464,92 @@ class TestMugenClientWeChat(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(payload)
         self.assertTrue(os.path.isfile(payload["path"]))
         os.unlink(payload["path"])
+
+    async def test_download_limit_stops_stream_before_consuming_full_body(self) -> None:
+        for content_length in (None, "1", "invalid"):
+            with self.subTest(content_length=content_length):
+                client = _new_client()
+                headers = {"Content-Type": "application/octet-stream"}
+                if content_length is not None:
+                    headers["Content-Length"] = content_length
+                response = _FakeResponse(
+                    status=200, blob=b"x" * 4096, headers=headers
+                )
+
+                @asynccontextmanager
+                async def response_context(**_kwargs):
+                    yield response
+
+                with (
+                    patch.object(
+                        client,
+                        "_ensure_access_token",
+                        new=AsyncMock(return_value="test-token"),
+                    ),
+                    patch.object(client, "_request_context", new=response_context),
+                    patch("mugen.core.client.wechat.tempfile.NamedTemporaryFile")
+                    as temporary_file,
+                ):
+                    result = await client.download_media(media_id="test-media")
+                self.assertIsNone(result)
+                self.assertEqual(response._stream.tell(), 1025)
+                response.content.read.assert_awaited_once_with(1025)
+                temporary_file.assert_not_called()
+
+    async def test_download_rejects_declared_oversize_before_reading(self) -> None:
+        client = _new_client()
+        response = _FakeResponse(
+            status=200,
+            blob=b"x" * 2048,
+            headers={"Content-Length": "2048"},
+        )
+
+        @asynccontextmanager
+        async def response_context(**_kwargs):
+            yield response
+
+        with (
+            patch.object(
+                client,
+                "_ensure_access_token",
+                new=AsyncMock(return_value="test-token"),
+            ),
+            patch.object(client, "_request_context", new=response_context),
+        ):
+            self.assertIsNone(await client.download_media(media_id="test-media"))
+        response.content.read.assert_not_awaited()
+
+    async def test_download_accepts_exact_limit_across_multiple_chunks(self) -> None:
+        client = _new_client()
+        response = _FakeResponse(status=200)
+        response.content.read = AsyncMock(
+            side_effect=[b"x" * 400, b"y" * 624, b""]
+        )
+
+        @asynccontextmanager
+        async def response_context(**_kwargs):
+            yield response
+
+        with (
+            patch.object(
+                client,
+                "_ensure_access_token",
+                new=AsyncMock(return_value="test-token"),
+            ),
+            patch.object(client, "_request_context", new=response_context),
+        ):
+            result = await client.download_media(media_id="test-media")
+        self.assertIsNotNone(result)
+        try:
+            with open(result["path"], "rb") as handle:
+                self.assertEqual(handle.read(), b"x" * 400 + b"y" * 624)
+            self.assertEqual(result["size"], 1024)
+            self.assertEqual(
+                [call.args[0] for call in response.content.read.await_args_list],
+                [1025, 625, 1],
+            )
+        finally:
+            os.unlink(result["path"])
 
     async def test_constructor_defaults_and_static_helpers(self) -> None:
         cfg_invalid = _make_config()

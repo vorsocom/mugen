@@ -44,9 +44,25 @@ Webhook ingress is guarded by all of:
 3. Provider gate:
    - official-account endpoint accepts only `provider=official_account`
    - wecom endpoint accepts only `provider=wecom`
-4. Signature verification using the matched client profile secret material.
+4. Event signature verification over the encrypted body using the matched
+   client profile secret material.
+5. Event timestamps within 300 seconds of server time, in either direction.
 
 Any verification failure is rejected before IPC dispatch.
+
+POST events require an `Encrypt` envelope and `msg_signature`. Plaintext POST
+events are rejected even when the profile has `webhook.aes_enabled=false`,
+because plaintext signatures do not authenticate the message body. Configure
+encrypted callbacks at the provider and set the ACP messaging client profile's
+`webhook.aes_enabled=true` and `webhook.aes_key` secret reference. GET subscription
+verification continues to follow the profile's selected mode. Keep the server
+clock synchronized; delivery retries inside the timestamp window remain subject
+to the existing event deduplication.
+
+Media downloads enforce `wechat.api.max_download_bytes` while reading the
+response stream, including responses without a trustworthy `Content-Length`.
+An oversized declared response is rejected before reading its body; otherwise
+reading stops after at most one byte beyond the limit without writing a file.
 
 ## Reliability Contract
 

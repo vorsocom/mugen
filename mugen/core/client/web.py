@@ -3,7 +3,7 @@
 __all__ = ["DefaultWebClient"]
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 import copy
 from datetime import datetime, timezone
 import fnmatch
@@ -1114,6 +1114,7 @@ class DefaultWebClient(IWebClient):
         *,
         auth_user: str,
         token: str,
+        permitted: Callable[[str], Awaitable[bool]],
     ) -> dict[str, Any] | None:
         """Resolve a media token to an authorized media file payload."""
         auth_user_id = self._require_non_empty(auth_user, "auth_user")
@@ -1130,6 +1131,12 @@ class DefaultWebClient(IWebClient):
 
             owner_user_id = row.get("owner_user_id")
             if owner_user_id != auth_user_id:
+                return None
+
+            conversation_id = row.get("conversation_id")
+            if not isinstance(conversation_id, str) or not conversation_id.strip():
+                return None
+            if not await permitted(conversation_id):
                 return None
 
             media_ref = row.get("file_path")
