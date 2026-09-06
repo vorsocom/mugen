@@ -6,7 +6,7 @@ __copyright__ = "Copyright © 2025, Vorso Computing, Inc."
 
 __email__ = "brightideas@vorsocomputing.com"
 
-__version__ = "0.62.9"
+__version__ = "0.62.10"
 
 import asyncio
 import logging
