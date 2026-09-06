@@ -4,6 +4,11 @@ Verified on 2026-09-05. **The image scan is not clean.** The Torch downgrade is
 removed; existing ChromaDB and Debian vulnerabilities remain as listed below.
 This report records a scan, not a claim that all container vulnerabilities are fixed.
 
+Follow-up on 2026-09-05: the [ChromaDB Dependabot remediation](dependabot-chromadb-remediation.md)
+records removal of the ChromaDB Python dependency from muGen. The image identity,
+scan counts, and findings below remain the original scan results; they have not
+been replaced by a new container scan.
+
 ## Build and inventory
 
 - Final image: `mugen-sec06:review`

@@ -689,6 +689,15 @@ required by profile-aware projection schema version 2.
 
 Module: `mugen.core.gateway.knowledge.chromadb`
 
+The gateway uses `httpx` directly against Chroma's tenant/database-scoped API V2.
+It does not install the `chromadb` server/embedded SDK. Collection lookup, query,
+upsert, and delete use the existing host, port, SSL, headers, tenant, and database
+settings; omitted tenant/database settings use `default_tenant` and
+`default_database`. A full host URL may include a reverse-proxy path prefix.
+Collection metadata never configures or loads embedding functions: embeddings
+are produced by the gateway's local encoder. Secure the separately deployed
+Chroma server independently of this client dependency change.
+
 Behavior:
 
 - Uses local sentence-transformer embeddings for semantic query vectors.
