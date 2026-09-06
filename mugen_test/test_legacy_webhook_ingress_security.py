@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 import uuid
+from urllib.parse import urlencode
 
 from quart import Quart
 from werkzeug.exceptions import InternalServerError
@@ -22,6 +23,7 @@ from mugen.core.utility.client_profile_runtime import (
     get_active_client_profile_id,
 )
 from mugen_test.test_ingress_binding_security import _Storage
+from mugen_test.wechat_fixtures import AES_KEY, encrypted_event
 
 _TRANSPORTS = {
     "line": (
@@ -154,7 +156,8 @@ class TestLegacyWebhookIngressSecurity(unittest.IsolatedAsyncioTestCase):
                     webhook=SimpleNamespace(
                         secret_token="secret",
                         signature_token="secret",
-                        aes_enabled=False,
+                        aes_enabled=True,
+                        aes_key=AES_KEY,
                     ),
                     provider="official_account",
                 )
@@ -191,8 +194,8 @@ class TestLegacyWebhookIngressSecurity(unittest.IsolatedAsyncioTestCase):
                 b"<xml><FromUserName>sender</FromUserName><MsgId>message-1</MsgId>"
                 b"<MsgType>text</MsgType><Content>hello</Content></xml>"
             )
-            signature = hashlib.sha1(b"12secret").hexdigest()
-            query = f"?timestamp=1&nonce=2&signature={signature}"
+            body, event_query = encrypted_event(body.decode(), token="secret")
+            query = "?" + urlencode(event_query)
         else:
             wrapped = authenticate(
                 invoke,

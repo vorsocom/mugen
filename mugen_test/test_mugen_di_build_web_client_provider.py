@@ -268,6 +268,7 @@ class TestDIBuildWebClient(unittest.TestCase):
                         *,
                         auth_user: str,
                         token: str,
+                        permitted,
                     ) -> dict | None:
                         pass
 

@@ -29,6 +29,7 @@ from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
 from mugen.core.plugin.acp.contract.service.key_provider import ResolvedKeyMaterial
 from mugen.core.plugin.acp.contract.service.key_ref import IKeyRefService
 from mugen.core.plugin.acp.service.key_ref import KeyRefService
+from mugen.core.plugin.acp.utility.resource_access import require_resource_access
 from mugen.core.plugin.audit.api.validation import AuditEventVerifyChainValidation
 from mugen.core.plugin.audit.service.audit_event import AuditEventService
 from mugen.core.plugin.ops_governance.api.validation import (
@@ -562,30 +563,44 @@ class ExportJobService(  # pragma: no cover
 
         return decision_snapshot
 
+    async def _require_source_read(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        auth_user_id: uuid.UUID,
+        entity_set: str,
+    ) -> None:
+        registry = self._registry_provider()
+        resource = registry.get_resource(entity_set)
+        if not resource.capabilities.allow_read:
+            abort(403, "Export source does not permit reads.")
+        await require_resource_access(
+            registry=registry,
+            resource=resource,
+            auth_user_id=auth_user_id,
+            tenant_id=tenant_id,
+            permission_type=resource.permissions.read,
+        )
+
     async def _fetch_resource_payload(
         self,
         *,
         tenant_id: uuid.UUID,
+        auth_user_id: uuid.UUID,
         entity_set: str,
         resource_id: uuid.UUID,
     ) -> dict[str, Any]:
         service = self._resolve_resource_service(entity_set)
+        await self._require_source_read(
+            tenant_id=tenant_id,
+            auth_user_id=auth_user_id,
+            entity_set=entity_set,
+        )
 
-        row = None
         try:
             row = await service.get({"tenant_id": tenant_id, "id": resource_id})
         except SQLAlchemyError:
             abort(500)
-        except Exception:  # pylint: disable=broad-except
-            row = None
-
-        if row is None:
-            try:
-                row = await service.get({"id": resource_id})
-            except SQLAlchemyError:
-                abort(500)
-            except Exception:  # pylint: disable=broad-except
-                row = None
 
         if row is None:
             abort(
@@ -597,7 +612,7 @@ class ExportJobService(  # pragma: no cover
             )
 
         row_tenant_id = getattr(row, "tenant_id", None)
-        if row_tenant_id is not None and row_tenant_id != tenant_id:
+        if row_tenant_id != tenant_id:
             abort(
                 409,
                 (
@@ -675,6 +690,11 @@ class ExportJobService(  # pragma: no cover
         except ValidationError as error:
             abort(409, str(error))
 
+        await self._require_source_read(
+            tenant_id=tenant_id,
+            auth_user_id=auth_user_id,
+            entity_set="AuditEvents",
+        )
         summary, _status = await self._audit_event_service.action_verify_chain(
             tenant_id=tenant_id,
             where={"tenant_id": tenant_id},
@@ -846,6 +866,7 @@ class ExportJobService(  # pragma: no cover
                     resource_id = uuid.UUID(resource_id_text)
                     payload = await self._fetch_resource_payload(
                         tenant_id=tenant_id,
+                        auth_user_id=auth_user_id,
                         entity_set=entity_set,
                         resource_id=resource_id,
                     )

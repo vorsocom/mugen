@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from mugen.core.contract.service.ipc import IPCAggregateError, IPCAggregateResult
 from mugen.core.plugin.wechat.api import webhook
 from mugen.core.utility.platform_runtime_profile import build_config_namespace
+from mugen_test.wechat_fixtures import AES_KEY, encrypted_event
 
 
 class _AbortCalled(Exception):
@@ -29,7 +30,7 @@ def _make_config(*, aes_enabled: bool = False) -> SimpleNamespace:
             webhook=SimpleNamespace(
                 signature_token="signature-token-1",
                 aes_enabled=aes_enabled,
-                aes_key="0123456789abcdef0123456789abcdef0123456789A",
+                aes_key=AES_KEY,
             )
         )
     )
@@ -85,6 +86,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
     """Covers webhook helper, verification, and endpoint dispatch branches."""
 
     def setUp(self) -> None:
+        self.enterContext(patch.object(webhook, "time", return_value=1))
         self._real_client_profile_service = webhook._client_profile_service
         self._client_profile_patch = patch.object(
             webhook,
@@ -517,7 +519,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
                 )
             self.assertEqual(ex.exception.code, 400)
 
-    async def test_post_payload_plain_and_encrypted_paths(self) -> None:
+    async def test_post_payload_rejects_plain_and_accepts_encrypted(self) -> None:
         logger = Mock()
         config = _make_config(aes_enabled=False)
         body_xml = (
@@ -534,7 +536,9 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
             nonce="2",
             encrypted=None,
         )
-        with patch.object(
+        with self.assertRaises(_AbortCalled) as rejected, patch.object(
+            webhook, "abort", side_effect=_abort_raiser
+        ), patch.object(
             webhook,
             "request",
             new=SimpleNamespace(
@@ -547,8 +551,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
                 logger=logger,
                 path_token="path-token-1",
             )
-        self.assertEqual(payload["MsgType"], "text")
-        self.assertIn("_received_at", payload)
+        self.assertEqual(rejected.exception.code, 400)
 
         config_aes = _make_config(aes_enabled=True)
         outer_xml = "<xml><Encrypt>encrypted-body</Encrypt></xml>"
@@ -717,7 +720,7 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
                     logger=logger,
                     path_token="path-token-1",
                 )
-            self.assertEqual(ex.exception.code, 401)
+            self.assertEqual(ex.exception.code, 400)
 
         with (
             patch.object(webhook, "abort", side_effect=_abort_raiser),
@@ -833,18 +836,17 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
             "<MsgId>1</MsgId>"
             "</xml>"
         )
-        signature = webhook._compute_signature(  # pylint: disable=protected-access
+        body, query = encrypted_event(
+            body_xml,
             token=config.wechat.webhook.signature_token,
             timestamp="1",
-            nonce="2",
-            encrypted=None,
         )
         with patch.object(
             webhook,
             "request",
             new=SimpleNamespace(
-                args={"timestamp": "1", "nonce": "2", "signature": signature},
-                get_data=AsyncMock(return_value=body_xml.encode("utf-8")),
+                args=query,
+                get_data=AsyncMock(return_value=body),
             ),
         ):
             response = await endpoint(
@@ -892,18 +894,17 @@ class TestMugenWeChatWebhook(unittest.IsolatedAsyncioTestCase):
             "<MsgId>1</MsgId>"
             "</xml>"
         )
-        signature = webhook._compute_signature(  # pylint: disable=protected-access
+        body, query = encrypted_event(
+            body_xml,
             token=config.wechat.webhook.signature_token,
             timestamp="1",
-            nonce="2",
-            encrypted=None,
         )
         with patch.object(
             webhook,
             "request",
             new=SimpleNamespace(
-                args={"timestamp": "1", "nonce": "2", "signature": signature},
-                get_data=AsyncMock(return_value=body_xml.encode("utf-8")),
+                args=query,
+                get_data=AsyncMock(return_value=body),
             ),
         ):
             with self.assertRaises(InternalServerError):

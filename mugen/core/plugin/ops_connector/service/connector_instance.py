@@ -6,8 +6,10 @@ import asyncio
 from datetime import datetime, timezone
 import hashlib
 import json
+from string import Formatter
 from types import SimpleNamespace
 from typing import Any, Mapping
+from urllib.parse import quote
 import uuid
 
 import aiohttp
@@ -58,11 +60,6 @@ def _registry_provider():  # pragma: no cover
     return di.container.get_required_ext_service(di.EXT_SERVICE_ADMIN_REGISTRY)
 
 
-class _SafeFormatDict(dict[str, Any]):
-    def __missing__(self, key: str) -> str:  # pragma: no cover
-        return "{" + key + "}"
-
-
 class ConnectorInstanceService(  # pragma: no cover
     IRelationalService[ConnectorInstanceDE],
     IConnectorInstanceService,
@@ -79,6 +76,9 @@ class ConnectorInstanceService(  # pragma: no cover
 
     _PLUGIN_NAMESPACE = "com.vorsocomputing.mugen.ops_connector"
     _DEFAULT_RETRY_CODES = (429, 500, 502, 503, 504)
+    _CREDENTIAL_HEADERS = frozenset(
+        {"authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key"}
+    )
 
     def __init__(
         self,
@@ -825,6 +825,72 @@ class ConnectorInstanceService(  # pragma: no cover
 
         return headers
 
+    def _redact_request_headers(
+        self,
+        headers: Mapping[str, str],
+        *,
+        secret_text: str,
+        redacted_keys: tuple[str, ...],
+    ) -> dict[str, str]:
+        sensitive_names = self._CREDENTIAL_HEADERS.union(redacted_keys)
+        return {
+            key: (
+                "***REDACTED***"
+                if key.casefold() in sensitive_names
+                or (secret_text and secret_text in value)
+                else value
+            )
+            for key, value in headers.items()
+        }
+
+    def _format_path_template(
+        self,
+        *,
+        path_template: str,
+        input_json: Any,
+    ) -> str:
+        if (
+            not path_template.startswith("/")
+            or path_template.startswith("//")
+            or any(char in path_template for char in "\\?#%")
+            or any(ord(char) < 32 or ord(char) == 127 for char in path_template)
+        ):
+            abort(409, "Capability.PathTemplate must be an absolute endpoint path.")
+
+        try:
+            template_parts = list(Formatter().parse(path_template))
+        except ValueError:
+            abort(409, "Capability.PathTemplate contains invalid placeholders.")
+
+        values = input_json if isinstance(input_json, Mapping) else {}
+        rendered_parts: list[str] = []
+        for literal, field_name, format_spec, conversion in template_parts:
+            rendered_parts.append(literal)
+            if field_name is None:
+                continue
+            if not field_name.isidentifier() or format_spec or conversion:
+                abort(409, "Path placeholders must be simple input field names.")
+            if field_name not in values:
+                abort(400, f"InputJson is missing path field {field_name!r}.")
+
+            value = self._json_safe(values[field_name])
+            if not isinstance(value, (str, int, float, bool)):
+                abort(400, f"Path field {field_name!r} must be a scalar value.")
+            text = str(value)
+            if (
+                not text
+                or text in {".", ".."}
+                or any(char in text for char in "/\\?#%")
+                or any(ord(char) < 32 or ord(char) == 127 for char in text)
+            ):
+                abort(400, f"Path field {field_name!r} must be one safe path segment.")
+            rendered_parts.append(quote(text, safe=""))
+
+        path = "".join(rendered_parts)
+        if any(segment in {".", ".."} for segment in path.split("/")):
+            abort(409, "Capability.PathTemplate must not contain dot segments.")
+        return path
+
     def _invoke_request_spec(
         self,
         *,
@@ -839,13 +905,10 @@ class ConnectorInstanceService(  # pragma: no cover
         if path_template is None:
             abort(409, "Capability.PathTemplate must be configured.")
 
-        if not path_template.startswith("/"):
-            abort(409, "Capability.PathTemplate must start with '/'.")
-
-        format_values: dict[str, Any] = {}
-        if isinstance(input_json, Mapping):
-            format_values = {str(k): self._json_safe(v) for k, v in input_json.items()}
-        path = path_template.format_map(_SafeFormatDict(format_values))
+        path = self._format_path_template(
+            path_template=path_template,
+            input_json=input_json,
+        )
 
         placement = self._normalize_optional_text(capability.get("InputPlacement"))
         placement = (placement or "json").casefold()
@@ -1508,10 +1571,12 @@ class ConnectorInstanceService(  # pragma: no cover
                 )
             )
 
-            method, url, params, _unused, body_text, body_json = self._invoke_request_spec(
-                base_url=base_url,
-                capability=capability,
-                input_json=data.input_json,
+            method, url, params, _unused, body_text, body_json = (
+                self._invoke_request_spec(
+                    base_url=base_url,
+                    capability=capability,
+                    input_json=data.input_json,
+                )
             )
 
             headers = self._resolve_headers(
@@ -1543,7 +1608,11 @@ class ConnectorInstanceService(  # pragma: no cover
                     "Method": method,
                     "Url": url,
                     "Params": params,
-                    "Headers": headers,
+                    "Headers": self._redact_request_headers(
+                        headers,
+                        secret_text=secret_text,
+                        redacted_keys=cfg.redacted_keys,
+                    ),
                     "InputPlacement": self._normalize_optional_text(
                         capability.get("InputPlacement")
                     )

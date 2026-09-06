@@ -51,6 +51,30 @@ logs, and inline SLA escalation on connector failures.
   - writes immutable call log row (`CapabilityName=__test_connection__`)
   - always returns a `200` envelope with success/failure diagnostics
 
+### Connector request boundaries
+
+`PathTemplate` is an endpoint path beginning with one `/`, with optional simple
+named placeholders such as `/records/{RecordId}/details`. Each referenced
+`InputJson` field must be a nonempty string, number, or boolean representing one
+path segment. The runtime percent-encodes spaces and Unicode characters while
+preserving the original input in its configured body or query placement.
+
+Path field values must not contain `/`, `\`, `?`, `#`, `%`, ASCII control
+characters, or standalone `.` / `..`. Supply raw segment values rather than
+percent-encoded values. Templates must not contain query strings, fragments,
+percent escapes, control characters, or dot segments. Python attribute/index
+lookups, format specifications, and conversions in placeholders are unsupported.
+Missing or unsafe input fields return `400` before an outbound request; invalid
+templates return `409`. Non-path payload fields retain their existing semantics;
+use `InputPlacement="query"` for query parameters.
+
+Invocation logs always redact standard credential headers and every custom header
+containing the resolved connector secret, including embedded `{secret}` values.
+Configured `redacted_keys` can mark additional headers as sensitive. Safe headers
+remain available for diagnostics, and outbound requests receive their original
+resolved header values. This protects newly recorded invocations; previously
+stored call logs are not rewritten.
+
 ## Migration Summary
 
 Schema migration:

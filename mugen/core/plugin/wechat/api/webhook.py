@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import hashlib
 import hmac
 import struct
+from time import time
 from types import SimpleNamespace
 from xml.etree import ElementTree
 
@@ -103,6 +104,22 @@ def _verify_signature(
         encrypted=encrypted,
     )
     return hmac.compare_digest(expected, supplied_signature)
+
+
+def _verify_event_timestamp_or_abort(
+    timestamp: str,
+    *,
+    logger: ILoggingGateway,
+) -> None:
+    """Limit signed event replay while allowing prompt delivery retries."""
+    try:
+        event_time = int(timestamp)
+    except ValueError:
+        abort(400, "Invalid WeChat event timestamp.")
+    now = time()
+    if event_time <= 0 or not now - 300 <= event_time <= now + 300:
+        logger.error("WeChat event timestamp outside the allowed window.")
+        abort(401)
 
 
 def _decode_aes_key(aes_key: str) -> bytes:
@@ -302,6 +319,8 @@ async def _resolve_inbound_payload_or_abort(
     timestamp = _required_query_arg("timestamp")
     nonce = _required_query_arg("nonce")
 
+    _verify_event_timestamp_or_abort(timestamp, logger=logger)
+
     body_bytes = await request.get_data()
     body_text = body_bytes.decode("utf-8", errors="ignore")
 
@@ -313,11 +332,6 @@ async def _resolve_inbound_payload_or_abort(
 
     try:
         signature_token = await _resolve_signature_token(
-            config,
-            path_token=path_token,
-            client_profile_service=client_profile_service,
-        )
-        aes_enabled = await _resolve_aes_enabled(
             config,
             path_token=path_token,
             client_profile_service=client_profile_service,
@@ -356,26 +370,9 @@ async def _resolve_inbound_payload_or_abort(
         except ValueError:
             logger.error("Unable to decrypt WeChat encrypted payload.")
             abort(400)
-    elif aes_enabled is True:
-        logger.error("Expected encrypted WeChat payload for AES-enabled webhook.")
-        abort(400)
     else:
-        supplied_signature = _coerce_text(request.args.get("signature"))
-        if supplied_signature == "":
-            supplied_signature = _coerce_text(request.args.get("msg_signature"))
-        if supplied_signature == "":
-            logger.error("WeChat signature not supplied for plaintext payload.")
-            abort(400)
-
-        verified = _verify_signature(
-            token=signature_token,
-            timestamp=timestamp,
-            nonce=nonce,
-            supplied_signature=supplied_signature,
-        )
-        if verified is not True:
-            logger.error("WeChat plaintext webhook signature verification failed.")
-            abort(401)
+        logger.error("WeChat event requires a signed encrypted payload.")
+        abort(400)
 
     try:
         payload = _parse_xml_payload(body_text)
