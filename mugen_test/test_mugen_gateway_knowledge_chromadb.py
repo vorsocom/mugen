@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
@@ -237,9 +236,9 @@ class TestMugenGatewayKnowledgeChromaDB(unittest.IsolatedAsyncioTestCase):
             )
 
         fake_http_client = Mock(return_value=object())
-        with patch.dict(
-            sys.modules,
-            {"chromadb": SimpleNamespace(HttpClient=fake_http_client)},
+        with patch(
+            "mugen.core.gateway.knowledge.chromadb.ChromaHttpClient",
+            fake_http_client,
         ):
             client = ChromaKnowledgeGateway._create_http_client(
                 host="local"
@@ -272,6 +271,7 @@ class TestMugenGatewayKnowledgeChromaDB(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(kwargs["host"], "chroma.local")
             self.assertEqual(kwargs["port"], 9000)
             self.assertTrue(kwargs["ssl"])
+            self.assertEqual(kwargs["timeout"], 2.5)
             self.assertEqual(kwargs["headers"]["Authorization"], "Bearer token")
             self.assertEqual(kwargs["tenant"], "tenant-a")
             self.assertEqual(kwargs["database"], "db-a")
