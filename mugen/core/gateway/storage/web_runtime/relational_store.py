@@ -801,7 +801,8 @@ class RelationalWebRuntimeStore(IWebRuntimeStore):
         async with self._relational_session() as session:
             result = await session.execute(
                 self._schema_sql(
-                    "SELECT token, owner_user_id, file_path, mime_type, filename, "
+                    "SELECT token, owner_user_id, conversation_id, "
+                    "file_path, mime_type, filename, "
                     "expires_at "
                     "FROM mugen.web_media_token "
                     "WHERE token = :token"

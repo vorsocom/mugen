@@ -214,6 +214,88 @@ class TestMugenServiceMessagingIngressExtractors(unittest.IsolatedAsyncioTestCas
         self.assertEqual(entries[1].event.room_id, "444")
         self.assertEqual(entries[1].event.sender, "333")
 
+    async def test_wechat_event_retry_identity_excludes_receipt_metadata(self) -> None:
+        provider_event = {
+            "FromUserName": "wechat-user",
+            "MsgType": "event",
+            "Event": "CLICK",
+            "EventKey": "menu-1",
+            "CreateTime": "1000",
+        }
+        deliveries = [
+            {**provider_event, "_received_at": "2026-09-05T12:00:00Z"},
+            {**provider_event, "_received_at": "2026-09-05T12:00:01Z"},
+            {
+                **provider_event,
+                "EventKey": "menu-2",
+                "_received_at": "2026-09-05T12:00:01Z",
+            },
+            dict(provider_event),
+        ]
+        with patch.object(
+            extractors,
+            "_resolve_ingress_route",
+            new=AsyncMock(return_value={"client_profile_id": str(_CLIENT_PROFILE_ID)}),
+        ):
+            events = []
+            for payload in deliveries:
+                entries = await extractors.extract_wechat_stage_entries(
+                    path_token="wechat-path",
+                    provider="official_account",
+                    payload=payload,
+                    relational_storage_gateway=object(),
+                    logging_gateway=Mock(),
+                )
+                events.append(entries[0].event)
+
+        self.assertEqual(events[0].dedupe_key, events[1].dedupe_key)
+        self.assertEqual(events[0].dedupe_key, events[3].dedupe_key)
+        self.assertNotEqual(events[0].dedupe_key, events[2].dedupe_key)
+        for event, payload in zip(events, deliveries):
+            self.assertIsNone(event.event_id)
+            self.assertEqual(event.payload, payload)
+        self.assertNotEqual(
+            events[0].payload["_received_at"],
+            events[1].payload["_received_at"],
+        )
+
+    async def test_wechat_retry_identity_preserves_receiving_client_scope(self) -> None:
+        second_client_id = uuid.uuid4()
+        routes = {
+            "path-a": {"client_profile_id": str(_CLIENT_PROFILE_ID)},
+            "path-b": {"client_profile_id": str(second_client_id)},
+        }
+        resolver = AsyncMock(
+            side_effect=lambda **kwargs: routes[kwargs["identifier_value"]]
+        )
+        with patch.object(extractors, "_resolve_ingress_route", new=resolver):
+            events = []
+            for path_token, received_at in (("path-a", "first"), ("path-b", "second")):
+                entries = await extractors.extract_wechat_stage_entries(
+                    path_token=path_token,
+                    provider="official_account",
+                    payload={
+                        "FromUserName": "wechat-user",
+                        "MsgType": "event",
+                        "Event": "subscribe",
+                        "CreateTime": "1000",
+                        "_received_at": received_at,
+                    },
+                    relational_storage_gateway=object(),
+                    logging_gateway=Mock(),
+                )
+                events.append(entries[0].event)
+
+        self.assertEqual(events[0].dedupe_key, events[1].dedupe_key)
+        self.assertEqual(events[0].client_profile_id, _CLIENT_PROFILE_ID)
+        self.assertEqual(events[1].client_profile_id, second_client_id)
+        self.assertNotEqual(
+            (events[0].platform, events[0].client_profile_id, events[0].dedupe_key),
+            (events[1].platform, events[1].client_profile_id, events[1].dedupe_key),
+        )
+        self.assertEqual(events[0].provider_context["path_token"], "path-a")
+        self.assertEqual(events[1].provider_context["path_token"], "path-b")
+
     async def test_wechat_extractor_covers_provider_context(self) -> None:
         with patch.object(
             extractors,

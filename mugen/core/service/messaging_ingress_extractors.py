@@ -347,6 +347,10 @@ async def extract_wechat_stage_entries(
     sender = _nonempty_text(payload.get("FromUserName"))
     event_id = _nonempty_text(payload.get("MsgId"))
     event_type = f"{provider}:event"
+    # Delivery-local timestamps must not distinguish retries of the same event.
+    identity_payload = {
+        key: value for key, value in payload.items() if key != "_received_at"
+    }
     return [
         MessagingIngressStageEntry(
             ipc_command="wechat_ingress_event",
@@ -357,7 +361,7 @@ async def extract_wechat_stage_entries(
                 source_mode="webhook",
                 event_type=event_type,
                 event_id=event_id,
-                dedupe_key=_dedupe_key(event_type, event_id, payload),
+                dedupe_key=_dedupe_key(event_type, event_id, identity_payload),
                 identifier_type="path_token",
                 identifier_value=path_token,
                 room_id=sender,

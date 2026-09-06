@@ -26,6 +26,15 @@ No new plugin is introduced; all additions remain in `ops_reporting`.
   `AuditEvents/$action/verify_chain` summary.
 - Optional policy gating runs only when `PolicyDefinitionId` is provided on
   `create_export`.
+- Export builders require the caller's current read permission on each referenced
+  source resource, in addition to export-job manage permission. Grant source read
+  permissions explicitly when delegating reporting to tenant roles.
+  Optional audit-chain proofs also require `AuditEvents` read permission, even
+  when `ResourceRefs` contains no audit records.
+- Tenant exports include only records whose tenant matches the export tenant.
+  Global audit events and foreign-tenant records cannot be exported through a
+  tenant export job, including by global administrators. Missing records and
+  failed lookups never retry with an unscoped query.
 
 ## Core Surface Changes
 

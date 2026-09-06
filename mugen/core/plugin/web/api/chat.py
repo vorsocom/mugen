@@ -784,6 +784,32 @@ async def web_messages_create(  # pylint: disable=too-many-locals,too-many-branc
     return jsonify(response_payload), 202
 
 
+async def _conversation_access_permitted(
+    *,
+    auth_user: str,
+    conversation_id: str,
+    web_client: IWebClient,
+    auth_provider,
+) -> bool:
+    tenant_id = await web_client.get_conversation_tenant_id(
+        auth_user=auth_user,
+        conversation_id=conversation_id,
+    )
+    if tenant_id is None:
+        return False
+
+    auth_svc = auth_provider()
+    permission_args = {
+        "user_id": uuid.UUID(str(auth_user)),
+        "permission_object": WEB_PLATFORM_ACCESS_PERMISSION,
+        "permission_type": WEB_PLATFORM_ACCESS_PERMISSION,
+        "allow_global_admin": True,
+    }
+    if tenant_id == GLOBAL_TENANT_ID:
+        return await auth_svc.has_permission_for_any_tenant(**permission_args)
+    return await auth_svc.has_permission(tenant_id=tenant_id, **permission_args)
+
+
 @api.get("/core/web/v1/events")
 @web_platform_required
 @global_auth_required
@@ -808,23 +834,12 @@ async def web_events_stream(
         last_event_id = request.args.get("last_event_id")
 
     async def _permitted() -> bool:
-        tenant_id = await web_client.get_conversation_tenant_id(
+        return await _conversation_access_permitted(
             auth_user=auth_user,
             conversation_id=conversation_id,
+            web_client=web_client,
+            auth_provider=auth_provider,
         )
-        if tenant_id is None:
-            return False
-
-        auth_svc = auth_provider()
-        permission_args = {
-            "user_id": uuid.UUID(str(auth_user)),
-            "permission_object": WEB_PLATFORM_ACCESS_PERMISSION,
-            "permission_type": WEB_PLATFORM_ACCESS_PERMISSION,
-            "allow_global_admin": True,
-        }
-        if tenant_id == GLOBAL_TENANT_ID:
-            return await auth_svc.has_permission_for_any_tenant(**permission_args)
-        return await auth_svc.has_permission(tenant_id=tenant_id, **permission_args)
 
     try:
         if not await _permitted():
@@ -863,11 +878,24 @@ async def web_media_download(
     token: str,
     auth_user: str,
     web_client_provider=_web_client_provider,
+    auth_provider=_auth_provider,
 ):
     """Resolve and stream media bytes for a valid web download token."""
     web_client: IWebClient = web_client_provider()
 
-    media = await web_client.resolve_media_download(auth_user=auth_user, token=token)
+    async def _permitted(conversation_id: str) -> bool:
+        return await _conversation_access_permitted(
+            auth_user=auth_user,
+            conversation_id=conversation_id,
+            web_client=web_client,
+            auth_provider=auth_provider,
+        )
+
+    media = await web_client.resolve_media_download(
+        auth_user=auth_user,
+        token=token,
+        permitted=_permitted,
+    )
     if not isinstance(media, dict):
         abort(404)
 

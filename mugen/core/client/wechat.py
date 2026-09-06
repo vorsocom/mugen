@@ -543,24 +543,39 @@ class DefaultWeChatClient(IWeChatClient):
                 payload=None,
             ) as response:
                 status = int(response.status)
-                body = await response.read()
                 if not (200 <= status < 300):
                     self._logging_gateway.error(
                         f"[cid={cid}] WeChat media download failed status={status}."
                     )
                     return None
 
+                content_length = response.headers.get("Content-Length")
+                try:
+                    declared_size = int(content_length)
+                except (TypeError, ValueError):
+                    declared_size = 0
+                if declared_size > self._max_download_bytes:
+                    self._logging_gateway.error(
+                        f"[cid={cid}] WeChat media download exceeded max bytes."
+                    )
+                    return None
+
+                body = bytearray()
+                while chunk := await response.content.read(
+                    min(64 * 1024, self._max_download_bytes - len(body) + 1)
+                ):
+                    if len(body) + len(chunk) > self._max_download_bytes:
+                        self._logging_gateway.error(
+                            f"[cid={cid}] WeChat media download exceeded max bytes."
+                        )
+                        return None
+                    body.extend(chunk)
+
                 content_type = str(response.headers.get("Content-Type", "")).lower()
                 if "application/json" in content_type:
                     payload = self._parse_response_payload(body.decode("utf-8", errors="ignore"))
                     self._logging_gateway.error(
                         f"[cid={cid}] WeChat media download returned JSON payload={payload}."
-                    )
-                    return None
-
-                if len(body) > self._max_download_bytes:
-                    self._logging_gateway.error(
-                        f"[cid={cid}] WeChat media download exceeded max bytes."
                     )
                     return None
 

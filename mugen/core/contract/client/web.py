@@ -3,7 +3,7 @@
 __all__ = ["IWebClient", "WebConversationTenantConflictError"]
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 import uuid
 
@@ -79,5 +79,6 @@ class IWebClient(ABC):
         *,
         auth_user: str,
         token: str,
+        permitted: Callable[[str], Awaitable[bool]],
     ) -> dict[str, Any] | None:
-        """Resolve a media token to a downloadable asset for the user."""
+        """Resolve media after checking current access to its conversation."""

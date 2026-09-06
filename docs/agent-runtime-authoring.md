@@ -307,6 +307,22 @@ Use the current plugin components as the baseline examples:
 
 These are reference implementations, not locked architecture.
 
+### ACP action authorization
+
+`ACPActionCapabilityProvider` requires a current, unlocked ACP user and checks
+resource permissions, tenant membership and lifecycle, administrator-only action
+metadata, required plugin capabilities, and configured action schema bindings
+before each execution. Route capability
+allowlists provide an additional restriction; they do not grant ACP permissions.
+The provider executes actions only on tenant-scoped resources in the run's tenant.
+
+The actor comes from trusted `PlanRunRequest.metadata["auth_user_id"]`, or from
+the authenticated sender of a web request. Other channel adapters must explicitly
+bind their verified external identity to an ACP user in request metadata. Do not
+copy that field from message content, model output, or unverified ingress metadata.
+Tool arguments containing `auth_user_id` or `AuthUserId` are rejected. A channel
+sender ID that happens to resemble an ACP UUID does not establish that identity.
+
 ## Guardrails
 
 - Keep ACP, database, and provider SDK details in plugin adapters, not in core

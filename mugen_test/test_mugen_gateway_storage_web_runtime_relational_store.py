@@ -410,6 +410,34 @@ class TestRelationalWebRuntimeStore(unittest.IsolatedAsyncioTestCase):
                     )
                 )
 
+    async def test_media_token_lookup_preserves_authoritative_conversation(
+        self,
+    ) -> None:
+        store, session = self._build_store(row=None)
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        connection.row_factory = sqlite3.Row
+        connection.execute("ATTACH DATABASE ':memory:' AS mugen")
+        connection.execute(
+            "CREATE TABLE mugen.web_media_token "
+            "(token TEXT, owner_user_id TEXT, conversation_id TEXT, file_path TEXT, "
+            "mime_type TEXT, filename TEXT, expires_at TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO mugen.web_media_token VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("token-1", "owner-1", "conv-1", "media-ref", None, None, "2030-01-01"),
+        )
+
+        def execute_query(statement, params):
+            rows = connection.execute(str(statement), params).fetchall()
+            return _Result([dict(row) for row in rows])
+
+        session.execute.side_effect = execute_query
+        token = await store.get_media_token(token="token-1")
+        self.assertEqual(token["owner_user_id"], "owner-1")
+        self.assertEqual(token["conversation_id"], "conv-1")
+        self.assertIsNone(await store.get_media_token(token="unknown"))
+
     def test_runtime_store_contract_requires_conversation_tenant_lookup(self) -> None:
         self.assertIn(
             "get_conversation_tenant_id",

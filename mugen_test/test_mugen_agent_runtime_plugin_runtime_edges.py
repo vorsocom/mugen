@@ -390,6 +390,8 @@ class _AdminRegistry:
 
 
 class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
+    """Cover runtime adapter edge cases and persistence transitions."""
+
     async def test_registry_and_helper_functions_cover_runtime_branches(self) -> None:
         registry = AgentComponentRegistry()
         policy_resolver = object()
@@ -583,7 +585,8 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             completion.reasoning_state.to_dict()
         )
         prompt_state = (
-            runtime_module._serialize_state_for_prompt(state)  # pylint: disable=protected-access
+            # pylint: disable=protected-access
+            runtime_module._serialize_state_for_prompt(state)
         )
         self.assertEqual(
             prompt_state["metadata"][COMPLETION_CONTINUATION_STATE_METADATA_KEY][
@@ -601,12 +604,14 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn(
             "reasoning_items",
-            runtime_module._serialize_outcome(outcome)["metadata"][  # pylint: disable=protected-access
+            # pylint: disable=protected-access
+            runtime_module._serialize_outcome(outcome)["metadata"][
                 COMPLETION_CONTINUATION_STATE_METADATA_KEY
             ],
         )
         prompt_outcome = (
-            runtime_module._serialize_outcome_for_prompt(outcome)  # pylint: disable=protected-access
+            # pylint: disable=protected-access
+            runtime_module._serialize_outcome_for_prompt(outcome)
         )
         self.assertEqual(
             prompt_outcome["metadata"][COMPLETION_CONTINUATION_STATE_METADATA_KEY][
@@ -752,12 +757,14 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(normalized_invocation[0].capability_key, "cap.normalized")
         self.assertIsNone(
-            runtime_module._completion_tool_result_from_observation(  # pylint: disable=protected-access
+            # pylint: disable=protected-access
+            runtime_module._completion_tool_result_from_observation(
                 PlanObservation(kind="note", payload={"x": 1})
             )
         )
         error_tool_result = (
-            runtime_module._completion_tool_result_from_observation(  # pylint: disable=protected-access
+            # pylint: disable=protected-access
+            runtime_module._completion_tool_result_from_observation(
                 PlanObservation(
                     kind="capability_result",
                     capability_result=CapabilityResult(
@@ -807,7 +814,8 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             runtime_module._cfg_list({"routes": "nope"}, "routes"), []
         )  # pylint: disable=protected-access
         for status in PlanOutcomeStatus:
-            mapped = runtime_module._outcome_status_to_run_status(  # pylint: disable=protected-access
+            # pylint: disable=protected-access
+            mapped = runtime_module._outcome_status_to_run_status(
                 PlanOutcome(status=status)
             )
             self.assertIsInstance(mapped, PlanRunStatus)
@@ -904,10 +912,12 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             id=uuid.uuid4(),
             mode=PlanRunMode.BACKGROUND.value,
             status=PlanRunStatus.PREPARED.value,
-            policy_json=runtime_module._serialize_policy(  # pylint: disable=protected-access
+            # pylint: disable=protected-access
+            policy_json=runtime_module._serialize_policy(
                 AgentRuntimePolicy(enabled=True, background_enabled=True)
             ),
-            run_state_json=runtime_module._serialize_state(  # pylint: disable=protected-access
+            # pylint: disable=protected-access
+            run_state_json=runtime_module._serialize_state(
                 PlanRunState(goal="hello")
             ),
             request_json={
@@ -1193,7 +1203,10 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
                 side_effect=[
                     CompletionResponse(content='{"status":"invalid"}'),
                     CompletionResponse(
-                        content='{"status":"retry","reasons":[" try_again ",""],"recommended_decision":"respond"}'
+                        content=(
+                            '{"status":"retry","reasons":[" try_again ",""],'
+                            '"recommended_decision":"respond"}'
+                        )
                     ),
                     CompletionResponse(content="not-json"),
                     CompletionResponse(content='{"status":"pass","reasons":["ok"]}'),
@@ -1211,7 +1224,8 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
                 {"stage": "invalid"}
             )  # pylint: disable=protected-access
         )
-        prompted_result = await prompted_evaluator._prompt_evaluator(  # pylint: disable=protected-access
+        # pylint: disable=protected-access
+        prompted_result = await prompted_evaluator._prompt_evaluator(
             {"stage": "valid"}
         )
         response_result = await prompted_evaluator.evaluate_response(
@@ -1390,6 +1404,7 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             admin_registry=registry,
             logging_gateway=logging_gateway,
         )
+        provider._authorize_action = AsyncMock()
 
         invalid_metadata = await provider.execute(
             request,
@@ -1568,7 +1583,7 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         )
         logging_gateway.warning.assert_called_once()
 
-    async def test_acp_capability_provider_execute_injects_request_context_only_when_requested(
+    async def test_acp_capability_provider_injects_requested_context(
         self,
     ) -> None:
         service = _ACPService()
@@ -1590,6 +1605,7 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
             trace_id="trace-1",
             metadata={"auth_user_id": "33333333-3333-3333-3333-333333333333"},
         )
+        provider._authorize_action = AsyncMock()
         run = _run(request=request)
 
         contextual_descriptor = CapabilityDescriptor(
@@ -1717,7 +1733,7 @@ class TestMugenAgentRuntimePluginRuntimeEdges(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"answer": 42', completion_payload[0]["content"])
         self.assertEqual(blank_payload, [])
 
-    async def test_relational_plan_run_store_edges_cover_missing_rows_leases_and_filters(
+    async def test_relational_plan_run_store_missing_rows_leases_and_filters(
         self,
     ) -> None:
         run_service = _FakeRunService()

@@ -166,7 +166,7 @@ class IWebRuntimeStore(ABC):
 
     @abstractmethod
     async def get_media_token(self, *, token: str) -> dict[str, Any] | None:
-        """Fetch one media token row."""
+        """Fetch one media token row, including its owner and conversation ID."""
 
     @abstractmethod
     async def recover_stale_processing_jobs(self, *, now_ts: datetime) -> int:

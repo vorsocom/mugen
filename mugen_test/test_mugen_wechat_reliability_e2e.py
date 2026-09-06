@@ -15,6 +15,7 @@ from mugen.core.contract.service.ingress_routing import (
 from mugen.core.plugin.wechat.api import webhook
 from mugen.core.plugin.wechat.ipc_ext import WeChatIPCExtension
 from mugen.core.service.ipc import DefaultIPCService
+from mugen_test.wechat_fixtures import AES_KEY, encrypted_event
 
 _CLIENT_PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000203")
 
@@ -63,8 +64,8 @@ def _make_config() -> SimpleNamespace:
             webhook=SimpleNamespace(
                 path_token="path-token",
                 signature_token="signature-token",
-                aes_enabled=False,
-                aes_key="0123456789abcdef0123456789abcdef0123456789A",
+                aes_enabled=True,
+                aes_key=AES_KEY,
                 dedupe_ttl_seconds=86400,
             ),
             typing=SimpleNamespace(enabled=True),
@@ -157,15 +158,6 @@ def _new_ipc_service(*, logger: Mock, ipc_ext: WeChatIPCExtension) -> DefaultIPC
     return ipc_service
 
 
-def _signature_for_plain(token: str, *, timestamp: str = "1", nonce: str = "2") -> str:
-    return webhook._compute_signature(  # pylint: disable=protected-access
-        token=token,
-        timestamp=timestamp,
-        nonce=nonce,
-        encrypted=None,
-    )
-
-
 def _text_event_xml(*, msg_id: str = "1001", text: str = "hello") -> str:
     return (
         "<xml>"
@@ -219,14 +211,16 @@ class TestMugenWeChatReliabilityE2E(unittest.IsolatedAsyncioTestCase):
         endpoint = unwrap(webhook.wechat_official_account_event)
         cfg = _make_config()
         payload_xml = _text_event_xml(msg_id="7001", text="hello")
-        signature = _signature_for_plain(cfg.wechat.webhook.signature_token)
+        body, query = encrypted_event(
+            payload_xml, token=cfg.wechat.webhook.signature_token
+        )
 
         with patch.object(
             webhook,
             "request",
             new=SimpleNamespace(
-                args={"timestamp": "1", "nonce": "2", "signature": signature},
-                get_data=AsyncMock(return_value=payload_xml.encode("utf-8")),
+                args=query,
+                get_data=AsyncMock(return_value=body),
             ),
         ):
             first = await endpoint(
@@ -241,8 +235,8 @@ class TestMugenWeChatReliabilityE2E(unittest.IsolatedAsyncioTestCase):
             webhook,
             "request",
             new=SimpleNamespace(
-                args={"timestamp": "1", "nonce": "2", "signature": signature},
-                get_data=AsyncMock(return_value=payload_xml.encode("utf-8")),
+                args=query,
+                get_data=AsyncMock(return_value=body),
             ),
         ):
             second = await endpoint(
@@ -293,14 +287,16 @@ class TestMugenWeChatReliabilityE2E(unittest.IsolatedAsyncioTestCase):
         endpoint = unwrap(webhook.wechat_official_account_event)
         cfg = _make_config()
         payload_xml = _voice_event_xml(msg_id="7002", media_id="media-123")
-        signature = _signature_for_plain(cfg.wechat.webhook.signature_token)
+        body, query = encrypted_event(
+            payload_xml, token=cfg.wechat.webhook.signature_token
+        )
 
         with patch.object(
             webhook,
             "request",
             new=SimpleNamespace(
-                args={"timestamp": "1", "nonce": "2", "signature": signature},
-                get_data=AsyncMock(return_value=payload_xml.encode("utf-8")),
+                args=query,
+                get_data=AsyncMock(return_value=body),
             ),
         ):
             response = await endpoint(
@@ -345,14 +341,16 @@ class TestMugenWeChatReliabilityE2E(unittest.IsolatedAsyncioTestCase):
         endpoint = unwrap(webhook.wechat_official_account_event)
         cfg = _make_config()
         payload_xml = _text_event_xml(msg_id="7003", text="boom")
-        signature = _signature_for_plain(cfg.wechat.webhook.signature_token)
+        body, query = encrypted_event(
+            payload_xml, token=cfg.wechat.webhook.signature_token
+        )
 
         with patch.object(
             webhook,
             "request",
             new=SimpleNamespace(
-                args={"timestamp": "1", "nonce": "2", "signature": signature},
-                get_data=AsyncMock(return_value=payload_xml.encode("utf-8")),
+                args=query,
+                get_data=AsyncMock(return_value=body),
             ),
         ):
             response = await endpoint(
@@ -375,7 +373,7 @@ class TestMugenWeChatReliabilityE2E(unittest.IsolatedAsyncioTestCase):
         cfg = _make_config()
         logger = Mock()
         ipc_service = SimpleNamespace(handle_ipc_request=AsyncMock())
-        signature = _signature_for_plain(cfg.wechat.webhook.signature_token)
+        _, query = encrypted_event("<xml/>", token="test")
 
         with (
             patch.object(webhook, "abort", side_effect=lambda code: (_ for _ in ()).throw(RuntimeError(code))),
@@ -383,7 +381,7 @@ class TestMugenWeChatReliabilityE2E(unittest.IsolatedAsyncioTestCase):
                 webhook,
                 "request",
                 new=SimpleNamespace(
-                    args={"timestamp": "1", "nonce": "2", "signature": signature},
+                    args=query,
                     get_data=AsyncMock(return_value=b"<xml><broken"),
                 ),
             ),

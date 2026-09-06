@@ -23,6 +23,9 @@ from types import SimpleNamespace
 from typing import Any
 import uuid
 
+from quart import abort
+
+from mugen.core import di
 from mugen.core.contract.agent import (
     AgentRuntimePolicy,
     CapabilityDescriptor,
@@ -81,6 +84,7 @@ from mugen.core.contract.gateway.storage.rdbms.gateway import IRelationalStorage
 from mugen.core.contract.gateway.storage.rdbms.service_base import IRelationalService
 from mugen.core.contract.gateway.storage.rdbms.types import FilterGroup, OrderBy
 from mugen.core.plugin.acp.contract.sdk.registry import IAdminRegistry
+from mugen.core.plugin.acp.utility.resource_access import require_resource_access
 from mugen.core.plugin.agent_runtime.domain import AgentPlanRunDE, AgentPlanStepDE
 from mugen.core.utility.config_value import parse_bool_flag, parse_optional_positive_int
 
@@ -777,7 +781,10 @@ class LLMPlannerStrategy(IPlannerStrategy):
                                 self._observation_payload(item)
                                 for item in generic_observations
                             ],
-                            "instruction": "Continue using tools if needed, otherwise respond to the user.",
+                            "instruction": (
+                                "Continue using tools if needed, "
+                                "otherwise respond to the user."
+                            ),
                         },
                     )
                 )
@@ -965,7 +972,8 @@ class LLMEvaluationStrategy(IEvaluatorStrategy):
                             role="system",
                             content=(
                                 "Return JSON only with keys status and reasons. "
-                                "status must be one of: pass, fail, retry, replan, escalate."
+                                "status must be one of: pass, fail, retry, "
+                                "replan, escalate."
                             ),
                         ),
                         CompletionMessage(role="user", content=payload),
@@ -1092,10 +1100,14 @@ class ACPActionCapabilityProvider(ICapabilityProvider):
 
         arguments = dict(invocation.arguments)
         entity_id = arguments.pop("entity_id", arguments.pop("id", None))
-        auth_user_id = arguments.pop(
-            "auth_user_id", request.metadata.get("auth_user_id")
-        )
-        if auth_user_id is None:
+        if "auth_user_id" in arguments or "AuthUserId" in arguments:
+            return CapabilityResult(
+                capability_key=invocation.capability_key,
+                ok=False,
+                error_message="model_actor_override_forbidden",
+            )
+        auth_user_id = request.metadata.get("auth_user_id")
+        if auth_user_id is None and request.scope.platform == "web":
             auth_user_id = request.scope.sender_id
         schema = descriptor.metadata.get("schema")
         try:
@@ -1127,15 +1139,17 @@ class ACPActionCapabilityProvider(ICapabilityProvider):
             if "entity_id" in kwargs:
                 where["id"] = kwargs["entity_id"]
             kwargs["where"] = where
+        normalized_auth = _normalize_optional_text(auth_user_id)
+        try:
+            actor_id = uuid.UUID(normalized_auth or "")
+        except ValueError:
+            return CapabilityResult(
+                capability_key=invocation.capability_key,
+                ok=False,
+                error_message="auth_user_id_required",
+            )
         if "auth_user_id" in signature.parameters:
-            normalized_auth = _normalize_optional_text(auth_user_id)
-            if normalized_auth is None:
-                return CapabilityResult(
-                    capability_key=invocation.capability_key,
-                    ok=False,
-                    error_message="auth_user_id_required",
-                )
-            kwargs["auth_user_id"] = uuid.UUID(normalized_auth)
+            kwargs["auth_user_id"] = actor_id
         if "data" in signature.parameters:
             kwargs["data"] = validated
         for param_name, param_value in (
@@ -1148,6 +1162,15 @@ class ACPActionCapabilityProvider(ICapabilityProvider):
                 kwargs[param_name] = param_value
 
         try:
+            await self._authorize_action(
+                request=request,
+                resource=resource,
+                action_name=action_name,
+                actor_id=actor_id,
+                entity_id=kwargs.get("entity_id"),
+                validated=validated,
+                payload=arguments,
+            )
             result = await handler(**kwargs)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self._logging_gateway.warning(
@@ -1171,6 +1194,63 @@ class ACPActionCapabilityProvider(ICapabilityProvider):
             ok=ok,
             result=payload,
             status_code=status_code,
+        )
+
+    async def _authorize_action(
+        self,
+        *,
+        request: PlanRunRequest,
+        resource: Any,
+        action_name: str,
+        actor_id: uuid.UUID,
+        entity_id: uuid.UUID | None,
+        validated: Any,
+        payload: dict[str, Any],
+    ) -> None:
+        # Share capability enforcement and its denial audit with HTTP actions.
+        # pylint: disable=import-outside-toplevel
+        from mugen.core.plugin.acp.api.action import _enforce_required_capabilities
+        from mugen.core.plugin.acp.api.foundation import enforce_schema_bindings
+
+        action_cap = resource.capabilities.actions.get(action_name)
+        if not isinstance(action_cap, dict) or action_cap.get("perm") is None:
+            abort(403, "Action not permitted.")
+        tenant_id = uuid.UUID(request.scope.tenant_id)
+        payload_tenant = getattr(validated, "tenant_id", None)
+        if payload_tenant is not None and payload_tenant != tenant_id:
+            abort(403, "Action payload must match the request tenant.")
+        await require_resource_access(
+            registry=self._admin_registry,
+            resource=resource,
+            auth_user_id=actor_id,
+            tenant_id=tenant_id,
+            permission_type=action_cap["perm"] or resource.permissions.manage,
+            admin_only=bool(action_cap.get("is_admin_action")),
+        )
+        await _enforce_required_capabilities(
+            action_cap=action_cap,
+            tenant_id=tenant_id,
+            plugin_key=resource.namespace,
+            action=action_name,
+            auth_user_uuid=actor_id,
+            entity_set=resource.entity_set,
+            entity=resource.edm_type_name.split(".", 1)[-1],
+            entity_id=entity_id,
+            request_id=request.message_id,
+            correlation_id=request.trace_id,
+            registry=self._admin_registry,
+            sandbox_enforcer_provider=lambda: di.container.get_required_ext_service(
+                di.EXT_SERVICE_ADMIN_SANDBOX_ENFORCER
+            ),
+        )
+        await enforce_schema_bindings(
+            registry=self._admin_registry,
+            tenant_id=tenant_id,
+            resource_namespace=resource.namespace,
+            entity_set=resource.entity_set,
+            action_name=action_name,
+            payload=payload,
+            binding_kind="action",
         )
 
     def _descriptor_from_action(
@@ -1238,7 +1318,8 @@ class AllowlistExecutionGuard(IExecutionGuard):
             and invocation.capability_key not in policy.capability_allow
         ):
             raise RuntimeError(
-                f"Capability {invocation.capability_key!r} is not allowed for this route."
+                f"Capability {invocation.capability_key!r} "
+                "is not allowed for this route."
             )
 
 

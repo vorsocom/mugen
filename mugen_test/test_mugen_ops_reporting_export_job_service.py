@@ -206,6 +206,7 @@ class TestMugenOpsReportingExportJobService(unittest.IsolatedAsyncioTestCase):
         svc._audit_event_service.action_verify_chain = AsyncMock(
             return_value=({"IsValid": True, "CheckedRows": 3}, 200)
         )
+        svc._require_source_read = AsyncMock()
 
         proof = await svc._build_audit_chain_proof(
             tenant_id=tenant_id,
