@@ -21,6 +21,7 @@ from mugen.core.contract.gateway.knowledge import (
     KnowledgeSearchResult,
 )
 from mugen.core.contract.gateway.logging import ILoggingGateway
+from mugen.core.gateway.knowledge.chroma_http import ChromaHttpClient
 from mugen.core.gateway.knowledge.common import (
     apply_query_scope,
     resolve_hugging_face_token,
@@ -322,9 +323,7 @@ class ChromaKnowledgeGateway(IKnowledgeGateway):
 
     @staticmethod
     def _create_http_client(**kwargs):
-        from chromadb import HttpClient  # pylint: disable=import-outside-toplevel
-
-        return HttpClient(**kwargs)
+        return ChromaHttpClient(**kwargs)
 
     def _build_client(self):
         if self._api_host == "":
@@ -333,6 +332,7 @@ class ChromaKnowledgeGateway(IKnowledgeGateway):
             "host": self._api_host,
             "port": self._api_port,
             "ssl": self._api_ssl,
+            "timeout": self._api_timeout_seconds,
         }
         if self._api_headers:
             kwargs["headers"] = dict(self._api_headers)
